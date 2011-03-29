@@ -42,7 +42,7 @@ $project->set_password( $password );
 my $schema  = $project->build_schema();
 
 #constrain analysis to a set of families of interest
-$project->subset_families( $family_subset_list, $check );
+$project->set_family_subset( $family_subset_list, $check );
 
 #Grab the samples associated with the project
 if( -f $project_file ){
@@ -66,40 +66,3 @@ if( -d $project_file ){
 my $projects = $schema->resultset('Project');
 print "There are ",$projects->count() , " projects.\n";
 
-
-######
-# SUBROUTINES
-######
-
-#currently uses @suffix with basename to successfully parse off .fa. may need to change
-sub get_part_samples{
-    my $path = shift;
-    my @suffixes = (".fa");
-    my %samples =();
-    $samples{"DESCRIPTION"} = ""; #for project description autoparse
-    
-    #open the directory and get the sample names and paths, 
-    opendir( PROJ, $path ) || die "Can't open the directory $path for read: $!\n";
-    my @files = readdir( PROJ );
-    closedir( PROJ );
-    foreach my $file( @files ){
-	next if $file =~ m/^\./;
-	#see if there's a description file
-	if( $file =~ m/DESCRIPT\.txt/ ){
-	    open( TXT, $file ) || die "Can't open project description file $file for read: $!. Project is $path.\n";
-	    my $text = "";
-	    while(<TXT>){
-		chomp $_;
-		$text = $text . " " . $_;
-	    }		
-	    $samples{"DESCRIPTION"} = $text;
-	}
-	else{
-	    #get sample name here, simple parse on the period in file name
-	    my ( $sample ) = basename( $file, @suffixes );
-	    #add to %samples, point name to the location
-	    $samples{$sample} = $path . "/" . $file;
-	}
-    }
-    return \%samples;
-}

@@ -95,7 +95,7 @@ sub compress_hmmdb{
     }
     my $results  = capture( "hmmpress " . "@args" );
     if( $EXITVAL != 0 ){
-	warn("Error translating sequences in $input: $results\n");
+	warn("Error translating sequences in $file: $results\n");
 	exit(0);
     }
     return $results;

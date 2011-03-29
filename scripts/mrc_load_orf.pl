@@ -46,21 +46,3 @@ while( my $orf = $orfs->next_seq() ){
 print "Added $count orfs to the DB\n";
 
 
-######
-# SUBROUTINES
-######
-
-sub parse_orf_id{
-    my $orfid  = shift;
-    my $method = shift;
-    my $read_id = ();
-    if( $method eq "transeq" ){
-	if( $orfid =~ m/^(.*)\_/ ){
-	    $read_id = $1;
-	}
-	else{
-	    die "Can't parse read_id from $orfid\n";
-	}
-    }
-    return $read_id;
-}
