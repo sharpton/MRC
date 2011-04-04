@@ -1,6 +1,22 @@
 #!/usr/bin/perl -w
 
 #MRC.pm - The MRC workflow manager
+#Copyright (C) 2011  Thomas J. Sharpton 
+#author contact: thomas.sharpton@gladstone.ucsf.edu
+#
+#This program is free software: you can redistribute it and/or modify
+#it under the terms of the GNU General Public License as published by
+#the Free Software Foundation, either version 3 of the License, or
+#(at your option) any later version.
+#    
+#This program is distributed in the hope that it will be useful,
+#but WITHOUT ANY WARRANTY; without even the implied warranty of
+#MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#GNU General Public License for more details.
+#    
+#You should have received a copy of the GNU General Public License
+#along with this program (see LICENSE.txt).  If not, see 
+#<http://www.gnu.org/licenses/>.
 
 package MRC;
 
@@ -17,19 +33,18 @@ sub new{
     my $class = ref($proto) || $proto;
     my $self  = {};
     my @fcis  = (6);
-    $self->{"fci"}     = \@fcis; #family construction ids that are allowed to be processed
-    $self->{"workdir"} = undef; #master path to MRC scripts
-    $self->{"ffdb"} = undef; #master path to the flat file database
-    $self->{"dbi"}  = undef; #DBI string to interact with DB
-    $self->{"user"} = undef; #username to interact with DB
-    $self->{"pass"} = undef; #password to interact with DB
-    $self->{"schema"} = undef; #current working DB schema object (DBIx)
+    $self->{"fci"}         = \@fcis; #family construction ids that are allowed to be processed
+    $self->{"workdir"}     = undef; #master path to MRC scripts
+    $self->{"ffdb"}        = undef; #master path to the flat file database
+    $self->{"dbi"}         = undef; #DBI string to interact with DB
+    $self->{"user"}        = undef; #username to interact with DB
+    $self->{"pass"}        = undef; #password to interact with DB
+    $self->{"schema"}      = undef; #current working DB schema object (DBIx)
     $self->{"projectpath"} = undef;
     $self->{"projectname"} = undef;
     $self->{"project_id"}  = undef;
     $self->{"proj_desc"}   = undef;
-    $self->{"samples"}     = undef; #hash relating sample names to paths
-    
+    $self->{"samples"}     = undef; #hash relating sample names to paths   
     bless($self);
     return $self;
 }
