@@ -5,6 +5,8 @@
 package MRC;
 
 use strict;
+use MRC::DB;
+use MRC::Run;
 use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
@@ -25,16 +27,27 @@ sub new{
     $self->{"projectpath"} = undef;
     $self->{"projectname"} = undef;
     $self->{"project_id"}  = undef;
+    $self->{"proj_desc"}   = undef;
     $self->{"samples"}     = undef; #hash relating sample names to paths
     
     bless($self);
     return $self;
 }
 
+sub get_sample_ids{
+    my $self = shift;
+    my @sample_ids = ();
+    foreach my $sample( keys( %{ $self->{"samples"} } ) ){
+	my $sample_id = $self->{"samples"}->{$sample}->{"id"};
+	push( @sample_ids, $sample_id );
+    }
+    return \@sample_ids;
+}
+
 sub set_fcis{
   my $self = shift;
   my @fcis = @_;
-  if( !defined( @fcis ) ){
+  if( @fcis ){
     warn "No fci value(s) supplied for set_fcis in MRC.pm. Using default value of ", @{ $self->{"fci"} }, ".\n";
   }
   $self->{"fci"} = \@fcis;
@@ -112,6 +125,11 @@ sub set_project_id{
       die;
     }
     $self->{"project_id"} = $pid;
+    return $self->{"project_id"};
+}
+
+sub get_project_id{
+    my $self = shift;
     return $self->{"project_id"};
 }
 

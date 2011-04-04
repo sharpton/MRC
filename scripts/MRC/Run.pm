@@ -5,11 +5,28 @@
 package MRC::Run;
 
 use strict;
+use MRC;
+use MRC::DB;
 use Data::Dumper;
 use IMG::Schema;
 use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
+
+sub clean_project{
+    my $self       = shift;
+    my $project_id = shift;
+    my $samples    = $self->MRC::DB::get_samples_by_project_id( $project_id );
+    while( my $sample = $samples->next() ){
+	my $sample_id = $sample->sample_id();
+	$self->MRC::DB::delete_orfs_by_sample_id( $sample_id );
+	$self->MRC::DB::delete_reads_by_sample_id( $sample_id );
+	$self->MRC::DB::delete_sample( $sample_id );
+    }
+    $self->MRC::DB::delete_project( $project_id );
+    $self->MRC::DB::delete_ffdb_project( $project_id );
+    return $self;
+}
 
 
 #currently uses @suffix with basename to successfully parse off .fa. may need to change
@@ -32,7 +49,7 @@ sub get_part_samples{
 		chomp $_;
 		$text = $text . " " . $_;
 	    }		
-	    $self->{"projectname"} = $text;
+	    $self->{"proj_desc"} = $text;
 	}
 	else{
 	    #get sample name here, simple parse on the period in file name
@@ -50,16 +67,16 @@ sub load_project{
     my $path    = shift;
     #get project name and load
     my ( $name, $dir, $suffix ) = fileparse( $path );        
-    my $proj = $self->create_project( name => $name, description => $text );    
+    my $proj = $self->MRC::DB::create_project( $name, $self->{"proj_desc"} );    
     my $pid  = $proj->project_id();
     warn( "Loading project $pid, files found at $path\n" );
     #store vars in object
     $self->{"projectpath"} = $path;
     $self->{"project_id"}  = $pid;
     #process the samples associated with project
-    $self->load_samples();
-    $self->build_project_ffdb();
-    $self->build_sample_ffdb();
+    $self->MRC::Run::load_samples();
+    $self->MRC::DB::build_project_ffdb();
+    $self->MRC::DB::build_sample_ffdb();
     warn( "Project $pid successfully loaded!\n" );
     return $self;
 }
@@ -67,17 +84,17 @@ sub load_project{
 sub load_samples{
     my $self   = shift;
     my %samples = %{ $self->{"samples"} };
-    my $samps = scalar( keys(%samples) ) - 1;
+    my $samps = scalar( keys(%samples) );
     warn( "Processing $samps samples associated with project $self->{'project_id'}\n" );
     foreach my $sample( keys( %samples ) ){	
-	my $insert  = $self->create_sample( sample_alt_id => $sample, project_id => $self->{"project_id"} );    
+	my $insert  = $self->MRC::DB::create_sample( $sample, $self->{"project_id"} );    
 	my $sid     = $insert->sample_id();
 	$samples{$sample}->{"id"} = $sid;
 	my $seqs    = Bio::SeqIO->new( -file => $samples{$sample}->{"path"}, -format => 'fasta' );
 	my $count   = 0;
 	while( my $read = $seqs->next_seq() ){
 	    my $read_name = $read->display_id();
-	    $self->create_metaread( $read_name, $sid );
+	    $self->MRC::DB::create_metaread( $read_name, $sid );
 	    $count++;
 	}
 	warn("Loaded $count reads into DB for sample $sid\n");
@@ -89,8 +106,9 @@ sub load_samples{
 
 #this is a compute side function. don't use db vars
 sub translate_reads{
-    my $input  = shift;
-    my $output = shift;
+    my $self     = shift;
+    my $input    = shift;
+    my $output   = shift;
     my @args     = ("$input", "$output", "-frame=6");
     my $results  = capture( "transeq " . "@args" );
     if( $EXITVAL != 0 ){
@@ -101,33 +119,49 @@ sub translate_reads{
 }
 
 sub run_hmmscan{
+    my $self   = shift;
     my $inseqs = shift;
     my $hmmdb  = shift;
     my $output = shift;
-    #need to hook orf file up to the ffdb and integrate here
-    my $inseq_path   = $inseqs;
     #Run hmmscan
-    my @args     = ("$hmmdb", "$inseq_path", "> $output");
+    my @args     = ("$hmmdb", "$inseqs", "> $output");
     my $results  = capture( "hmmscan " . "@args" );
     if( $EXITVAL != 0 ){
 	warn("Error translating sequences in $inseqs: $results\n");
 	exit(0);
     }
-    return $results;
+    return $self;
 }
 
 #this method may be faster, but suffers from having a few hardcoded parameters.
 #because orfs are necessairly assigned to a sample_id via the ffdb structure, we can
 #simply lookup the read_id to sample_id relationship via the ffdb, rather than the DB.
 #see load_orf_dblookup for the older method.
-sub load_orf_seqfile{
-
-
-
+sub load_orf{
+    my $self        = shift;
+    my $orf_alt_id  = shift;
+    my $read_alt_id = shift;
+    my $sample_id   = shift;
+    #A sample cannot have identical reads in it (same DNA string ok, but must have unique alt_ids)
+    #Regardless, we need to check to ensure we have a single value
+    my $reads = $self->{"schema"}->resultset("Metaread")->search(
+	{
+	    read_alt_id => $read_alt_id,
+	    sample_id   => $sample_id,
+	}
+    );
+    if( $reads->count() > 1 ){
+	warn "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!\n";
+	die;
+    }
+    my $read = $reads->next();
+    my $read_id = $read->read_id();
+    $self->MRC::DB::insert_orf( $orf_alt_id, $read_id, $sample_id );
+    return $self;
 }
 
 #the efficiency of this method could be improved!
-sub load_orf{
+sub load_orf_old{
     my $self        = shift;
     my $orf_alt_id  = shift;
     my $read_alt_id = shift;
@@ -185,13 +219,18 @@ sub build_hmm_db{
     my $n_splits = shift; #integer - how many hmmdb splits should we produce?
     my $force    = shift; #0/1 - force overwrite of old HMMdbs during compression.
     my $ffdb     = $self->get_ffdb();
-    #where is the hmmdb going to go?
-    my $hmmdb_path = $ffdb . "HMMdbs/" . $hmmdb;
+    #where is the hmmdb going to go? each hmmdb has its own dir
+    my $hmmdb_path = $ffdb . "HMMdbs/" . $hmmdb . "/";
+    warn "Building HMMdb $hmmdb, splitting into $n_splits parts.\n";
     #Have you built this HMMdb already?
-    if( -e $hmmdb_path . "_1" && !($force) ){
+    if( -d $hmmdb_path && !($force) ){
 	warn "You've already built an HMMdb with the name $hmmdb at $hmmdb_path. Please delete or overwrite by using the -f option when running mrc_build_hmmdb.pl\n";
 	die;
     }
+    #create the HMMdb dir that will hold our split hmmdbs
+    $self->MRC::DB::build_hmmdb_ffdb( $hmmdb_path );
+    #update the path to make it easier to build the split hmmdbs (e.g., points to an incomplete file name)
+    $hmmdb_path = $hmmdb_path . $hmmdb;
     #constrain analysis to a set of families of interest
     my @families   = sort( @{ $self->get_subset_famids() });
     my $n_fams     = @families;
@@ -215,6 +254,8 @@ sub build_hmm_db{
 	    $count = 0;
 	}
     }
+    warn "HMMdb successfully built and compressed.\n";
+    return $self;
 }
 
 sub build_hmmdb{
@@ -244,7 +285,7 @@ sub compress_hmmdb{
     }
     my $results  = capture( "hmmpress " . "@args" );
     if( $EXITVAL != 0 ){
-	warn("Error translating sequences in $input: $results\n");
+	warn("Error translating sequences in $file: $results\n");
 	exit(0);
     }
     return $results;

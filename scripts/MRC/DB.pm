@@ -9,6 +9,7 @@ use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
 use File::Copy;
+use File::Path 'rmtree';
 
 #returns samples result set
 sub get_samples_by_project_id{
@@ -35,6 +36,64 @@ sub create_project{
     return $inserted;
 }
 
+sub delete_project{
+    my $self       = shift;
+    my $project_id = shift;
+    my $project   = $self->{"schema"}->resultset("Project")->search(
+	{
+	    project_id => $project_id,
+	}
+	);
+    $project->delete();
+    return $self;
+}
+
+sub delete_orfs_by_sample_id{
+    my $self = shift;
+    my $sample_id = shift;
+    my $orfs = $self->{"schema"}->resultset("Orf")->search(
+	{
+	    sample_id => $sample_id,
+	}
+    );
+    $orfs->delete();
+    return $self;
+}
+
+
+sub delete_reads_by_sample_id{
+    my $self = shift;
+    my $sample_id = shift;
+    my $reads = $self->{"schema"}->resultset("Metaread")->search(
+	{
+	    sample_id => $sample_id,
+	}
+    );
+    $reads->delete();
+    return $self;
+}
+
+sub delete_sample{
+    my $self = shift;
+    my $sample_id = shift;
+    my $sample = $self->{"schema"}->resultset("Sample")->search(
+	{
+	    sample_id => $sample_id,
+	}
+	);
+    $sample->delete();
+    return $self;
+}
+
+sub delete_ffdb_project{
+    my $self       = shift;
+    my $project_id = shift;
+    my $ffdb = $self->{"ffdb"};
+    my $project_ffdb = $ffdb . "projects/" . $project_id;
+    rmtree( $project_ffdb );
+    return $self;
+}
+
 sub create_sample{
     my $self = shift;
     my $sample_name = shift;
@@ -42,7 +101,7 @@ sub create_sample{
     my $proj_rs = $self->{"schema"}->resultset("Sample");
     my $inserted = $proj_rs->create(
 	{
-	    sample_alt_id => $sample_name,
+	    name       => $sample_name,
 	    project_id => $project_id,
 	}
 	);
@@ -85,6 +144,13 @@ sub get_gene_by_id{
     return $gene;
 }
 
+sub build_hmmdb_ffdb{
+    my $self = shift;
+    my $path = shift;
+    mkdir( $path ) || die "Can't create directory $path in build_hmmdb_ffdb: $!\n";
+    return $self;       
+}
+
 sub build_project_ffdb{
     my $self = shift;
     my $ffdb = $self->{"ffdb"};
@@ -101,24 +167,52 @@ sub build_project_ffdb{
 
 sub build_sample_ffdb{
     my $self = shift;
+    my $ffdb = $self->{"ffdb"};
     my $proj_dir = $ffdb . "/projects/" . $self->{"project_id"} . "/";
     foreach my $sample( keys( %{ $self->{"samples"} } ) ){
-	my $sample_dir = $proj_dir . $self->{"samples"}->{$sample}->{"sid"} . "/";
+	my $sample_dir = $proj_dir . $self->{"samples"}->{$sample}->{"id"} . "/";
 	my $raw_sample = $sample_dir . "raw.fa";
+	my $search_res = $sample_dir . "search_results/";
 	if( -d $sample_dir ){
 	    warn "Sample directory already exists at $sample_dir. Will not overwrite!\n";
 	}
 	else{
-	    mkdir( $sample_dir ) || die "Can't create directory $sample_dir in build_project_ffdb: $!\n";
+	    mkdir( $sample_dir ) || die "Can't create directory $sample_dir in build_sample_ffdb: $!\n";
 	}
 	if( -e $raw_sample ){
 	    warn "Data already exists in $raw_sample. Will not overwrite!\n";
 	    die;
 	}
-	else
+	else{
 	    copy( $self->{"samples"}->{$sample}->{"path"}, $raw_sample ) || die "Copy of $sample failed in build_project_ffdb: $!\n";
+	}
+	if( -d $search_res ){
+	    warn "Search results_dir already exists for $sample at $search_res. Will not overwrite!\n";
+	    die;
+	}
+	else{
+	    mkdir( $search_res ) || die "Can't create directory $search_res in build_sample_ffdb: $!\n";
+	}
     }
     return $self;
+}
+
+sub get_hmmdbs{
+    my $self       = shift;
+    my $hmmdb_name = shift;
+    my $ffdb = $self->{"ffdb"};
+    my $hmmdb_path = $ffdb . "/HMMdbs/" . $hmmdb_name . "/";
+    opendir( HMMS, $hmmdb_path ) || die "Can't opendir $hmmdb_path for read: $!\n";
+    my @files = readdir( HMMS );
+    closedir( HMMS );
+    my %hmmdbs = ();
+    foreach my $file ( @files ){
+	next if( $file =~ m/^\./ );
+	next if( $file =~ m/\.h3[i|m|p|f]/ );
+	$hmmdbs{$file} = $hmmdb_path . $file;
+    }
+    warn "Grabbed ", scalar( keys( %hmmdbs ) ), " HMM dbs from $hmmdb_path\n";
+    return \%hmmdbs;
 }
 
 1;
