@@ -27,7 +27,17 @@ use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
 
-#main
+=head2 new
+
+ Title   : new
+ Usage   : $project = MRC->new()
+ Function: initializes a new MRC analysis object
+ Example : $analysus = MRC->new();
+ Returns : A MRC analysis object
+ Args    : None
+
+=cut
+
 sub new{
     my $proto = shift;
     my $class = ref($proto) || $proto;
@@ -49,6 +59,17 @@ sub new{
     return $self;
 }
 
+=head2 get_sample_ids
+
+ Title   : get_sample_ids
+ Usage   : $analysis->get_sample_ids( )
+ Function: Obtains the unique sample_ids for each sample in the project
+ Example : my @sample_ids = @{ analysis->get_sample_ids() };
+ Returns : A array of sample_ids (array reference)
+ Args    : None
+
+=cut
+
 sub get_sample_ids{
     my $self = shift;
     my @sample_ids = ();
@@ -59,6 +80,17 @@ sub get_sample_ids{
     return \@sample_ids;
 }
 
+=head2 set_fcis
+
+ Title   : set_fcis
+ Usage   : $analysis->set_fcis( 1, 4, 6 )
+ Function: Sets which family construction ids should be used in the analysis
+ Example : my @sample_ids = @{ analysis->get_sample_ids() };
+ Returns : An array of family construction ids (array reference, optional)
+ Args    : An array of family construction ids (array reference)
+
+=cut
+
 sub set_fcis{
   my $self = shift;
   my @fcis = @_;
@@ -68,6 +100,17 @@ sub set_fcis{
   $self->{"fci"} = \@fcis;
   return $self->{"fci"};
 }
+
+=head2 set_scripts_dir
+
+ Title   : set_scripts_dir
+ Usage   : $analysis->set_scripts_dir( "~/projects/MRC/scripts" )
+ Function: Indicates where the MRC scripts directory is located
+ Example : my $scripts_path = analysis->set_scripts_dir( "~/projects/MRC/scripts" );
+ Returns : A string that points to a directory path (scalar, optional)
+ Args    : A string that points to a directory path (scalar)
+
+=cut
 
 sub set_scripts_dir{
   my $self = shift;
@@ -84,6 +127,17 @@ sub set_scripts_dir{
   return $self->{"workdir"};
 }
 
+=head2 set_ffdb
+
+ Title   : set_ffdb
+ Usage   : $analysis->set_ffdb( "~/projects/MRC/ffdb/" )
+ Function: Indicates where the MRC flat file database is located
+ Example : my $scripts_path = analysis->set_ffdb( "~/projects/MRC/ffdb" );
+ Returns : A string that points to a directory path (scalar, optional)
+ Args    : A string that points to a directory path (scalar)
+
+=cut
+
 sub set_ffdb{
     my $self = shift;
     my $path = shift;
@@ -99,10 +153,33 @@ sub set_ffdb{
     return $self->{"ffdb"};
 }
 
+=head2 get_ffdb
+
+ Title   : get_ffdb
+ Usage   : $analysis->get_ffdb()
+ Function: Identify the location of the MRC flat file database. Must have been previously set with set_ffdb()
+ Example : analysis->set_ffdb( "~/projects/MRC/ffdb" );
+           my $ffdb = analysis->get_ffdb();
+ Returns : A string that points to a directory path (scalar)
+ Args    : None
+
+=cut
+
 sub get_ffdb{
   my $self = shift;
   return $self->{"ffdb"};
 }
+
+=head2 set_dbi_connection
+
+ Title   : set_dbi_connection
+ Usage   : $analysis->set_dbi_conection( "DBI:mysql:IMG" );
+ Function: Create a connection with mysql (or other) database
+ Example : my $connection = analysis->set_dbi_connection( "DBI:mysql:IMG" );
+ Returns : A DBI connection string (scalar, optional)
+ Args    : A DBI connection string (scalar)
+
+=cut
 
 sub set_dbi_connection{
     my $self = shift;
