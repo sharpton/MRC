@@ -20,6 +20,9 @@ my $hmmdb_build    = 0;
 my $n_hmmdb_splits = 5;
 my $force_hmmdb_build = 0;
 my $check          = 0;
+my $evalue         = 0.0001;
+my $coverage       = 0.8;
+
 
 GetOptions(
     "d=s" => \$ffdb,
@@ -29,6 +32,7 @@ GetOptions(
     "p=s" => \$password,
     "h=s" => \$hmmdb_name,
     "sub:s" => \$family_subset_list,
+    "hb"    => \$hmmdb_build,
     );
 
 #Initialize the project
@@ -106,9 +110,9 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 
 #PARSE AND LOAD RESULTS
 foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-  my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs( $hmmdb_name ) };
-  foreach my $hmmdb( keys( %hmmdbs ) ){
-    my $hsc_results = $ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
-    $analysis->classify_reads( $hsc_results );
-  }
+    my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs( $hmmdb_name ) };
+    foreach my $hmmdb( keys( %hmmdbs ) ){
+	my $hsc_results = $ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
+	$analysis->MRC::Run::classify_reads( $sample_id, $hsc_results, $evalue, $coverage );
+    }
 }

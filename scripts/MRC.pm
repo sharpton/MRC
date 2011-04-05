@@ -188,6 +188,33 @@ sub set_dbi_connection{
     return $self->{"dbi"};
 }
 
+sub set_project_path{
+    my $self = shift;
+    my $path = shift;
+    $self->{"projectpath"} = $path;
+    return $self->{"projectpath"};
+}
+
+sub set_project_desc{
+    my $self = shift;
+    my $text = shift;
+    $self->{"proj_desc"} = $text;
+    return $self->{"proj_desc"};    
+}
+
+sub set_samples{
+    my $self = shift;
+    my $samples = shift;
+    $self->{"samples"} = $samples;
+    return $self->{"samples"};
+}
+
+sub get_schema{
+    my $self = shift;
+    my $schema = $self->{"schema"};
+    return $schema;
+}
+
 sub set_username{
     my $self = shift;
     my $path = shift;
@@ -276,6 +303,18 @@ sub set_family_subset{
 	}
     }
     return $self->{"fid_subset"};
+}
+
+sub get_samples{
+    my $self = shift;
+    my $samples = $self->{"samples"}; #a hash reference
+    return $samples;
+}
+
+sub get_project_desc{
+    my $self = shift;
+    my $desc = $self->{"proj_desc"};
+    return $desc;
 }
 
 sub get_subset_famids{

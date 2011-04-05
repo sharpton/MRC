@@ -2,6 +2,9 @@
 
 use strict;
 use MRC;
+use MRC::Run;
+use MRC::DB;
+use MRC::Sim;
 use Getopt::Long;
 use Bio::SeqIO;
 use Data::Dumper;
@@ -9,7 +12,7 @@ use Data::Dumper;
 my $family_subset_list; #path to a file that lists (one per line) which family ids you want to include. Defaults to all. Will probably come back and make this a seperate familyconstruction
 my $username       = "";
 my $password       = "";
-my $nsamples       = 100;
+my $nsamples       = 10;
 my $output         = "";
 my $format         = 'fasta';
 my $check = 0; #Should we check that any user provided family_subset_ids are of the proper family_construction_ids?
@@ -33,7 +36,7 @@ $project->set_password( $password );
 my $schema  = $project->build_schema();
 
 #constrain analysis to a set of families of interest
-my @subset_famids = sort( @{ $project->subset_families( $family_subset_list, $check ) } );
+my @subset_famids = sort( @{ $project->set_family_subset( $family_subset_list, $check ) } );
 
 #Obtain a random sampling of family ids from the DB
 my $fams = $schema->resultset('Family');
@@ -43,14 +46,14 @@ my @rand_ids = ();
 #For each famid, get a random gene id associated with the family
 my @geneids = ();
 foreach my $famid( @rand_ids ){
-    my $geneid = $project->get_rand_geneid( $famid );
+    my $geneid = $project->MRC::Sim::get_rand_geneid( $famid );
     push( @geneids, $geneid );
 }
 
 #Get gene sequences and print to file
 my $seqout = Bio::SeqIO->new( -file => ">$output", -format => $format );
 foreach my $geneid( @geneids ){
-    $project->print_gene( $geneid, $seqout );
+    $project->MRC::Run::print_gene( $geneid, $seqout );
 }
 
 ####################

@@ -28,6 +28,7 @@ use IMG::Schema;
 use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
+use Bio::SearchIO;
 
 sub clean_project{
     my $self       = shift;
@@ -35,6 +36,7 @@ sub clean_project{
     my $samples    = $self->MRC::DB::get_samples_by_project_id( $project_id );
     while( my $sample = $samples->next() ){
 	my $sample_id = $sample->sample_id();
+	$self->MRC::DB::delete_family_member_by_sample_id( $sample_id );
 	$self->MRC::DB::delete_orfs_by_sample_id( $sample_id );
 	$self->MRC::DB::delete_reads_by_sample_id( $sample_id );
 	$self->MRC::DB::delete_sample( $sample_id );
@@ -64,7 +66,7 @@ sub get_part_samples{
 		chomp $_;
 		$text = $text . " " . $_;
 	    }		
-	    $self->{"proj_desc"} = $text;
+	    $self->set_project_desc( $text );
 	}
 	else{
 	    #get sample name here, simple parse on the period in file name
@@ -73,7 +75,7 @@ sub get_part_samples{
 	    $samples{$sample}->{"path"} = $path . "/" . $file;
 	}
     }
-    $self->{"samples"} = \%samples;
+    $self->set_samples( \%samples );
     return $self;
 }
 
@@ -82,12 +84,12 @@ sub load_project{
     my $path    = shift;
     #get project name and load
     my ( $name, $dir, $suffix ) = fileparse( $path );        
-    my $proj = $self->MRC::DB::create_project( $name, $self->{"proj_desc"} );    
+    my $proj = $self->MRC::DB::create_project( $name, $self->get_project_desc() );    
     my $pid  = $proj->project_id();
     warn( "Loading project $pid, files found at $path\n" );
     #store vars in object
-    $self->{"projectpath"} = $path;
-    $self->{"project_id"}  = $pid;
+    $self->set_project_path( $path );
+    $self->set_project_id( $pid );
     #process the samples associated with project
     $self->MRC::Run::load_samples();
     $self->MRC::DB::build_project_ffdb();
@@ -98,11 +100,11 @@ sub load_project{
 
 sub load_samples{
     my $self   = shift;
-    my %samples = %{ $self->{"samples"} };
+    my %samples = %{ $self->get_samples() };
     my $samps = scalar( keys(%samples) );
-    warn( "Processing $samps samples associated with project $self->{'project_id'}\n" );
+    warn( "Processing $samps samples associated with project $self->get_project_id() \n" );
     foreach my $sample( keys( %samples ) ){	
-	my $insert  = $self->MRC::DB::create_sample( $sample, $self->{"project_id"} );    
+	my $insert  = $self->MRC::DB::create_sample( $sample, $self->get_project_id() );    
 	my $sid     = $insert->sample_id();
 	$samples{$sample}->{"id"} = $sid;
 	my $seqs    = Bio::SeqIO->new( -file => $samples{$sample}->{"path"}, -format => 'fasta' );
@@ -114,8 +116,8 @@ sub load_samples{
 	}
 	warn("Loaded $count reads into DB for sample $sid\n");
     }
-    $self->{"samples"} = \%samples; #uncertain if this is necessary
-    warn( "All samples associated with project $self->{'project_id'} are loaded\n" );
+    $self->set_samples( \%samples ); #uncertain if this is necessary
+    warn( "All samples associated with project $self->get_project_id() are loaded\n" );
     return $self;
 }
 
@@ -159,7 +161,7 @@ sub load_orf{
     my $sample_id   = shift;
     #A sample cannot have identical reads in it (same DNA string ok, but must have unique alt_ids)
     #Regardless, we need to check to ensure we have a single value
-    my $reads = $self->{"schema"}->resultset("Metaread")->search(
+    my $reads = $self->get_schema->resultset("Metaread")->search(
 	{
 	    read_alt_id => $read_alt_id,
 	    sample_id   => $sample_id,
@@ -182,7 +184,7 @@ sub load_orf_old{
     my $read_alt_id = shift;
     my $sampref     = shift;
     my %samples     = %{ $sampref };
-    my $reads = $self->{"schema"}->resultset("Metaread")->search(
+    my $reads = $self->get_schema->resultset("Metaread")->search(
 	{
 	    read_alt_id => $read_alt_id,
 	}
@@ -202,7 +204,7 @@ sub load_orf_old{
 #proteins may be in the DB more than once, so we will track genes by their gene_oid (this will be the bioperl seq->id() tag)
 sub print_gene{
     my ( $self, $geneid, $seqout ) = @_;
-    my $gene = $self->get_gene_by_id( $geneid );
+    my $gene = $self->MRC::DB::get_gene_by_id( $geneid );
     my $sequence = $gene->get_column('dna');
     my $desc     = $gene->get_column('protein_id');
     my $seq = Bio::Seq->new( -seq        => $sequence,
@@ -230,12 +232,45 @@ sub parse_orf_id{
 
 #classifies reads into predefined families given hmmscan results. eventually will take various input parameters to guide classification
 sub classify_reads{
-  my $self = shift;
-  my $ffdb = $self->get_ffdb();
+  my $self       = shift;
+  my $sample_id  = shift;
+  my $hscresults = shift;
+  my $evalue     = shift;
+  my $coverage   = shift;
+  my $ffdb       = $self->get_ffdb();
   my $project_id = $self->get_project_id();
-  
-  
-  
+  my $results    = Bio::SearchIO->new( -file => $hscresults, -format => 'hmmer3' );
+  my $count      = 0;
+  while( my $result = $results->next_result ){
+      $count++;
+      my $qorf = $result->query_name();
+      my $qacc = $result->query_accession();
+      my $qdes = $result->query_description();
+      my $qlen = $result->query_length();
+      my $nhit = $result->num_hits();
+      if( $nhit > 0 ){
+	  while( my $hit = $result->next_hit ){
+	      my $hmm    = $hit->name();
+	      my $score  = $hit->raw_score();
+	      my $signif = $hit->significance();
+	      while( my $hsp = $hit->next_hsp ){
+		  my $hsplen = $hsp->length('total');
+		  my $hqlen  = $hsp->length('query');
+		  my $hhlen  = $hsp->length('hit');
+		  print join ("\t", $qorf, $qacc, $qdes, $qlen, $nhit, $hmm, $score, $signif, $hqlen, "\n");
+		  #if hit passes thresholds, push orf into the family
+		  if( $signif <= $evalue && 
+		      ( $hqlen / $qlen)  >= $coverage ){
+		      my $orf = $self->MRC::DB::get_orf_from_alt_id( $qorf, $sample_id );
+		      my $orf_id = $orf->orf_id();
+		      $self->MRC::DB::insert_family_member_orf( $orf_id, $hmm );
+		  }
+	      }
+	  }
+      }
+  }
+  warn "Processed $count search results from $hscresults\n";
+  return $self;
 }
 
 sub build_hmm_db{
