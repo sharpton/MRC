@@ -105,3 +105,10 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 }
 
 #PARSE AND LOAD RESULTS
+foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
+  my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs( $hmmdb_name ) };
+  foreach my $hmmdb( keys( %hmmdbs ) ){
+    my $hsc_results = $ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
+    $analysis->classify_reads( $hsc_results );
+  }
+}

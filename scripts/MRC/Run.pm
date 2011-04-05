@@ -44,7 +44,6 @@ sub clean_project{
     return $self;
 }
 
-
 #currently uses @suffix with basename to successfully parse off .fa. may need to change
 sub get_part_samples{
     my $self = shift;
@@ -227,6 +226,16 @@ sub parse_orf_id{
 	}
     }
     return $read_id;
+}
+
+#classifies reads into predefined families given hmmscan results. eventually will take various input parameters to guide classification
+sub classify_reads{
+  my $self = shift;
+  my $ffdb = $self->get_ffdb();
+  my $project_id = $self->get_project_id();
+  
+  
+  
 }
 
 sub build_hmm_db{
