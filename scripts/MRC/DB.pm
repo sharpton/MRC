@@ -25,7 +25,7 @@ use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
 use File::Copy;
-use File::Path 'rmtree';
+use File::Path qw(make_path rmtree);
 
 #returns samples result set
 sub get_samples_by_project_id{
@@ -193,7 +193,7 @@ sub get_gene_by_id{
 sub build_hmmdb_ffdb{
     my $self = shift;
     my $path = shift;
-    mkdir( $path ) || die "Can't create directory $path in build_hmmdb_ffdb: $!\n";
+    make_path( $path ) || die "Can't create directory $path in build_hmmdb_ffdb: $!\n";
     return $self;       
 }
 
@@ -202,7 +202,7 @@ sub build_project_ffdb{
     my $ffdb = $self->{"ffdb"};
     my $proj_dir = $ffdb . "/projects/" . $self->{"project_id"} . "/";
     unless( -d $proj_dir ){ 
-	mkdir( $proj_dir ) || die "Can't create directory $proj_dir in build_project_ffdb: $!\n";
+	make_path( $proj_dir ) || die "Can't create directory $proj_dir in build_project_ffdb: $!\n";
     }
     else{
 	warn "Project directory already exists at $proj_dir. Will not overwrite!\n";
@@ -223,7 +223,7 @@ sub build_sample_ffdb{
 	    warn "Sample directory already exists at $sample_dir. Will not overwrite!\n";
 	}
 	else{
-	    mkdir( $sample_dir ) || die "Can't create directory $sample_dir in build_sample_ffdb: $!\n";
+	    make_path( $sample_dir ) || die "Can't create directory $sample_dir in build_sample_ffdb: $!\n";
 	}
 	if( -e $raw_sample ){
 	    warn "Data already exists in $raw_sample. Will not overwrite!\n";
@@ -237,7 +237,7 @@ sub build_sample_ffdb{
 	    die;
 	}
 	else{
-	    mkdir( $search_res ) || die "Can't create directory $search_res in build_sample_ffdb: $!\n";
+	    make_path( $search_res ) || die "Can't create directory $search_res in build_sample_ffdb: $!\n";
 	}
     }
     return $self;

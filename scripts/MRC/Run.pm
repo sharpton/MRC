@@ -200,21 +200,6 @@ sub load_orf_old{
     }
 }
 
-#we will convert a gene row into a three element hash: the unqiue gene_oid key, the protein id, and the nucleotide sequence. the same
-#proteins may be in the DB more than once, so we will track genes by their gene_oid (this will be the bioperl seq->id() tag)
-sub print_gene{
-    my ( $self, $geneid, $seqout ) = @_;
-    my $gene = $self->MRC::DB::get_gene_by_id( $geneid );
-    my $sequence = $gene->get_column('dna');
-    my $desc     = $gene->get_column('protein_id');
-    my $seq = Bio::Seq->new( -seq        => $sequence,
-			     -alphabet   => 'dna',
-			     -display_id => $geneid,
-			     -desc       => $desc
-	);
-    $seqout->write_seq( $seq );
-}
-
 sub parse_orf_id{
     my $orfid  = shift;
     my $method = shift;
