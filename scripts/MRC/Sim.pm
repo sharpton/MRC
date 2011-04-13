@@ -47,10 +47,11 @@ sub get_rand_geneids{
     my @geneids  = $genes->get_column('gene_oid')->all();
     #what if family is small. need a way to automate through this (change number of samples?)
     if( scalar( @geneids ) < $n_samples ){
-	warn( "Not enough genes in family $famid to randomly sample $n_samples genes. Stopping\n" );
-	die;
+	warn( "Not enough genes in family $famid to randomly sample $n_samples genes. Taking all family members." );
+	return \@geneids;
     }
     #randomly shuffle array, select the first $n_samples elements
+    warn( "Shuffling and selecting genes\n");
     my @rand_ids = ( shuffle( @geneids ) )[0 .. $n_samples - 1];
     return \@rand_ids;
 }
@@ -58,12 +59,12 @@ sub get_rand_geneids{
 sub rand_sample_famids{
     my $self     = shift;
     my $nsamples = shift;
-    my $ids = $self->get_subset_families();
+    my @ids = @{ $self->get_subset_famids() };
     my %rands = ();
-    my $nitems = @{ $ids };
+    my $nitems = @ids;
     until( scalar( keys( %rands ) ) == $nsamples ){
 	my $rand = int( rand( $nitems ) );
-	$rands{$rand}++;
+	$rands{$ids[$rand]}++;
     }
     my @result = keys( %rands );
     return \@result;
@@ -72,20 +73,121 @@ sub rand_sample_famids{
 #Make sure MetaPASSAGE is part of your path
 sub run_meta_passage{
     my $self    = shift;
-    my $inseqls = shift;
+    my $inseqs = shift;
     my $out_dir = shift;
     my $out_basename = shift;
     my $n_reads      = shift;
     my $padlength    = shift;
-    my $mean_read_len = shift
+    my $mean_read_len = shift;
+    my $stddev_read_len = shift;
+    my $mean_clone_len = shift;
+    my $stddev_clone_len = shift;
+    my $seq_type = shift;
     my $metasim_src   = shift; #directory to location of MetaSim remove at a later date
-    my @args     = ("-i $inseqs", "--out_dir $out_dir", "--out_basename $out_basename", "-j", "-m -1", "--pad $padlength", "--sim", "--filter", "--num_reads $n_reads", "--mean_clone_len $mean_read_len", "--metasim_path $metasim_src" );
-    my $results  = capture( "perl MetaPASSAGE.pl" . "@args" );
+    #NOTE: we don't pass a -j or --sim option. we'll always need those options here
+    #NOTE: We don't pass a -q option here, as we'll always generate more reads than
+    #we need and then use an indpendent method to conduct our own filtering.
+    my @args     = ("-i $inseqs", "--out_dir $out_dir", "--out_basename $out_basename", "-j", "-m -1", "--pad $padlength", "--sim",  "--num_reads $n_reads", "--mean_clone_len $mean_clone_len", "--stddev_clone_len $stddev_clone_len", "--mean_read_len $mean_read_len", "--stddev_read_len $stddev_read_len", "--type $seq_type", "--metasim_path $metasim_src" );
+    warn( "MetaPASSAGE.pl " . "@args" );
+    my $results  = capture( "MetaPASSAGE.pl " . "@args" );
     if( $EXITVAL != 0 ){
 	warn("Error running MetaPASSAGE in run_meta_passage: $results\n");
 	exit(0);
     }
     return $self;
+}
+
+sub filter_sim_reads{
+    my $self = shift;
+    my $sim_reads_file = shift;
+    my $read_len_cut = 80;
+    my $filtered_reads_file = ();
+    my @suffixes = ( ".fna", ".fa" );
+    my ( $basename, $directory, $suffix ) = fileparse( $sim_reads_file, @suffixes );
+    $filtered_reads_file = $directory . "/" . $basename . "-f.fa";
+    my $seqout = Bio::SeqIO->new( -file => ">$filtered_reads_file", -format => 'fasta' );
+    my $seqin  = Bio::SeqIO->new( -file => "$sim_reads_file", -format => 'fasta' );
+    my %sources = ();
+    warn( "Filtering simulated reads\n");
+    #grab a single read per source that passes desired criteria 
+    while( my $seq = $seqin->next_seq() ){	
+	my $readid = $seq->display_id();
+        #parse the source identifier from the read header
+	my $source = ();
+	my $desc = $seq->description();	
+	if( $desc =~ m/SOURCE_1\=\"\d+\s(\w+)\"/ ){
+	    $source = $1;
+	}
+	else{
+	    warn( "Can't parse source from $desc!\n" );
+	    next;
+	}
+	#only want one read per source (for now)
+	next if( exists( $sources{$source} ) && $sources{$source} > 1 );
+	#we haven't retained a read from this source yet
+	$sources{$source} = 0;
+	#check that the non-padded part of the read is longer than the threshold
+	my $no_pad = strip_pads( $seq->seq );
+	my $no_pad_len = length( $no_pad );
+	next if( $no_pad_len < $read_len_cut );
+	#print the read and set the source to be skipped next round
+	warn( "Grabbing sequence $seq->display() for source $source:\n" );
+	$seqout->write_seq( $seq );
+	$sources{$source}++;
+    }
+    return $filtered_reads_file;
+}
+
+sub strip_pads{
+    my $sequence = shift;
+    $sequence =~ s/^N+//g;
+    $sequence =~ s/N+$//g;
+    return $sequence;
+}
+
+sub pads_to_rand_noncoding{
+    my $self = shift;
+    my $filtered_reads_file = shift;
+    my $sim_outdir = shift;
+    my @suffixes = ( ".fna", ".fa" );
+    my ( $basename, $directory, $suffix ) = fileparse( $filtered_reads_file, @suffixes );
+    my $prepped_reads_file = $directory . "/" . $basename . "-prep.fa";
+    my $seqout = Bio::SeqIO->new( -file => ">$prepped_reads_file", -format => 'fasta' );
+    my $seqin  = Bio::SeqIO->new( -file => $filtered_reads_file, -format => 'fasta' );
+    warn( "Replacing pads with random nucleotide characters\n");
+    while( my $seq = $seqin->next_seq() ){
+	my $sequence = $seq->seq();
+	#replace each N with a random A|T|G|C. See
+	#http://tinyurl.com/4xq4wa6
+	my ( $fiveprime, $threeprime, $tempseq );
+	if( $sequence =~ m/^(N+)(.*)/ ){
+	    $fiveprime = $1;
+	    $tempseq   = $2;
+	    my $fplen  = length( $fiveprime );
+	    my $nc_pad = generate_random_noncoding_str( $fplen );
+	    $sequence  = $nc_pad . $tempseq;
+	}
+	if( $sequence =~ m/^(.*?)(N+)$/ ){
+	    $tempseq    = $1;
+	    $threeprime = $2;
+	    my $tplen      = length( $threeprime );
+	    my $nc_pad  = generate_random_noncoding_str( $tplen );
+	    $sequence   = $tempseq . $nc_pad;	    
+	}		
+	$seq->seq( $sequence );
+	$seqout->write_seq( $seq );	
+    }
+    return $prepped_reads_file;
+}
+
+sub generate_random_noncoding_str{
+    my $seqlen = shift;
+    my @chars = ( "A", "T", "G", "C");
+    my $rand_str;
+    foreach ( 1..$seqlen){
+	$rand_str .= $chars[rand @chars];
+    }
+    return $rand_str;
 }
 
 #we will convert a gene row into a three element hash: the unqiue gene_oid key, the protein id, and the nucleotide sequence. the same

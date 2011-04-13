@@ -38,6 +38,18 @@ sub get_samples_by_project_id{
     return $samples;
 }
 
+sub get_fammembers_by_famid{
+    my $self    = shift;
+    my $famid   = shift;
+    my $members = $self->get_schema->resultset("Familymember")->search(
+	{
+	    famid => $famid,
+	}
+    );
+    return $members;
+}
+
+
 sub create_project{
     my $self = shift;
     my $name = shift;
