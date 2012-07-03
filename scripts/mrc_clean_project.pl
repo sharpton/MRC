@@ -7,15 +7,16 @@ use MRC::DB;
 use Getopt::Long;
 
 my( $project_id, $username, $password, $ffdb );
+$ffdb = "/db/projects/sharpton/MRC_ffdb/";
 GetOptions(
     "i=i" => \$project_id,
     "u=s" => \$username,
     "p=s" => \$password,
-    "f=s" => \$ffdb,
+    "f:s" => \$ffdb,
     );
 
 my $analysis = MRC->new();
-$analysis->set_dbi_connection( "DBI:mysql:IMG" );
+$analysis->set_dbi_connection( "DBI:mysql:IMG:lighthouse.ucsf.edu" );
 $analysis->set_username( $username );
 $analysis->set_password( $password );
 $analysis->build_schema();

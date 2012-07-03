@@ -42,19 +42,32 @@ sub new{
     my $proto = shift;
     my $class = ref($proto) || $proto;
     my $self  = {};
-    my @fcis  = (6);
+    my @fcis  = ( 4,6 );
     $self->{"fci"}         = \@fcis; #family construction ids that are allowed to be processed
     $self->{"workdir"}     = undef; #master path to MRC scripts
     $self->{"ffdb"}        = undef; #master path to the flat file database
     $self->{"dbi"}         = undef; #DBI string to interact with DB
     $self->{"user"}        = undef; #username to interact with DB
     $self->{"pass"}        = undef; #password to interact with DB
-    $self->{"schema"}      = undef; #current working DB schema object (DBIx)
     $self->{"projectpath"} = undef;
     $self->{"projectname"} = undef;
     $self->{"project_id"}  = undef;
     $self->{"proj_desc"}   = undef;
     $self->{"samples"}     = undef; #hash relating sample names to paths   
+    $self->{"rusername"}   = undef;
+    $self->{"r_ip"}        = undef;
+    $self->{"rscripts"}    = undef;
+    $self->{"rffdb"}       = undef;
+    $self->{"fid_subse"}   = undef; #an array of famids
+    $self->{"schema"}      = undef; #current working DB schema object (DBIx)    
+    $self->{"hmmdb"}       = undef; #name of the hmmdb to use in this analysis
+    $self->{"is_remote"}   = 0;     #does analysis include remote compute? 0 = no, 1 = yes
+    $self->{"is_strict"}   = 1;     #strict (top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
+    $self->{"t_evalue"}    = undef; #evalue threshold for clustering
+    $self->{"t_coverage"}  = undef; #coverage threshold for clustering
+    $self->{"r_hmmscan_script"} = undef; #location of the remote hmmscan script. holds a path string.
+    $self->{"r_project_logs"}   = undef; #location of the remote project logs directory. holds a path string.
+
     bless($self);
     return $self;
 }
@@ -94,8 +107,11 @@ sub get_sample_ids{
 sub set_fcis{
   my $self = shift;
   my @fcis = @_;
-  if( @fcis ){
+  if( !@fcis ){
     warn "No fci value(s) supplied for set_fcis in MRC.pm. Using default value of ", @{ $self->{"fci"} }, ".\n";
+  }
+  else{
+      warn "Setting fci to @fcis\n";
   }
   $self->{"fci"} = \@fcis;
   return $self->{"fci"};
@@ -188,11 +204,25 @@ sub set_dbi_connection{
     return $self->{"dbi"};
 }
 
+#points to the original project path file, not ffdb version!
 sub set_project_path{
     my $self = shift;
     my $path = shift;
     $self->{"projectpath"} = $path;
     return $self->{"projectpath"};
+}
+
+#points to the original project path file, not the ffdb version!
+sub get_project_path{
+    my $self = shift;
+    return $self->{"projectpath"};
+}
+
+sub get_sample_path{
+    my $self = shift;
+    my $sample_id = shift;
+    my $sample_path = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/". $sample_id . "/";
+    return $sample_path;
 }
 
 sub set_project_desc{
@@ -231,7 +261,14 @@ sub set_password{
 
 sub build_schema{
     my $self = shift;
-    my $schema = IMG::Schema->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"} );
+    my $schema = IMG::Schema->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
+				       #since we have terms in DB that are reserved words in mysql (e.g., order)
+				       #we need to put quotes around those field ids when calling SQL
+				       {
+					   quote_char => '`', #backtick is quote in sql
+					   name_sep   => '.'  #allows SQL generator to put quotes in right place
+				       }
+	);
     $self->{"schema"} = $schema;
     return $self->{"schema"};
 }
@@ -320,6 +357,164 @@ sub get_project_desc{
 sub get_subset_famids{
     my $self = shift;
     return $self->{"fid_subset"};
+}
+
+sub set_remote_server{
+    my $self        = shift;
+    my $r_ip        = shift;
+    $self->{"r_ip"} = $r_ip;
+    return $self->{"r_ip"};
+}
+
+sub get_remote_server{
+    my $self = shift;
+    return $self->{"r_ip"};
+}
+
+sub set_remote_username{
+    my $self      = shift;
+    my $rusername = shift;
+    $self->{"rusername"} = $rusername;
+    return $self->{"rusername"};
+}
+
+sub get_remote_username{
+    my $self = shift;
+    return $self->{"rusername"};
+}
+
+sub set_remote_ffdb{
+    my $self = shift;
+    my $rffdb = shift;
+    $self->{"rffdb"} = $rffdb;
+    return $self->{"rffdb"};
+}
+
+sub get_remote_ffdb{
+    my $self = shift;
+    return $self->{"rffdb"};
+}
+
+sub get_remote_project_path{
+   my ( $self ) = @_;
+   my $path = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/";
+   return $path;
+}
+
+sub get_remote_sample_path{
+    my ( $self, $sample_id ) = @_;
+    my $path = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/";
+    return $path;
+}
+
+sub set_remote_scripts{
+    my $self     = shift;
+    my $rscripts = shift;
+    $self->{"rscripts"} = $rscripts;
+    return $self->{"rscripts"};
+}
+
+sub set_hmmdb_name{
+    my ( $self, $name ) = @_;
+    $self->{"hmmdb"} = $name;
+    return $self->{"hmmdb"};
+}
+
+sub get_hmmdb_name{
+    my $self = shift;
+    return $self->{"hmmdb"};
+}
+
+sub get_remote_scripts{
+    my $self = shift;
+    return $self->{"rscripts"};
+}
+
+sub get_remote_connection{
+    my $self = shift;
+    my $username = $self->get_remote_username();
+    my $server   = $self->get_remote_server();
+    my $connection = $username . "@" . $server;
+    return $connection;
+}
+
+sub build_remote_ffdb{
+    my $self    = shift;
+    my $verbose = shift;
+    my $rffdb   = $self->{"rffdb"};
+    my $connection = $self->get_remote_connection();
+    #the -p flag won't produce errors or overwrite if existing, so simply always run this.
+    my $command = "mkdir -p " . $rffdb;	
+    $self->MRC::Run::execute_ssh_cmd( $connection, $command, $verbose );   
+    $command = "mkdir -p " . $rffdb . "/projects/";
+    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
+    $command = "mkdir -p " . $rffdb . "/HMMdbs/";
+    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
+    return $self;
+}
+
+sub set_remote_hmmscan_script{
+    my $self     = shift;
+    my $filepath = shift; 
+    $self->{"r_hmmscan_script"} = $filepath;
+    return $self;
+}
+
+sub get_remote_hmmscan_script{
+    my $self = shift;
+    return $self->{"r_hmmscan_script"};
+}
+
+sub set_remote_project_log_dir{
+    my $self     = shift;
+    my $filepath = shift;
+    $self->{"r_project_logs"} = $filepath;
+    return $self;
+}
+
+sub get_remote_project_log_dir{
+    my $self = shift;
+    return $self->{"r_project_logs"};
+}
+
+sub is_remote{
+    my $self = shift;
+    my $switch = shift;
+    if( defined( $switch ) ){
+	$self->{"is_remote"} = $switch;
+    }
+    return $self->{"is_remote"};
+}
+
+sub is_strict_clustering{
+    my $self = shift;
+    my $switch = shift;
+    if( defined( $switch ) ){
+	$self->{"is_strict"} = $switch;
+    }
+    return $self->{"is_strict"};
+}
+
+sub set_evalue_threshold{
+    my ( $self, $value ) = @_;
+    $self->{"t_evalue"} = $value;
+    return $self->{"t_evalue"};
+}
+
+sub get_evalue_threshold{
+    my $self = shift;
+    return $self->{"t_evalue"};
+}
+
+sub set_coverage_threshold{
+    my ( $self, $value ) = @_;
+    $self->{"t_coverage"} = $value;
+    return $self->{"t_coverage"};
+}
+
+sub get_coverage_threshold{
+    my $self = shift;
+    return $self->{"t_coverage"};
 }
 
 1;

@@ -31,8 +31,8 @@ my $seq_type = 'RNA2DNA'; #For our purposes, same as running 'DNA', which is not
 my $metasim_src = "/home/sharpton/src/metasim/";
 
 GetOptions(
-    "u=s" => \$username,
-    "p=s" => \$password,
+    "u=s"   => \$username,
+    "p=s"   => \$password,
     "sub:s" => \$family_subset_list,
     "n:i"   => \$nsamples,
     "o=s"   => \$outdir, #where will all output generated end up?
@@ -45,7 +45,7 @@ GetOptions(
 #Initialize the project
 my $analysis = MRC->new();
 #Get a DB connection 
-$analysis->set_dbi_connection( "DBI:mysql:IMG" );
+$analysis->set_dbi_connection( "DBI:mysql:IMG:lighthouse.ucsf.edu" );
 $analysis->set_username( $username );
 $analysis->set_password( $password );
 $analysis->build_schema();
@@ -135,6 +135,7 @@ foreach my $famid( @rand_ids ){
    #impose our own filtering as per our needs
    my $filtered_reads_file = $analysis->MRC::Sim::filter_sim_reads( $sim_reads_file, $sim_outdir ); 
    my $prepped_reads_file = $analysis->MRC::Sim::pads_to_rand_noncoding( $filtered_reads_file, $sim_outdir );
+   my $sample_file        = $analysis->MRC::Sim::convert_to_project_sample( $famid, $prepped_reads_file, $outdir, $out_basename ); 
 }
 
 

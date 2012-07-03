@@ -26,6 +26,7 @@ use Data::Dumper;
 use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
 use List::Util qw(shuffle);
+use File::Copy;
 
 sub get_rand_geneid{
     my $self  = shift;
@@ -84,10 +85,18 @@ sub run_meta_passage{
     my $stddev_clone_len = shift;
     my $seq_type = shift;
     my $metasim_src   = shift; #directory to location of MetaSim remove at a later date
+    my $drop_length   = shift;
+    my $blast_translate  = shift; #optional, point to blast database of the input sim sequences. will also build db under the hood
     #NOTE: we don't pass a -j or --sim option. we'll always need those options here
     #NOTE: We don't pass a -q option here, as we'll always generate more reads than
     #we need and then use an indpendent method to conduct our own filtering.
-    my @args     = ("-i $inseqs", "--out_dir $out_dir", "--out_basename $out_basename", "-j", "-m -1", "--pad $padlength", "--sim",  "--num_reads $n_reads", "--mean_clone_len $mean_clone_len", "--stddev_clone_len $stddev_clone_len", "--mean_read_len $mean_read_len", "--stddev_read_len $stddev_read_len", "--type $seq_type", "--metasim_path $metasim_src" );
+    my @args = ();
+    if( $blast_translate ){
+	@args     = ("-i $inseqs", "--out_dir $out_dir", "--out_basename $out_basename", "-j", "-m -1", "--pad $padlength", "--sim",  "--num_reads $n_reads", "--mean_clone_len $mean_clone_len", "--stddev_clone_len $stddev_clone_len", "--mean_read_len $mean_read_len", "--stddev_read_len $stddev_read_len", "--type $seq_type", "--metasim_path $metasim_src", "-x", "-y $blast_translate", "--drop_len $drop_length" );
+    }
+    else{
+	@args     = ("-i $inseqs", "--out_dir $out_dir", "--out_basename $out_basename", "-j", "-m -1", "--pad $padlength", "--sim",  "--num_reads $n_reads", "--mean_clone_len $mean_clone_len", "--stddev_clone_len $stddev_clone_len", "--mean_read_len $mean_read_len", "--stddev_read_len $stddev_read_len", "--type $seq_type", "--metasim_path $metasim_src", "--drop_len $drop_length");
+    }
     warn( "MetaPASSAGE.pl " . "@args" );
     my $results  = capture( "MetaPASSAGE.pl " . "@args" );
     if( $EXITVAL != 0 ){
@@ -130,8 +139,12 @@ sub filter_sim_reads{
 	my $no_pad = strip_pads( $seq->seq );
 	my $no_pad_len = length( $no_pad );
 	next if( $no_pad_len < $read_len_cut );
+	#update the id such that source name is appended to read id
+	my $id = $seq->display_id();
+	$id = $id . "_" . $source;
+	$seq->display_id( $id );
 	#print the read and set the source to be skipped next round
-	warn( "Grabbing sequence $seq->display() for source $source:\n" );
+	warn( "Grabbing sequence $id for source $source:\n" );
 	$seqout->write_seq( $seq );
 	$sources{$source}++;
     }
@@ -190,19 +203,83 @@ sub generate_random_noncoding_str{
     return $rand_str;
 }
 
+sub convert_to_project_sample{
+    my $self       = shift;
+    my $famid      = shift;
+    my $reads_file = shift;
+    my $outdir     = shift; #where the sample file will be placed
+    my $out_basename = shift;
+    my $cp_file = $outdir . "/" . $out_basename . "_" . $famid . ".fa";
+    copy( $reads_file, $cp_file ) || die "Copy of $reads_file failed: $!\n";
+    return $cp_file;
+}
+
 #we will convert a gene row into a three element hash: the unqiue gene_oid key, the protein id, and the nucleotide sequence. the same
 #proteins may be in the DB more than once, so we will track genes by their gene_oid (this will be the bioperl seq->id() tag)
+
 sub print_gene{
     my ( $self, $geneid, $seqout ) = @_;
     my $gene = $self->MRC::DB::get_gene_by_id( $geneid );
     my $sequence = $gene->get_column('dna');
+    if( $sequence !~ m/(A|a|T|t|G|g|C|c)/ ){
+	return 0;
+    }
     my $desc     = $gene->get_column('protein_id');
     my $seq = Bio::Seq->new( -seq        => $sequence,
 			     -alphabet   => 'dna',
 			     -display_id => $geneid,
 			     -desc       => $desc
 	);
+    my $length = $seq->length();
+    $seqout->write_seq( $seq );    
+    return $length;
+}
+
+sub print_protein{
+    my ( $self, $geneid, $seqout ) = @_;
+    my $gene = $self->MRC::DB::get_gene_by_id( $geneid );
+    my $sequence = $gene->get_column('protein');
+    my $desc     = $gene->get_column('protein_id');
+    my $seq = Bio::Seq->new( -seq        => $sequence,
+			     -alphabet   => 'protein',
+			     -display_id => $geneid,
+			     -desc       => $desc
+	);
     $seqout->write_seq( $seq );
 }
+
+
+#used to determine how original simulated reads are associated with families. Reads were produced
+#using the script mrc_simulate_reads.pl.
+#returns hash that looks like the following:
+#$standards{$read_id}->{$famid} = 1;
+
+sub map_read_ids_to_famids{
+    my $projectdir = shift;
+    my $basename   = shift;
+    my %map = ();
+    opendir( PROJ, "$projectdir" ) || die "can't opendir $projectdir for read: $!\n";
+    my @files = readdir(PROJ);
+    closedir PROJ;
+    foreach my $file( @files ){
+	next if $file =~ m/^\./;
+	next if ( -d $projectdir . "/" . $file );
+	if( $file =~ m/$basename\_(\d+)/ ){
+	    my $famid = $1;
+	    my $seqin = Bio::SeqIO->new( -file => $projectdir . "/" . $file, -format => 'fasta' );
+	    while( my $seq = $seqin->next_seq() ){
+		my $id = $seq->display_id();
+		$map{$id}->{$famid}++;
+	    }
+	}
+	else{
+	    warn( "Can't parse family identifier from " . $projectdir . "/" . $file . "\n" );
+	    exit(0);
+	}	
+    }
+    return \%map;
+}
+
+
 
 1;
