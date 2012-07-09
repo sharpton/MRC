@@ -50,7 +50,7 @@ sub clean_project{
 }
 
 #currently uses @suffix with basename to successfully parse off .fa. may need to change
-sub get_part_samples{
+sub get_partitioned_samples{
     my $self = shift;
     my $path = shift;
     my @suffixes = (".fa", ".fna");

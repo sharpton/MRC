@@ -37,7 +37,7 @@ my $waittime       = 30;
 my $input_pid      = "";
 my $goto           = ""; #B=Build HMMdb
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-my $nseqs_per_samp_split = 500; 
+my $nseqs_per_samp_split = 500; #how many seqs should each sample split file contain?
 my $verbose        = 1;
 
 #think about option naming conventions before release
@@ -54,10 +54,10 @@ GetOptions(
     "n:i"   => \$hmm_db_split_size,
     "w:i"   => \$waittime, #in seconds
     "r"     => \$remote,
-    "pid:i"    => \$input_pid,
+    "pid:i"      => \$input_pid,
     "goto|g:s"   => \$goto,
-    "z"     => \$nseqs_per_samp_split,
-    "v"     => \$verbose,
+    "z"          => \$nseqs_per_samp_split,
+    "v"          => \$verbose,
     );
 
 #Initialize the project
@@ -107,7 +107,7 @@ if( -d $project_file ){
     #Partitioned samples project
     #get the samples associated with project. a project description can be left in 
     #DESCRIPT.txt
-    $analysis->MRC::Run::get_part_samples( $project_file );
+    $analysis->MRC::Run::get_partitioned_samples( $project_file );
     ############
     #come back and add a check that ensures sequences associated with samples
     #are of the proper format. We should check data before loading.
