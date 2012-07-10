@@ -1,5 +1,12 @@
 #!/usr/bin/perl -w
 
+#mrc_handler.pl - The control script responsible for executing an MRC run.
+#Usage: 
+#perl mrc_handler.pl -u <username> -p <password> -d <path_to_flat_file_db> -s <path_to_mrc_scripts_directory> -i <path_to_metagenome_data> -h <hmm_database_name> > <path_to_out_log> 2> <path_to_error_log>
+#
+#Example Usage:
+#nohup perl mrc_handler.pl -u username -p password -d /bueno_not_backed_up/sharpton/MRC_ffdb -s ./ -i ../data/randsamp_subset_perfect_2 -h OPFs_all_v1.0 > randsamp_perfect_2.all.out 2> randsamp_perfect_2.all.err &
+
 use strict;
 use MRC;
 use MRC::DB;
@@ -241,8 +248,6 @@ else{
 	}
     }
 }
-
-die;
 
 #calculate diversity statistics
 CALCDIVERSITY:
