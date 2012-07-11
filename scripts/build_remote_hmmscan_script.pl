@@ -14,6 +14,7 @@ my $memory = "1G"; #include units in this string, G for Gigabytes, K for Kilobyt
 my $walltime = "0:30:0";
 my $projectdir = ""; #what is the top level project dir on the remote server?
 my $db_name_stem = ""; #what is the basename of the db splits, ignoring the arrayjob split number?
+my $forward_filter = 1; #should the forward filter (F3) be turned on or off? Binary (e.g., 0 = off, 1 = default on)
 
 GetOptions(
     "o=s"    => \$outfile,
@@ -23,6 +24,7 @@ GetOptions(
     "name=s" => \$db_name_stem,
     "z:s"    => \$n_searches,
     "p=s"    => \$projectdir,
+    "f:i"    => \$forward_filter,
     );
 
 #prep the outfile for write
@@ -111,8 +113,14 @@ print OUT join( "\n",
 #RUN HMMER
 print OUT "date                                                 >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
 #might create switch to futz with F3 filter in the case of long reads
-print OUT "echo \"hmmscan -Z " . $n_searches . " --F3 1 --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\"   >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-print OUT "hmmscan -Z " . $n_searches . " --F3 1 --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\n";
+if( $foward_filter ){
+    print OUT "echo \"hmmscan -Z " . $n_searches . " --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\"   >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "hmmscan -Z " . $n_searches . " --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\n";
+}
+else{
+    print OUT "echo \"hmmscan -Z " . $n_searches . " --F3 1 --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\"   >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "hmmscan -Z " . $n_searches . " --F3 1 --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\n";
+}
 print OUT "date                                                 >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
 #CLEANUP
 print OUT join( "\n",
