@@ -5,26 +5,27 @@ use Getopt::Long;
 use File::Path qw(make_path rmtree);
 use IPC::System::Simple qw(capture $EXITVAL);
 
-#called by lighthouse, executes run_hmmsearch.sh. Note this is different than the lighthouse variant!.
-print "perl run_remote_hmmsearch_handler.pl @ARGV\n";
+#called by lighthouse, executes run_hmmsearch.sh, run_hmmscan.sh, or run_blast.sh
+print "perl run_remote_search_handler.pl @ARGV\n";
 
-my( $results_dir, $hmmdb_dir, $query_seq_dir, $hmmdb_name, $waittime, $scriptpath );
+my( $results_dir, $db_dir, $query_seq_dir, $db_name, $waittime, $scriptpath, $type );
 
 GetOptions(
     "o=s" => \$results_dir,
-    "h=s" => \$hmmdb_dir,
+    "h=s" => \$db_dir,
     "i=s" => \$query_seq_dir,	  
-    "n=s" => \$hmmdb_name,
+    "n=s" => \$db_name,
     "w=i" => \$waittime,
-    "s=s" => \$scriptpath,	   
+    "s=s" => \$scriptpath,	
+    "t=s" => \$type,
     );
 
-print "working with $hmmdb_dir\n";
+print "working with $db_dir\n";
 print "running searches\n";
 #create a jobid storage log
 my %jobs = ();
 #open the query seq file directorie (e.g., /orfs/) and grab all of the orf splits
-opendir( IN, $query_seq_dir ) || die "Can't opendir $query_seq_dir for read in run_remote_hmmscan_handler.pl\n";
+opendir( IN, $query_seq_dir ) || die "Can't opendir $query_seq_dir for read in run_remote_search_handler.pl\n";
 my @query_files = readdir( IN );
 closedir( IN );
 #loop over the files, launching a queue job for each
@@ -35,8 +36,13 @@ foreach my $query_seq_file( @query_files ){
     #now let's see if that directory exists. If not, create it.
     check_and_make_path( $split_sub_results_dir, 0 );
     #run the jobs!
-    my $results = run_remote_search( $scriptpath, $query_seq_dir, $query_seq_file, $hmmdb_dir, $hmmdb_name, $split_sub_results_dir ); 
-#    my $results = run_remote_search( $scriptpath, $query_seq_dir, $query_seq_file, $hmmdb_dir, $hmmdb_name, $results_dir ); 
+    print $scriptpath . "\n";
+    print $query_seq_dir . "\n";
+    print $query_seq_file . "\n";
+    print $db_dir . "\n";
+    print $db_name . "\n";
+    print $split_sub_results_dir . "\n";
+    my $results = run_remote_search( $scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $split_sub_results_dir, $type ); 
     if( $results =~ m/^Your job-array (\d+)\./ ) {
 	my $job_id = $1;
 	$jobs{$job_id}++;
@@ -51,26 +57,24 @@ foreach my $query_seq_file( @query_files ){
 my @job_ids = keys( %jobs );
 my $time = remote_job_listener( \@job_ids, $waittime );
 
-
 ###############
 # SUBROUTINES #
 ###############
 
 sub run_remote_search{
-    my( $scriptpath, $query_seq_dir, $query_seq_file, $hmmdb_dir, $hmmdb_name, $results_dir ) = @_;
+    my( $scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $results_dir, $type ) = @_;
     print "Processing $query_seq_file\n";    
     print "Running with array jobs....\n";
     #need to make it so that these are passed in through the function...
-    my $results = run_hmmsearch( $scriptpath, $query_seq_dir, $query_seq_file, $hmmdb_dir, $hmmdb_name, $results_dir );
-    #we can add other classification methods here at a later date (e.g., run blast)
+    my $results = run_search( $scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $results_dir, $type );
     return $results;
 
 }
 
-sub run_hmmsearch{
-    my( $scriptpath, $query_seq_dir, $query_seq_file, $hmmdb_dir, $hmmdb_name, $results_dir ) = @_;
-    my $hmm_out_stem = $query_seq_file . "-" . $hmmdb_name;
-    my @args = ( $scriptpath, $query_seq_dir, $query_seq_file, $hmmdb_dir, $results_dir, $hmm_out_stem );
+sub run_search{
+    my( $scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $results_dir, $search ) = @_;
+    my $out_stem = $query_seq_file . "-" . $db_name;
+    my @args = ( $scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $results_dir, $out_stem );
     print( "qsub ", "@args\n" );
     my $results = capture( "qsub " . "@args" );
     if( $EXITVAL != 0 ){
