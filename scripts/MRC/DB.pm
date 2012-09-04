@@ -229,13 +229,13 @@ sub get_gene_by_id{
     return $gene;
 }
 
-sub build_hmmdb_ffdb{
+sub build_db_ffdb{
     my $self = shift;
     my $path = shift;
     if( -d $path ){
-	rmtree( $path ) || die "Can't remove $path in build_hmmdb_ffdb: $!\n";
+	rmtree( $path ) || die "Can't remove $path in build_db_ffdb: $!\n";
     }
-    make_path( $path ) || die "Can't create directory $path in build_hmmdb_ffdb: $!\n";
+    make_path( $path ) || die "Can't create directory $path in build_db_ffdb: $!\n";
     return $self;       
 }
 
@@ -245,10 +245,23 @@ sub get_hmmdb_path{
     return $hmmdb_path;
 }
 
-sub get_number_hmmdb_splits{
-    my ( $self ) = @_;
+sub get_blastdb_path{
+    my $self = shift;
+    my $blastdb_path = $self->get_ffdb() . "BLASTdbs/" . $self->get_blastdb_name() . "/";
+    return $blastdb_path;
+}
+
+sub get_number_db_splits{
+    my ( $self, $type ) = @_;
     my $n_splits = 0;
-    opendir( DIR, $self->MRC::DB::get_hmmdb_path ) || die "Can't opendir " . $self->get_hmmdb_path . " for read: $!\n";
+    my $db_path;
+    if( $type eq "hmm" ){
+	$db_path = $self->MRC::DB::get_hmmdb_path; 
+    }
+    elsif( $type eq "blast" ){
+	$db_path = $self->MRC::DB::get_blastdb_path;
+    }
+    opendir( DIR, $db_path ) || die "Can't opendir " . $db_path . " for read: $!\n";
     my @files = readdir( DIR );
     closedir( DIR );
     foreach my $file( @files ){
@@ -260,6 +273,7 @@ sub get_number_hmmdb_splits{
     return $n_splits;
 }
 
+#for hmmscan -Z correction
 sub get_number_hmmdb_scans{
     my ( $self, $n_seqs_per_db_split ) = @_;
     my $n_splits = 0;
@@ -276,6 +290,44 @@ sub get_number_hmmdb_scans{
     return $n_seqs;
 }
 
+#for hmmsearch
+sub get_number_sequences{
+    my( $self, $n_sequences ) = @_;
+    my $n_splits = 0;
+    foreach my $sample_id( @{ $self->get_sample_ids() } ){
+	my $orfs_path = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
+	opendir( DIR, $orfs_path ) || die "Can't opendir " . $orfs_path . " for read: $!\n";
+	my @files = readdir( DIR );
+	closedir( DIR );	
+	foreach my $file( @files ){
+	    next unless( $file =~ m/\.fa/ );
+	    $n_splits++;
+	}
+    }
+    my $n_seqs = $n_splits * $n_sequences;
+    return $n_seqs;
+}
+
+#for blast
+sub get_blast_db_length{
+    my( $self, $db_name ) = @_;
+    my $length  = 0;
+    my $db_path = $self->MRC::DB::get_blastdb_path();
+    if( -e $db_path . "/database_length.txt" ){
+	open( IN, $db_path . "/database_length.txt" ) || 
+	    die "Can't open " . $db_path . "/database_length.txt for read: $!\n";
+	while( <IN> ){
+	    chomp $_;
+	    $length = $_;
+	}
+	close IN;
+	return $length;
+    }
+    else{
+	$length = $self->MRC::Run::calculate_blast_db_length();
+    }
+    return $length;
+}
 
 sub build_project_ffdb{
     my $self = shift;
@@ -297,8 +349,11 @@ sub build_sample_ffdb{
     my $ffdb = $self->get_ffdb;
     my $proj_dir = $ffdb . "/projects/" . $self->get_project_id . "/";
     my $logs     = $proj_dir . "/logs/";
-    my $hmmscanlogs = $logs . "/hmmscan/";
-    my $output      = $proj_dir . "/output/";
+    my $hmmscanlogs   = $logs . "/hmmscan/";
+    my $hmmsearchlogs = $logs . "/hmmsearch/";
+    my $blastlogs     = $logs . "/blast/";
+    my $formatdblogs  = $logs . "/formatdb/";
+    my $output        = $proj_dir . "/output/";
     if( -d $output ){
 	warn( "Output directory already exists at $output. Will not overwrite!\n");
     }
@@ -317,6 +372,25 @@ sub build_sample_ffdb{
     else{
 	make_path( $hmmscanlogs ) || die "Can't create directory $hmmscanlogs in build_sample_ffdb: $!\n";
     }
+    if( -d $hmmsearchlogs ){
+	warn( "Logs directory already exists at $hmmsearchlogs. Will not overwrite!\n");
+    }
+    else{
+	make_path( $hmmsearchlogs ) || die "Can't create directory $hmmsearchlogs in build_sample_ffdb: $!\n";
+    }
+    if( -d $blastlogs ){
+	warn( "Logs directory already exists at $blastlogs. Will not overwrite!\n");
+    }
+    else{
+	make_path( $blastlogs ) || die "Can't create directory $blastlogs in build_sample_ffdb: $!\n";
+    }
+    if( -d $formatdblogs ){
+	warn( "Logs directory already exists at $formatdblogs. Will not overwrite!\n");
+    }
+    else{
+	make_path( $formatdblogs ) || die "Can't create directory $formatdblogs in build_sample_ffdb: $!\n";
+    }
+
     foreach my $sample( keys( %{ $self->get_samples() } ) ){
 	my $sample_dir = $proj_dir . $self->get_samples->{$sample}->{"id"} . "/";
 	my $raw_sample_dir = $sample_dir . "raw/";
@@ -334,6 +408,12 @@ sub build_sample_ffdb{
 	}
 	else{
 	    make_path( $search_res ) || die "Can't create directory $search_res in build_sample_ffdb: $!\n";
+	    my $hmmscan_results = $search_res . "/hmmscan";
+	    make_path( $hmmscan_results ) || die "Can't create directory $hmmscan_results in build_sample_ffdb: $!\n";
+	    my $hmmsearch_results = $search_res . "/hmmsearch";
+	    make_path( $hmmsearch_results ) || die "Can't create directory $hmmsearch_results in build_sample_ffdb: $!\n";
+	    my $blast_results = $search_res . "/blast";
+	    make_path( $blast_results ) || die "Can't create directory $blast_results in build_sample_ffdb: $!\n";
 	}
 	if( -d $raw_sample_dir ){
 	    warn "Data already exists in $raw_sample_dir. Will not overwrite!\n";

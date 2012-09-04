@@ -135,6 +135,9 @@ sub back_load_project{
     $self->set_project_path( $ffdb . "/projects/" . $project_id );
     if( $self->is_remote ){
 	$self->set_remote_hmmscan_script( $self->get_remote_project_path() . "run_hmmscan.sh" );
+	$self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "run_hmmsearch.sh" );
+        $self->set_remote_blast_script( $self->get_remote_project_path() . "run_blast.sh" );
+        $self->set_remote_formatdb_script( $self->get_remote_project_path() . "run_formatdb.sh" );
 	$self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
     }
     return $self;
@@ -150,13 +153,20 @@ sub back_load_samples{
     closedir PROJ;
     my %samples = ();
     foreach my $file( @files ){
-	next if ( $file =~ m/^\./ || $file =~ m/logs/ || $file =~ m/hmmscan/ || $file =~ m/output/ );
+	next if ( $file =~ m/^\./ || $file =~ m/logs/ || $file =~ m/hmmscan/ || $file =~ m/output/ || $file =~ m/\.sh/ );
 	my $sample_id = $file;
 	my $sample    = $self->MRC::DB::get_sample_by_sample_id( $sample_id );
 	my $sample_name = $sample->name();
 	$samples{$sample_name}->{"id"} = $sample_id;
     }
     $self->set_samples( \%samples );
+    #back load remote data
+    if( $self->is_remote() ){
+	$self->set_remote_hmmscan_script( $self->get_remote_project_path() . "run_hmmscan.sh" );
+        $self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "run_hmmsearch.sh" );
+        $self->set_remote_blast_script( $self->get_remote_project_path() . "run_blast.sh" );
+        $self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
+    }
     warn( "Backloading of samples complete\n" );
     return $self;
 }
@@ -269,9 +279,11 @@ sub classify_reads{
     my $self = shift;
     my $sample_id  = shift;
     my $orf_split  = shift; #just the file name of the split, not the full path
+    my $algo       = shift;
     #remember, each orf_split has its own search_results sub directory
-    my $search_results = $self->get_sample_path( $sample_id ) . "/search_results/" . $orf_split;
-    my $hmmdb_name     = $self->get_hmmdb_name();
+    my $search_results = $self->get_sample_path( $sample_id ) . "/search_results/" . $algo . "/" . $orf_split;
+#    my $hmmdb_name     = $self->get_hmmdb_name();
+#    my $blastdb_name   = $self->get_blastdb_name();
     my $query_seqs     = $self->get_sample_path( $sample_id ) . "/orfs/" . $orf_split;
     my %hit_map        = %{ initialize_hit_map( $query_seqs ) };
     #open search results, get all results for this split
@@ -280,7 +292,16 @@ sub classify_reads{
     closedir( RES );
     foreach my $result_file( @result_files ){
 	next unless( $result_file =~ m/$orf_split/ );
-	%hit_map = %{ $self->MRC::Run::parse_hmmscan_table( $search_results . "/" . $result_file, \%hit_map ) };
+	if( $algo eq "hmmscan" ){
+	    %hit_map = %{ $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "hmmscan", \%hit_map ) };
+	}
+	elsif( $algo eq "hmmsearch" ){
+	    %hit_map = %{ $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "hmmsearch", \%hit_map ) };
+	}
+	elsif( $algo eq "blast" ){
+	    #because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
+	    %hit_map = %{ $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "blast", \%hit_map, $query_seqs ) };
+	}
     }
     #now insert the data into the database
     my $is_strict = $self->is_strict_clustering();
@@ -298,73 +319,108 @@ sub classify_reads{
 	    my $famid    = $hit_map{$orf_alt_id}->{$is_strict}->{"target"};
 	    my $orf_id = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id )->orf_id();
 	    print "$orf_alt_id \t $orf_id \t $famid \n";
-#	    $self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
-#	    $self->MRC::DB::insert_family_member_orf( $orf_id, $famid );
+	    #need to ensure that this stores the raw values, need some upper limit thresholds, so maybe we need classification_id here. simpler to store anything with evalue < 1.
+	    $self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
+	    #need to add classification_id here
+	    $self->MRC::DB::insert_family_member_orf( $orf_id, $famid );
 	}
     }
     print "Found and inserted $n_hits threshold passing search results into the database\n";
 }
 
-#called by classify_reads
-#parses a hmmscan hit table and updates the hit map based on the information in the table
-sub parse_hmmscan_table{
-    my $self      = shift;
-    my $file      = shift;
-    my $r_hit_map = shift;
-    my %hit_map   = %{ $r_hit_map };
+sub parse_search_results{
+    my $self         = shift;
+    my $file         = shift;
+    my $type         = shift;
+    my $r_hit_map    = shift;
+    my $orfs_file    = shift; #only required for blast; used to get sequence lengths for coverage calculation
+    my %hit_map      = %{ $r_hit_map };
     #define clustering thresholds
     my $t_evalue   = $self->get_evalue_threshold();   #dom-ieval threshold
     my $t_coverage = $self->get_coverage_threshold(); #coverage threshold (applied to query)
     my $is_strict  = $self->is_strict_clustering();   #strict (top-hit) v. fuzzy (all hits above thresholds) clustering. Fuzzy not yet implemented   
+    #because blast table doesn't print the sequence lengths (ugh) we have to look up the query length
+    my %seqlens  = %{ _get_sequence_lengths_from_file( $orfs_file ) };
     #open the file and process each line
-    open( HMM, "$file" ) || die "can't open $file for read: $!\n";    
-    while(<HMM>){
+    open( RES, "$file" ) || die "can't open $file for read: $!\n";    
+    while(<RES>){
 	chomp $_;
 	if( $_ =~ m/^\#/ || $_ =~ m/^$/ ){
 	    next;
 	}
-	my( $tid, $tacc, $tlen,  $qid, $qacc, $qlen, $full_eval, 
-	    $full_score, $full_bias, $dom_num, $dom_total, 
-	    $dom_ceval, $dom_ieval, $dom_score, $dom_bias, 
-	    $tstart, $tstop, $qstart, $qstop, 
-	    $estart, $estop, $acc, $description ) = split( ' ', $_ );
+	my( $qid, $qlen, $tid, $tlen, $evalue, $score, $start, $stop );
+	if( $type eq "hmmscan" ){
+	    my @data = split( ' ', $_ );
+	    $qid  = $data[3];
+	    $qlen = $data[5];
+	    $tid  = $data[0];
+	    $tlen = $data[2];
+	    $evalue = $data[12]; #this is dom_ievalue
+	    $score  = $data[9];  #this is dom score
+	    $start  = $data[19]; #this is env_start
+	    $stop   = $data[20]; #this is env_stop
+	}
+	elsif( $type eq "hmmsearch" ){
+	    my @data = split( ' ', $_ );
+	    $qid  = $data[0];
+	    $qlen = $data[2];
+	    $tid  = $data[3];
+	    $tlen = $data[5];
+	    $evalue = $data[12]; #this is dom_ievalue
+	    $score  = $data[9];  #this is dom score
+	    $start  = $data[19]; #this is env_start
+	    $stop   = $data[20]; #this is env_stop
+	}
+	if( $type eq "blast" ){
+	    my @data = split( "\t", $_ );
+	    $qid  = $data[0];
+#	    $qlen = $data[2];
+	    $tid  = $data[3];
+#	    $tlen = $data[5];
+	    $evalue = $data[10]; #this is evalue
+	    $score  = $data[11];  #this is bit score
+	    $start  = $data[6];  #this is qstart
+	    $stop   = $data[7];  #this is qstop
+	    $qlen   = $seqlens{$qid};	    
+	    #won't calculate $tlen because it is messy - requires a DB lookup - and prolly unnecessary
+	}
 	#calculate coverage from query perspective
 	my $coverage  = 0;
-	if( $estop > $estart ){
-	    my $len = $estop - $estart + 1; #coverage calc must include first base!
+	if( $stop > $start ){
+	    my $len = $stop - $start + 1; #coverage calc must include first base!
 	    $coverage = $len / $qlen;
 	}
-	if( $estart > $estop ){
-	    my $len = $estart - $estop;
+	if( $start > $stop ){
+	    my $len = $start - $stop;
 	    $coverage = $len / $qlen;
 	}
 	#does hit pass threshold?
-	if( $dom_ieval <= $t_evalue && $coverage >= $t_coverage ){
+	if( $evalue <= $t_evalue && $coverage >= $t_coverage ){
 	    #is this the first hit for the query?
 	    if( $hit_map{$qid}->{"has_hit"} == 0 ){
 		#note that we use is_strict to differentiate top hit clustering from fuzzy clustering w/in hash
 		$hit_map{$qid}->{$is_strict}->{"target"}   = $tid;
-		$hit_map{$qid}->{$is_strict}->{"evalue"}   = $dom_ieval;
+		$hit_map{$qid}->{$is_strict}->{"evalue"}   = $evalue;
 		$hit_map{$qid}->{$is_strict}->{"coverage"} = $coverage;
-		$hit_map{$qid}->{$is_strict}->{"score"}    = $dom_score;
+		$hit_map{$qid}->{$is_strict}->{"score"}    = $score;
 		$hit_map{$qid}->{"has_hit"} = 1;
 	    }
 	    elsif( $is_strict ){
 		#only add if the current hit is better than the prior best hit. start with best evalue
-		if( $dom_ieval < $hit_map{$qid}->{$is_strict}->{"evalue"} ||
+		if( $evalue < $hit_map{$qid}->{$is_strict}->{"evalue"} ||
 		    #if evalues tie, use coverage to break
-		    ( $dom_ieval == $hit_map{$qid}->{$is_strict}->{"evalue"} &&
+		    ( $evalue == $hit_map{$qid}->{$is_strict}->{"evalue"} &&
 		      $coverage >   $hit_map{$qid}->{$is_strict}->{"coverage"} ) ||
 		    #finally, if evalue and coverage tie, use score to break
-		    ( $dom_ieval == $hit_map{$qid}->{$is_strict}->{"evalue"} &&
+		    ( $evalue == $hit_map{$qid}->{$is_strict}->{"evalue"} &&
 		      $coverage  == $hit_map{$qid}->{$is_strict}->{"coverage"} &&
-		      $dom_score >  $hit_map{$qid}->{$is_strict}->{"score"} ) 
+		      $score >  $hit_map{$qid}->{$is_strict}->{"score"} ) 
 		    ){
 		    #add the hits here
 		    $hit_map{$qid}->{$is_strict}->{"target"}   = $tid;
-		    $hit_map{$qid}->{$is_strict}->{"evalue"}   = $dom_ieval;
+		    $hit_map{$qid}->{$is_strict}->{"evalue"}   = $evalue;
 		    $hit_map{$qid}->{$is_strict}->{"coverage"} = $coverage;
-		    $hit_map{$qid}->{$is_strict}->{"score"}    = $dom_score;
+		    $hit_map{$qid}->{$is_strict}->{"score"}    = $score;
 		}
 	    }
 	    else{
@@ -373,15 +429,43 @@ sub parse_hmmscan_table{
 		    next;
 		}
 		#else, add every threshold passing hit to the hash
-		$hit_map{$qid}->{$is_strict}->{$tid}->{"evalue"}   = $dom_ieval;
+		$hit_map{$qid}->{$is_strict}->{$tid}->{"evalue"}   = $evalue;
 		$hit_map{$qid}->{$is_strict}->{$tid}->{"coverage"} = $coverage;
-		$hit_map{$qid}->{$is_strict}->{$tid}->{"score"}    = $dom_score;
+		$hit_map{$qid}->{$is_strict}->{$tid}->{"score"}    = $score;
 	    }
 	}
     }
-    close HMM;
+    close RES;
     return \%hit_map;
 }
+
+#produce a hashtab that maps sequence ids to sequence lengths
+sub _get_sequence_lengths_from_file{
+    my( $file ) = shift;    
+    my %seqlens = ();
+    open( FILE, "$file" ) || die "Can't open $file for read: $!\n";
+    my(  $header, $sequence );
+    while( <FILE> ){
+	chomp $_;
+	if( eof ){
+	    $sequence .= $_;
+	    $seqlens{ $header } = length( $sequence );
+	}
+	if( $_ =~ m/\>(.*)/ ){
+	    #process old sequence
+	    if( defined( $header ) ){
+		$seqlens{ $header } = length( $sequence );
+	    }
+	    $header   = $1;
+	    $sequence = "";
+	}
+	else{
+	    $sequence .= $_;
+	}
+    }
+    return \%seqlens;
+}
+
 
 #called by classify_reads
 #initialize a lookup hash by pulling seq_ids from a fasta file and dumping them into hash keys
@@ -439,58 +523,118 @@ sub classify_reads_depricated{
   return $self;
 }
 
-sub build_hmm_db{
-    my $self     = shift;
-    my $hmmdb    = shift; #name of hmmdb to use, if build, new hmmdb will be named this. check for dups
+sub build_search_db{
+    my $self        = shift;
+    my $db_name     = shift; #name of db to use, if build, new db will be named this. check for dups
     my $split_size  = shift; #integer - how many hmms per split?
-    my $force    = shift; #0/1 - force overwrite of old HMMdbs during compression.
-    my $ffdb     = $self->get_ffdb();
+    my $force       = shift; #0/1 - force overwrite of old DB during compression.
+    my $type        = shift; #blast/hmm
+    my $ffdb        = $self->get_ffdb();
     #where is the hmmdb going to go? each hmmdb has its own dir
-    my $hmmdb_path = $self->MRC::DB::get_hmmdb_path();
-    warn "Building HMMdb $hmmdb, placing $split_size per split\n";
-    #Have you built this HMMdb already?
-    if( -d $hmmdb_path && !($force) ){
-	warn "You've already built an HMMdb with the name $hmmdb at $hmmdb_path. Please delete or overwrite by using the -f option.\n";
+    my $db_path;
+    my $length      = 0;
+    if( $type eq "hmm" ){
+	$db_path = $self->MRC::DB::get_hmmdb_path();
+    }
+    elsif( $type eq "blast" ){
+	$db_path = $self->MRC::DB::get_blastdb_path();
+    }
+    warn "Building $type DB $db_name, placing $split_size per split\n";
+    #Have you built this DB already?
+    if( -d $db_path && !($force) ){
+	warn "You've already built an $type database with the name $db_name at $db_path. Please delete or overwrite by using the -f option.\n";
 	die;
     }
     #create the HMMdb dir that will hold our split hmmdbs
-    $self->MRC::DB::build_hmmdb_ffdb( $hmmdb_path );
+    $self->MRC::DB::build_db_ffdb( $db_path );
     #update the path to make it easier to build the split hmmdbs (e.g., points to an incomplete file name)
-    $hmmdb_path = $hmmdb_path . $hmmdb;
+    #save the raw path for the database_length file when using blast
+    my $raw_path = $db_path;
+    $db_path = $db_path . $db_name;
     #constrain analysis to a set of families of interest
-    my @families   = sort( @{ $self->get_subset_famids() });
+    my @families   = sort( @{ $self->get_family_subset() });
     my $n_fams     = @families;
     my $count      = 0;
-    my @split      = (); #array of family HMMs (compressed)
+    my @split      = (); #array of family HMMs/sequences (compressed)
     my $n_proc     = 0;
     foreach my $family( @families ){
-	#find the HMM associated with the family (compressed)
-	my $family_hmm = $ffdb . "/HMMs/" . $family . ".hmm.gz";
-	push( @split, $family_hmm );
+	#find the HMM/sequences associated with the family (compressed)
+	my $family_db;
+	if( $type eq "hmm" ){
+	    $family_db = $ffdb . "/HMMs/" . $family . ".hmm.gz";
+	}
+	elsif( $type eq "blast" ){
+	    $family_db =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
+	    $length   += $self->MRC::Run::get_sequence_length_from_file( $family_db );
+	}       
+	push( @split, $family_db );
 	$count++;
 	#if we've hit our split size, process the split
 	if( $count >= $split_size || $family == $families[-1] ){
 	    $n_proc++;
-	    #build the HMMdb
-	    my $split_db_path = cat_hmmdb_split( $hmmdb_path, $n_proc, $ffdb, \@split );
-	    #compress the HMMdb, a wrapper for hmmpress
-	    #we might need to come back here and build a switch so that this runs on local thread, but for remote, we don't want to do this here, so it's turned off. Better yet, put this in a standalone routine.
-	    #compress_hmmdb( $split_db_path, $force );
-	    #we do want hmmdbs to be gzipped 
-	    gzip_hmmdb( $split_db_path );
+	    #build the DB
+	    my $split_db_path;
+	    if( $type eq "hmm" ){
+		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".hmm", \@split );
+	    }
+	    elsif( $type eq "blast" ){
+		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".fa", \@split );
+	    }
+	    #we do want DBs to be gzipped 
+	    gzip_file( $split_db_path );
 	    #save the gzipped copy, remove the uncompressed copy
 	    unlink( $split_db_path );
 	    @split = ();
 	    $count = 0;
 	}
     }
-    warn "HMMdb successfully built and compressed.\n";
+    if( $type eq "blast" ){
+	open( LEN, ">" . $raw_path . "/database_length.txt" ) || die "Can't open " . $raw_path . "/database_length.txt for write: $!\n";
+	print LEN $length;
+	close LEN;
+    }
+    warn "$type DB successfully built and compressed.\n";
     return $self;
 }
 
-sub gzip_hmmdb{
-    my $splitout = shift;
-    gzip $splitout => $splitout . ".gz"
+#calculates total amount of sequence in a file
+sub calculate_blast_db_length{
+    my( $self ) = @_;
+    my $length  = 0;
+    my $db_name = $self->get_blastdb_name();
+    my $db_path = $self->get_ffdb() . "/BLASTdbs/" . $db_name . "/";
+    opendir( DIR, $db_path ) || die "Can't opendir $db_path for read: $!\n";
+    my @files = readdir( DIR );
+    closedir DIR;
+    foreach my $file( @files ){
+	next unless( $file =~ m/\.fa/ );
+	my $filepath = $db_path . $file;
+	$length += get_sequence_length_from_file( $filepath );
+    }
+    return $length
+}
+
+sub get_sequence_length_from_file{
+    my( $self, $file ) = @_;
+    my $length = 0;
+    if( $file =~ m/\.gz/ ){
+	open( FILE, "zmore $file |" ) || die "Can't open $file for read: $!\n"
+    }
+    else{
+	open( FILE, "$file" ) || die "Can't open $file for read: $!\n";
+    }
+    while(<FILE>){
+	chomp $_;
+	next if( $_ =~ m/\>/ );
+	$length += length( $_ );
+    }
+    close FILE;
+    return $length;
+}
+
+sub gzip_file{
+    my $file = shift;
+    gzip $file => $file . ".gz"
 	or die "gzip failed: $GzipError\n";
 }
 
@@ -529,7 +673,7 @@ sub build_hmm_db_by_n_splits{
 	if( $count >= $split_size || $family == $families[-1] ){
 	    $n_proc++;
 	    #build the HMMdb
-	    my $split_db_path = cat_hmmdb_split( $hmmdb_path, $n_proc, $ffdb, \@split );
+	    my $split_db_path = cat_db_split( $hmmdb_path, $n_proc, $ffdb, ".hmm", \@split );
 	    #compress the HMMdb, a wrapper for hmmpress
 	    compress_hmmdb( $split_db_path, $force );
 	    @split = ();
@@ -540,12 +684,13 @@ sub build_hmm_db_by_n_splits{
     return $self;
 }
 
-sub cat_hmmdb_split{
-    my $hmmdb_path = shift;
-    my $n_proc     = shift;
-    my $ffdb       = shift;
-    my @families   = @{ $_[0] };
-    my $split_db_path = $hmmdb_path . "_" . $n_proc . ".hmm";
+sub cat_db_split{
+    my $db_path  = shift;
+    my $n_proc   = shift;
+    my $ffdb     = shift;
+    my $suffix   = shift;
+    my @families = @{ $_[0] };
+    my $split_db_path = $db_path . "_" . $n_proc . $suffix;
     my $fh;
     open( $fh, ">>$split_db_path" ) || die "Can't open $split_db_path for write: $!\n";
     foreach my $family( @families ){
@@ -775,13 +920,26 @@ sub execute_ssh_cmd{
     return $results;
 }
 
-sub remote_transfer_hmm_db{
+sub remote_transfer_search_db{
     my $self = shift;
-    my $hmmdb_name = shift;
+    my $db_name = shift;
+    my $type    = shift; #blast/hmm
     my $ffdb = $self->get_ffdb();
-    my $hmmdb_dir = $ffdb . "/HMMdbs/" . $hmmdb_name;
-    my $remote_dir  = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/HMMdbs/" . $hmmdb_name;
-    my $results = $self->MRC::Run::remote_transfer( $hmmdb_dir, $remote_dir, "directory" );
+    my $db_dir;
+    if( $type eq "hmm" ){
+	$db_dir = $ffdb . "/HMMdbs/" . $db_name;
+    }
+    elsif( $type eq "blast" ){
+	$db_dir = $ffdb . "/BLASTdbs/" . $db_name;
+    }
+    my $remote_dir;
+    if( $type eq "hmm" ){
+       $remote_dir = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/HMMdbs/" . $db_name;
+    }
+    elsif( $type eq "blast" ){
+       $remote_dir = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/BLASTdbs/" . $db_name;
+    }
+    my $results = $self->MRC::Run::remote_transfer( $db_dir, $remote_dir, "directory" );
     return $results;
 }
 
@@ -803,44 +961,100 @@ sub gunzip_file_remote{
     return $results;
 }
 
-#notice that we edit file suffixes given the remote script procedure!
-sub run_hmmsearch_remote{
-    my ( $self, $batchfile, $query_db ) = @_;
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    $batchfile =~ s/\.hmm//;
-    $query_db  =~ s/\.fa//;
-    my $remote_cmd = "\'qsub -sync y " . $self->get_remote_scripts() . "run_hmmsearch.sh " . $batchfile . " " . $query_db . "\'";
-    my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-    return $results;
+sub gunzip_remote_dbs{
+    my( $self, $db_name, $type ) = @_;    
+    my $ffdb        = $self->get_ffdb();
+    my $db_dir;
+    if( $type eq "hmm"){
+	$db_dir = $ffdb . "/HMMdbs/" . $db_name;
+    }
+    elsif( $type eq "blast" ){
+	$db_dir = $ffdb . "/BLASTdbs/" . $db_name;
+    }
+    opendir( DIR, $db_dir ) || die "Can't opendir $db_dir for read: $!\n";
+    my @files = readdir( DIR );
+    closedir DIR;
+    foreach my $file( @files ){
+	next unless( $file =~ m/\.gz/ );
+	my $remote_db_file;
+	if( $type eq "hmm" ){
+	    $remote_db_file = $self->get_remote_ffdb . "/HMMdbs/" . $db_name . "/" . $file;
+	}
+	elsif( $type eq "blast" ){
+	    $remote_db_file = $self->get_remote_ffdb . "/BLASTdbs/" . $db_name . "/" . $file;
+	}
+	$self->MRC::Run::gunzip_file_remote( $remote_db_file );
+    }
+    return $self;
 }
 
-sub run_hmmscan_remote{
-    my( $self, $sample_id, $verbose ) = @_;
- 
-    my $hmmscan_r_script_path = $self->get_remote_hmmscan_script();
-    my $hmmscan_handler_log   = $self->get_remote_project_log_dir() . "/hmmscan_handler";
-    my $hmmdb_name            = $self->get_hmmdb_name();
-    my $remote_hmmdb_dir      = $self->get_remote_ffdb . "/HMMdbs/" . $hmmdb_name . "/";
-    my $remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/";
-    my $remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";
+sub format_remote_blast_dbs{
+    my( $self, $r_script_path ) = @_;
+    my $ffdb       = $self->get_ffdb();
+    my $r_db_dir   = $self->get_remote_ffdb . "/BLASTdbs/" . $self->get_blastdb_name() . "/";
+    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
+    my $remote_cmd = "qsub -sync y $r_script_path $r_db_dir";
+    my $results    = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
+    return $self;
+}
 
-    my $remote_cmd   = "\'perl " . $self->get_remote_scripts() . "/run_remote_hmmscan_handler.pl -h $remote_hmmdb_dir -o $remote_search_res_dir -i $remote_query_dir -n $hmmdb_name -s $hmmscan_r_script_path > " . $hmmscan_handler_log . ".out 2> " . $hmmscan_handler_log . ".err\'";
+sub run_search_remote{
+    my ( $self, $sample_id, $type, $waittime, $verbose ) = @_;
+    my ( $r_script_path, $search_handler_log, $db_name, $remote_db_dir,
+	 $remote_search_res_dir, $remote_query_dir, $remote_cmd );
+    if( $type eq "blast" ){
+	$search_handler_log    = $self->get_remote_project_log_dir() . "/blast_handler";
+	$r_script_path         = $self->get_remote_blast_script();
+	$db_name               = $self->get_blastdb_name();
+	$remote_db_dir         = $self->get_remote_ffdb . "/BLASTdbs/" . $db_name . "/";
+	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/blast/";
+	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";	
+    }
+    if( $type eq "hmmsearch" ){
+	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmsearch_handler";
+	$r_script_path         = $self->get_remote_hmmsearch_script();
+	$db_name               = $self->get_hmmdb_name();
+	$remote_db_dir         = $self->get_remote_ffdb . "/HMMdbs/" . $db_name . "/";
+	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmsearch/";
+	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";	
+    }
+    if( $type eq "hmmscan" ){
+	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmscan_handler";
+	$r_script_path         = $self->get_remote_hmmscan_script();
+	$db_name               = $self->get_hmmdb_name();
+	$remote_db_dir         = $self->get_remote_ffdb . "/HMMdbs/" . $db_name . "/";
+	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmscan/";
+	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";
+    }
+    $remote_cmd   = "\'perl " . $self->get_remote_scripts() . "/run_remote_search_handler.pl -h $remote_db_dir " . 
+	"-o $remote_search_res_dir -i $remote_query_dir -n $db_name -s $r_script_path -w $waittime > " . 
+	$search_handler_log . ".out 2> " . $search_handler_log . ".err\'";
     print "$remote_cmd\n";
     my $connection            = $self->get_remote_username . "@" . $self->get_remote_server;
     my $results               = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd, $verbose );
     return $results;
 }
 
-sub get_remote_hmmscan_results{
-    my( $self, $sample_id ) = @_;
-    my $remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/";
-    my $local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/";
+sub get_remote_search_results{
+    my( $self, $sample_id, $type ) = @_;
+    my( $remote_search_res_dir, $local_search_res_dir );
+    if( $type eq "blast" ){
+	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/blast/";
+	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/blast/";
+    }
+    elsif( $type eq "hmmsearch" ){
+	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmsearch/";
+	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/hmmsearch/";
+    }
+    elsif( $type eq "hmmscan" ){
+	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmscan/";
+	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/hmmscan/";
+    }
     #recall, every sequence split has its own output dir to cut back on the number of files per directory
     my $in_orf_dir = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
     foreach my $in_orfs( @{ $self->MRC::DB::get_split_sequence_paths( $in_orf_dir, 0 ) } ){	
 	my $split_orf_search_results = $remote_search_res_dir . $in_orfs;
 	$self->MRC::Run::remote_transfer(  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $split_orf_search_results, $local_search_res_dir, 'd' );
-#	$self->MRC::Run::remote_transfer(  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_search_res_dir, $local_search_res_dir, 'c' );
     }
     return $self;
 }
@@ -870,6 +1084,7 @@ sub run_hmmscan_remote_defunct{
     return $results;
 }
 
+#not used in mrc_handler.pl
 sub run_blast_remote{
     my ( $self, $inseq, $db, $output, $closed ) = @_;
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
@@ -968,7 +1183,7 @@ sub get_family_size_by_id{
     my $self  = shift;
     my $famid = shift;
     my $refonly = shift; #only count reference family members?
-    my $fam_mems = $self->MRC::DB::get_fammembers_by_famid( $famid );
+    my $fam_mems = $self->MRC::DB::get_family_members_by_famid( $famid );
     my $size = 0;
     if( $refonly ){
 	while( my $member = $fam_mems->next() ){

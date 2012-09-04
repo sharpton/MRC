@@ -61,12 +61,16 @@ sub new{
     $self->{"fid_subset"}  = undef; #an array of famids
     $self->{"schema"}      = undef; #current working DB schema object (DBIx)    
     $self->{"hmmdb"}       = undef; #name of the hmmdb to use in this analysis
+    $self->{"blastdb"}     = undef; #name of the blastdb to use in this analysis
     $self->{"is_remote"}   = 0;     #does analysis include remote compute? 0 = no, 1 = yes
     $self->{"is_strict"}   = 1;     #strict (top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
     $self->{"t_evalue"}    = undef; #evalue threshold for clustering
     $self->{"t_coverage"}  = undef; #coverage threshold for clustering
-    $self->{"r_hmmscan_script"} = undef; #location of the remote hmmscan script. holds a path string.
-    $self->{"r_project_logs"}   = undef; #location of the remote project logs directory. holds a path string.
+    $self->{"r_hmmscan_script"}   = undef; #location of the remote hmmscan script. holds a path string.
+    $self->{"r_hmmsearch_script"} = undef; #location of the remote hmmsearch script. holds a path string.
+    $self->{"r_blast_script"}     = undef; #location of the remote blast script. holds a path string.
+    $self->{"r_formatdb_script"}     = undef; #location of the remote blast script. holds a path string.
+    $self->{"r_project_logs"}     = undef; #location of the remote project logs directory. holds a path string.
 
     bless($self);
     return $self;
@@ -547,6 +551,12 @@ sub set_hmmdb_name{
     return $self->{"hmmdb"};
 }
 
+sub set_blastdb_name{
+    my ( $self, $name ) = @_;
+    $self->{"blastdb"} = $name;
+    return $self->{"blastdb"};
+}
+
 =head2 get_hmmdb_name
 
  Title   : set_hmmdb_name
@@ -561,6 +571,11 @@ sub set_hmmdb_name{
 sub get_hmmdb_name{
     my $self = shift;
     return $self->{"hmmdb"};
+}
+
+sub get_blastdb_name{
+    my $self = shift;
+    return $self->{"blastdb"};
 }
 
 =head2 set_remote_server
@@ -801,6 +816,29 @@ sub set_remote_hmmscan_script{
     return $self;
 }
 
+sub set_remote_hmmsearch_script{
+    my $self     = shift;
+    my $filepath = shift; 
+    $self->{"r_hmmsearch_script"} = $filepath;
+    return $self;
+}
+
+
+sub set_remote_blast_script{
+    my $self     = shift;
+    my $filepath = shift; 
+    $self->{"r_blast_script"} = $filepath;
+    return $self;
+}
+
+
+sub set_remote_formatdb_script{
+    my $self     = shift;
+    my $filepath = shift; 
+    $self->{"r_formatdb_script"} = $filepath;
+    return $self;
+}
+
 =head get_remote_hmmscan_script
 
  Title   : get_remote_hmmscan_script
@@ -816,6 +854,25 @@ sub get_remote_hmmscan_script{
     my $self = shift;
     return $self->{"r_hmmscan_script"};
 }
+
+
+sub get_remote_hmmsearch_script{
+    my $self = shift;
+    return $self->{"r_hmmsearch_script"};
+}
+
+
+sub get_remote_blast_script{
+    my $self = shift;
+    return $self->{"r_blast_script"};
+}
+
+
+sub get_remote_formatdb_script{
+    my $self = shift;
+    return $self->{"r_formatdb_script"};
+}
+
 
 =head set_remote_project_log_dir
 
