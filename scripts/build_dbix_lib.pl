@@ -9,11 +9,14 @@ use DBIx::Class::Schema::Loader qw/ make_schema_at /;
 my ( $username, $password );
 my $dumppath = "./lib";
 my $dbname   = "IMG";
+my $hostname = "localhost";
+
 GetOptions(
     "u=s" => \$username,
     "p=s" => \$password,
     "d:s" => \$dumppath,
     "n:s" => \$dbname,
+    "h:s" => \$hostname,
     );
 
 my $schemaname = $dbname . "::Schema";
@@ -23,7 +26,7 @@ make_schema_at(
     { debug => 1,
       dump_directory => $dumppath,
     },
-    [ "dbi:mysql:dbname=$dbname", $username, $password,
+    [ "dbi:mysql:dbname=$dbname:$hostname", $username, $password,
       #{ loader_class => 'MyLoader' } # optionally
     ],
 );
