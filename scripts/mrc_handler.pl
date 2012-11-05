@@ -19,56 +19,83 @@ use IPC::System::Simple qw(capture $EXITVAL);
 
 print "perl mrc_handler.pl @ARGV\n";
  
-my $ffdb           = "/bueno_not_backed_up/sharpton/MRC_ffdb/";  #point to the master directory path for the flat file database (aligns and HMMs)
-#my $ffdb           = "/db/projects/sharpton/MRC_ffdb/";
+my $ffdb           = "/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
+my $ref_ffdb       = "/bueno_not_backed_up/sharpton/sifting_families/"; #where is the reference flatfile data (HMMs, aligns, seqs for each family)?
+#the subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir.
+#below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
+
 my $scripts_path   = "/home/sharpton/projects/MRC/scripts/"; #point to the location of the MRC scripts
 my $project_file   = ""; #where is the project files to be processed?
 my $family_subset_list; #path to a file that lists (one per line) which family ids you want to include. Defaults to all. Will probably come back and make this a seperate familyconstruction, e.g. /home/sharpton/projects/MRC/data/subset_perfect_famids.txt
 my $username       = "";
 my $password       = "";
-my $hmmdb_name     = "OPFs_all_v1.0"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
-my $blastdb_name   = "OPFs_all_v1.0"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/BLASTdbs/ Might change how this works. If you don't want to use a blastdb, leave undefined
+my $db_hostname    = "lighthouse.ucsf.edu";
+my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
+my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
+my $nseqs_per_samp_split = 100000; #how many seqs should each sample split file contain?
+my @fcis                 = ( 0, 1 ); #what family construction ids are allowed to be processed?
+my $hmmdb_name           = "SFams_all_v0_" . $hmm_db_split_size;
+#"SFams_all_v1.03_500"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
+my $reps_only            = 1; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
+my $blastdb_name; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/BLASTdbs/ Might change how this works. If you don't want to use a blastdb, leave undefined
+if( $reps_only ){
+    $blastdb_name = "SFams_all_v0_reps_" . $blast_db_split_size; 
+}
+else{
+    $blastdb_name = "SFams_all_v0_" . $blast_db_split_size; 
+}
 my $hmmdb_build    = 0;
 my $blastdb_build  = 0;
 my $force_db_build = 0;
 my $check          = 0;
 
 #Right now, a single evalue, coverage threshold and strict/tophit are applied to both algorithms
-my $evalue         = 0.001;
+
+my $evalue         = 0.001; #a float
 #my $coverage       = 0.8;
-my $coverage       = 0;
+my $coverage       = 0; #between 0-1
+my $score          = undef; #optionally set
 my $is_strict      = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
 my $top_hit        = 1;
+my $top_hit_type   = "orf"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
 
 my $use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
-my $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads? NOT IMPLEMENTED
-my $use_blast      = 1; #should we use blast to compare SFam reference sequences to reads? NOT IMPLEMENTED
+my $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
+my $use_blast      = 1; #should we use blast to compare SFam reference sequences to reads?
+
+
 #remote compute (e.g., SGE) vars
 my $remote         = 1;
 my $stage          = 0;
 my $remote_ip      = "chef.compbio.ucsf.edu";
 my $remote_user    = "sharpton";
 #my $rffdb          = "/netapp/home/sharpton/projects/MRC/MRC_ffdb/";
-my $rffdb          = "/scrapp/sharpton/MRC/MRC_ffdb/";
+my $rffdb          = "/scrapp2/sharpton/MRC/MRC_ffdb/";
 my $rscripts       = "/netapp/home/sharpton/projects/MRC/scripts/";
 my $waittime       = 30;
 my $input_pid      = "";
 my $goto           = ""; #B=Build HMMdb
-my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-my $blast_db_split_size  = 2000; #how many reference seqs per blast db split?
-my $nseqs_per_samp_split = 500; #how many seqs should each sample split file contain?
-my $verbose        = 0;
-my $scratch        = 0; #should we use scratch space on remote machine?
+my $verbose              = 0;
+my $scratch              = 0; #should we use scratch space on remote machine?
+my $multi                = 1; #should we multiload our inserts to the database?
+my $bulk_insert_count    = 1000;
+my $database_name        = "Sfams_lite";   #might have multiple DBs with same schema.  Which do you want to use here
+my $schema_name          = "Sfams"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
+my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
+
+#hacky hardcoding on mh_scaffold pilot 2 to test random die bug...
+my %skip_samps = ();
 
 #think about option naming conventions before release
 #Need to set up command line args for running blast
 GetOptions(
-    "d=s"   => \$ffdb,
-    "s=s"   => \$scripts_path,
+    "d:s"   => \$ffdb,
+    "s:s"   => \$scripts_path,
     "i=s"   => \$project_file,
     "u=s"   => \$username,
     "p=s"   => \$password,
-    "h=s"   => \$hmmdb_name,
+    "h:s"   => \$hmmdb_name,
+    "b:s"   => \$blastdb_name,
     "sub:s" => \$family_subset_list,
     "hdb"   => \$hmmdb_build,
     "bdb"   => \$blastdb_build,
@@ -80,6 +107,9 @@ GetOptions(
     "goto|g:s"   => \$goto,
     "z"          => \$nseqs_per_samp_split,
     "v"          => \$verbose,
+    "stage"      => \$stage,
+    "e:f"  => \$evalue,
+    "c:f"  => \$coverage,
     );
 
 #try to detect if we need to stage the database or not on the remote server based on runtime options
@@ -87,15 +117,23 @@ if( ( $hmmdb_build || $blastdb_build ) && $remote ){
     $stage = 1;
 }
 
+print "Starting classification run, processing $project_file\n";
+system( "date" );
+
 #Initialize the project
 my $analysis = MRC->new();
 #Get a DB connection 
-$analysis->set_dbi_connection( "DBI:mysql:IMG:lighthouse.ucsf.edu" );
+$analysis->set_dbi_connection( "DBI:mysql:$database_name:$db_hostname" );
 $analysis->set_username( $username );
 $analysis->set_password( $password );
+$analysis->schema_name( $schema_name );
 $analysis->build_schema();
+$analysis->multi_load( $multi );
+$analysis->bulk_insert_count( $bulk_insert_count );
 #Connect to the flat file database
 $analysis->set_ffdb( $ffdb );
+$analysis->set_ref_ffdb( $ref_ffdb );
+$analysis->set_fcis( \@fcis );
 #constrain analysis to a set of families of interest
 $analysis->set_family_subset( $family_subset_list, $check );
 if( $use_hmmscan || $use_hmmsearch ){
@@ -138,8 +176,8 @@ if( $input_pid && $goto ){
     #$analysis->MRC::Run::get_part_samples( $project_file );
     $analysis->MRC::Run::back_load_samples();
     if( $goto eq "B" ){ warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
-    if( $goto eq "S" ){ warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
     if( $goto eq "R" ){ warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
+    if( $goto eq "S" ){ warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
     if( $goto eq "H" ){ warn "Skipping to hmmscan step!\n"; goto HMMSCAN; }
     if( $goto eq "G" ){ warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
     if( $goto eq "C" ){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
@@ -179,8 +217,10 @@ else{
 #translate the metareads
 if( $remote ){
     print printhead( "TRANSLATING READS" );
+    system( "date" );
     #run transeq remotely, check on SGE job status, pull results back locally once job complete.
-    $analysis->MRC::Run::translate_reads_remote( $waittime );	
+    my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
+    $analysis->MRC::Run::translate_reads_remote( $waittime, $remote_logs, $split_orfs );	
 }
 else{
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
@@ -194,49 +234,70 @@ else{
 #LOAD ORFS
 #reads are translated, now load them into the DB
 print printhead( "LOADING TRANSLATED READS" );
+system( "date" );
 foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
     my $in_orf_dir = $ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/orfs/";
     my $count = 0;
     foreach my $in_orfs( @{ $analysis->MRC::DB::get_split_sequence_paths( $in_orf_dir, 1 ) } ){
 	print "Processing orfs in $in_orfs\n";
 	my $orfs = Bio::SeqIO->new( -file => $in_orfs, -format => 'fasta' );
-	while( my $orf = $orfs->next_seq() ){
-	    my $orf_alt_id  = $orf->display_id();
-	    my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, "transeq" );
-	    $analysis->MRC::Run::load_orf( $orf_alt_id, $read_alt_id, $sample_id );
-	    $count++;			
+	if( $analysis->multi_load ){
+	    my $trans_algo = "transeq";
+	    if( $split_orfs ){
+		$trans_algo = "transeq_split";
+	    }
+	    $analysis->MRC::Run::load_multi_orfs( $orfs, $sample_id, $trans_algo );
+	}
+	else{
+	    while( my $orf = $orfs->next_seq() ){
+		my $orf_alt_id  = $orf->display_id();
+		my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, "transeq" );
+		$analysis->MRC::Run::load_orf( $orf_alt_id, $read_alt_id, $sample_id );
+		$count++;			
+		print "Added $count orfs to the DB\n";
+	    }
 	}
     }
-    print "Added $count orfs to the DB\n";
 }
 
 #BUILD HMMDB
 BUILDHMMDB:
+if( ! -d $analysis->MRC::DB::get_hmmdb_path() ){
+    $hmmdb_build = 1;
+}	
 if( $hmmdb_build ){
     if( !$use_hmmscan && !$use_hmmsearch ){
 	warn( "It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n" );
     }
     print printhead( "BUILDING HMM DATABASE" );
+    system( "date" );
     $analysis->MRC::Run::build_search_db( $hmmdb_name, $hmm_db_split_size, $force_db_build, "hmm" );
 }
 
+if( ! -d $analysis->MRC::DB::get_blastdb_path() ){
+    $blastdb_build = 1;
+}	
 if( $blastdb_build ){
     if( !$use_blast ){
 	warn( "It seems that you want to build a blast database, but you aren't invoking blast. While I will continue, you should check your settings to make certain you aren't making a mistake.\n" );
     }
-    $analysis->MRC::Run::build_search_db( $blastdb_name, $blast_db_split_size, $force_db_build, "blast" );
+    print printhead( "BUILDING BLAST DATABASE" );
+    system( "date" );
+    $analysis->MRC::Run::build_search_db( $blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only );
 }
 
 REMOTESTAGE:
 if( $remote && $stage ){
-    if( defined( $hmmdb_name ) ){
+    print printhead( "STAGING REMOTE SEARCH DATABASE" );
+    system( "date" );
+    if( defined( $hmmdb_name ) && ( $use_hmmsearch || $use_hmmscan ) ){
 	$analysis->MRC::Run::remote_transfer_search_db( $hmmdb_name, "hmm" );
 	if( !$scratch ){
 	    #should do optimization here
 	    $analysis->MRC::Run::gunzip_remote_dbs( $hmmdb_name, "hmm" );
 	}
     }
-    if( defined( $blastdb_name ) ){
+    if( defined( $blastdb_name ) && $use_blast ){
 	$analysis->MRC::Run::remote_transfer_search_db( $blastdb_name, "blast" );
 	#should do optimization here. Also, should roll over to blast+
 	$analysis->MRC::Run::gunzip_remote_dbs( $blastdb_name, "blast" );
@@ -265,6 +326,7 @@ if( $remote ){
     }
     if( $use_hmmsearch ){
 	print printhead( "BUILDING REMOTE HMMSEARCH SCRIPT" );
+	system( "date" );
 	my $h_script_path   = $ffdb . "/projects/" . $analysis->get_project_id() . "/run_hmmsearch.sh";
 	my $r_h_script_path = $analysis->get_remote_hmmsearch_script();
 #	my $n_hmm_searches  = $analysis->MRC::DB::get_number_hmmdb_scans( $hmm_db_split_size );
@@ -277,6 +339,7 @@ if( $remote ){
     }
     if( $use_blast ){
 	print printhead( "BUILDING REMOTE BLAST SCRIPT" );
+	system( "date" );
 	my $b_script_path     = $ffdb . "/projects/" . $analysis->get_project_id() . "/run_blast.sh";
 	my $r_b_script_path   = $analysis->get_remote_blast_script();
 	my $db_length         = $analysis->MRC::DB::get_blast_db_length( $blastdb_name );
@@ -292,6 +355,7 @@ if( $remote ){
 HMMSCAN:
 if( $remote ){
     print printhead( "RUNNING REMOTE SEARCH" );
+    system( "date" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	if( $use_hmmscan ){
 	    $analysis->MRC::Run::run_search_remote( $sample_id, "hmmscan", $waittime, $verbose );
@@ -302,6 +366,7 @@ if( $remote ){
 	if( $use_hmmsearch ){
 	    $analysis->MRC::Run::run_search_remote( $sample_id, "hmmsearch", $waittime, $verbose );
 	}
+	system( "date" );
     }
     
 }
@@ -325,6 +390,8 @@ else{
 #GET REMOTE RESULTS
 GETRESULTS:
 if( $remote ){
+    print printhead( "GETTING REMOTE RESULTS" );
+    system( "date" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	if( $use_hmmscan ){
 	    $analysis->MRC::Run::get_remote_search_results( $sample_id, "hmmscan" );
@@ -343,23 +410,45 @@ if( $remote ){
 CLASSIFYREADS:
 if( $remote ){
     print printhead( "CLASSIFYING REMOTE SEARCH RESULTS" );
+    system( "date" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
+	if( defined( $skip_samps{ $sample_id } ) ){
+	    print( "skipping $sample_id because it has been processed\n" );
+	    next;
+	}
+
+	#troubleshooting
+#	next unless( $sample_id == 69 );
+
+	print "Classifying reads for sample $sample_id\n";
 	my $path_to_split_orfs = $analysis->get_sample_path( $sample_id ) . "/orfs/";
 	foreach my $orf_split_file_name( @{ $analysis->MRC::DB::get_split_sequence_paths( $path_to_split_orfs , 0 ) } ) {
 	    if( $use_hmmscan ){
 		my $algo = "hmmscan";
-		$analysis->MRC::Run::classify_reads( $sample_id, $orf_split_file_name, "hmmscan" );
+		my $class_id = $analysis->MRC::DB::get_classification_id( 
+		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
+		)->classification_id();
+		print "Classification_id for this run using $algo is $class_id\n";
+		$analysis->MRC::Run::classify_reads( $sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type );
 	    }
 	    if( $use_hmmsearch ){
 		my $algo = "hmmsearch";
-		$analysis->MRC::Run::classify_reads( $sample_id, $orf_split_file_name, "hmmsearch" );
+		my $class_id = $analysis->MRC::DB::get_classification_id( 
+		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
+		)->classification_id();
+		print "Classification_id for this run using $algo is $class_id\n";
+		$analysis->MRC::Run::classify_reads( $sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type );
 	    }
 	    if( $use_blast ){
 		my $algo = "blast";
-		$analysis->MRC::Run::classify_reads( $sample_id, $orf_split_file_name, "blast" );
+		my $class_id = $analysis->MRC::DB::get_classification_id( 
+		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $blastdb_name, $algo, $top_hit_type,
+		)->classification_id();
+		print "Classification_id for this run using $algo is $class_id\n";
+		$analysis->MRC::Run::classify_reads( $sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type );
 	    }	    
 	}
-    }
+   }
 }
 #the block below is depricated...
 else{
@@ -372,24 +461,58 @@ else{
     }
 }
 
+die;
+
+
 #calculate diversity statistics
 CALCDIVERSITY:
 print printhead( "CALCULATING DIVERSITY STATISTICS" );
-#note, we could decrease DB pings by merging some of these together (they frequently leverage same hash structure
-print "project richness...\n";
-$analysis->MRC::Run::calculate_project_richness();
-print "project relative abundance...\n";
-$analysis->MRC::Run::calculate_project_relative_abundance();
-print "per sample richness...\n";
-$analysis->MRC::Run::calculate_sample_richness();
-print "per sample relative abundance..\n";
-$analysis->MRC::Run::calculate_sample_relative_abundance();
-print "building classification map...\n";
-$analysis->MRC::Run::build_classification_map();
-print "building PCA dataframe...\n";
-$analysis->MRC::Run::build_PCA_data_frame();
-
+system( "date" );
+#note, we could decrease DB pings by merging some of these together (they frequently leverage same hash structure)
+#might need to include classification_id as a call here;
+if( $use_hmmscan ){
+    print "Calculating hmmscan diversity\n";
+    my $algo = "hmmscan";
+    my $class_id = $analysis->MRC::DB::get_classification_id( 
+	$analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
+	)->classification_id();
+    calculate_diversity( $analysis, $class_id );
+}
+if( $use_hmmsearch ){
+    print "Calculating hmmsearch diversity\n";
+    my $algo = "hmmsearch";
+    my $class_id = $analysis->MRC::DB::get_classification_id( 
+	$analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
+	)->classification_id();
+    calculate_diversity( $analysis, $class_id );
+}
+if( $use_blast ){
+    print "Calculating blast diversity\n";
+    my $algo = "blast";
+    my $class_id = $analysis->MRC::DB::get_classification_id( 
+	$analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $blastdb_name, $algo, $top_hit_type,
+	)->classification_id();
+    calculate_diversity( $analysis, $class_id );
+}
 print "ANALYSIS COMPLETE!\n";
+system( "date");
+
+sub calculate_diversity{
+    my( $analysis, $class_id ) = @_;
+    print "project richness...\n";
+    $analysis->MRC::Run::calculate_project_richness( $class_id );
+    print "project relative abundance...\n";
+    $analysis->MRC::Run::calculate_project_relative_abundance( $class_id );
+    print "per sample richness...\n";
+    $analysis->MRC::Run::calculate_sample_richness( $class_id );
+    print "per sample relative abundance..\n";
+    $analysis->MRC::Run::calculate_sample_relative_abundance( $class_id );
+    print "building classification map...\n";
+    $analysis->MRC::Run::build_classification_map( $class_id );
+    print "building PCA dataframe...\n";
+    $analysis->MRC::Run::build_PCA_data_frame( $class_id );
+}
+
 
 sub build_remote_hmmscan_script{
     my( $h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch ) = @_;

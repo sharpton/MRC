@@ -11,7 +11,8 @@ my $n_splits       = 1;
 my $bigmem         = 0; #should this select a big memory machine or not?
 my $array          = 1; #should this use array jobs or not?
 my $memory         = "1G"; #include units in this string, G for Gigabytes, K for Kilobytes
-my $walltime       = "0:30:0";
+#my $walltime       = "0:30:0";
+my $walltime       = "336:0:0";
 my $projectdir     = ""; #what is the top level project dir on the remote server?
 my $db_name_stem   = ""; #what is the basename of the db splits, ignoring the arrayjob split number?
 my $forward_filter = 1; #should the forward filter (F3) be turned on or off? Binary (e.g., 0 = off, 1 = default on)

@@ -21,11 +21,13 @@
 package MRC::DB;
 
 use strict;
-use IMG::Schema;
+use Sfams::Schema;
 use Data::Dumper;
 use File::Basename;
 use File::Copy;
 use File::Path qw(make_path rmtree);
+use DBI; #used only for DBIx::BulkLoader::Mysql
+use DBIx::BulkLoader::Mysql; #Used only for multi-row inserts
 
 #returns samples result set
 sub get_samples_by_project_id{
@@ -187,8 +189,8 @@ sub create_sample{
     my $proj_rs = $self->get_schema->resultset("Sample");
     my $inserted = $proj_rs->create(
 	{
-	    name       => $sample_name,
-	    project_id => $project_id,
+	    sample_alt_id => $sample_name,
+	    project_id    => $project_id,
 	}
 	);
     return $inserted;
@@ -208,6 +210,60 @@ sub create_metaread{
     return $inserted;
 }
 
+sub create_multi_metareads{
+    my $self          = shift;
+    my $sample_id     = shift;
+    my $ra_read_names = shift;
+    print "Bulk loading reads from sample $sample_id\n";
+    my @read_names    = @{ $ra_read_names };
+    my $sql_insert    = 'INSERT INTO metareads ( sample_id, read_alt_id ) values ';
+    my $placeholders  = '(?,?)';
+    my $bulk_insert_count = $self->bulk_insert_count();
+    my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
+    my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
+	dbh          => $dbh,
+	sql_insert   => $sql_insert,
+	placeholders => $placeholders
+	);
+    die $error unless $bulk;
+    foreach my $read_name( @read_names ){
+	$bulk->insert( $sample_id, $read_name );
+    }
+    $bulk->flush();
+    if( defined $dbh->errstr ){
+	warn(  $dbh->errstr );
+	exit;
+    }
+    return $self;
+}
+
+sub create_multi_familymemberss{
+    my $self         = shift;
+    my $class_id     = shift;
+    my $rh_orf_hits  = shift;
+    my %orf_hits     = %{ $rh_orf_hits };
+    my $sql_insert   = 'INSERT INTO familymembers ( famid, classification_id, orf_id ) values ';
+    my $placeholders = '(?,?,?)';
+    my $bulk_insert_count = $self->bulk_insert_count();
+    my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
+    my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
+	dbh          => $dbh,
+	sql_insert   => $sql_insert,
+	placeholders => $placeholders
+	);
+    die $error unless $bulk;
+    foreach my $orf_id( keys( %orf_hits ) ){
+	my $famid = $orf_hits{$orf_id};
+	$bulk->insert( $famid, $class_id, $orf_id );
+    }
+    $bulk->flush();
+    if( defined $dbh->errstr ){
+	warn(  $dbh->errstr );
+	exit;
+    }
+    return $self;
+}
+
 sub insert_orf{
     my $self       = shift;
     my $orf_alt_id = shift;
@@ -221,6 +277,33 @@ sub insert_orf{
 	}
     );
     return $orf;
+}
+
+sub insert_multi_orfs{
+    my $self          = shift;
+    my $sample_id     = shift;
+    my $rh_orf_map    = shift; #orf_alt_id -> read_id
+    print "Bulk loading orfs from sample $sample_id\n";
+    my %orf_map       = %{ $rh_orf_map };
+    my $sql_insert    = 'INSERT INTO orfs ( sample_id, read_id, orf_alt_id ) values ';
+    my $placeholders  = '(?,?,?)';
+    my $bulk_insert_count = $self->bulk_insert_count();
+    my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
+    my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
+	dbh          => $dbh,
+	sql_insert   => $sql_insert,
+	placeholders => $placeholders
+	);
+    die $error unless $bulk;
+    foreach my $orf_alt_id( keys( %orf_map ) ){
+	$bulk->insert( $sample_id, $orf_map{ $orf_alt_id }, $orf_alt_id );
+    }
+    $bulk->flush();
+    if( defined $dbh->errstr ){
+	warn(  $dbh->errstr );
+	exit;
+    }    
+    return $self;
 }
 
 sub get_gene_by_id{
@@ -286,25 +369,47 @@ sub get_number_hmmdb_scans{
 	$n_splits++;
     }
     #total number of sequences/models across the entire database (to correctly scale evalue)
-    my $n_seqs = $n_splits * $n_seqs_per_db_split;
+    #want orfs, so multiply by 6 if using "transeq"
+    my $n_seqs = $n_splits * $n_seqs_per_db_split * 6;
     return $n_seqs;
 }
 
 #for hmmsearch
 sub get_number_sequences{
-    my( $self, $n_sequences ) = @_;
+    my( $self, $n_sequences_per_split ) = @_;
     my $n_splits = 0;
+    my $last_split_counts = 0;
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
 	my $orfs_path = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
 	opendir( DIR, $orfs_path ) || die "Can't opendir " . $orfs_path . " for read: $!\n";
 	my @files = readdir( DIR );
 	closedir( DIR );	
+	my $max_split; #points to last split's file name
+	my $max_splitnum = 0; #split counter
 	foreach my $file( @files ){
-	    next unless( $file =~ m/\.fa/ );
+	    next unless( $file =~ m/split_(\d+)\.fa/ );
+	    #need to find the last split's file name
+	    my $splitnum      = $1;
+	    if( $splitnum > $max_splitnum ){
+		$max_split    = $file;
+		$max_splitnum = $splitnum;
+	    }
 	    $n_splits++;
 	}
+	open( MAX, $orfs_path . $max_split ) || die "Can't read max split $max_split for read in get_number_sequences: $!\n";
+	my $count = 0;
+	while(<MAX>){
+	    if( $_ =~ m/\>/ ){
+		$count++;
+	    }
+	}
+	close MAX;
+	$last_split_counts = $last_split_counts + $count;
     }
-    my $n_seqs = $n_splits * $n_sequences;
+    #want orfs, so multiply by 6 if using "transeq". Last split needs to be counted for accuracy (may not have full split size).
+    #the last split issue happens for each sample, so it is a sum of the number of seqs in each sample's last split. 
+    my $n_samples = @{ $self->get_sample_ids() };
+    my $n_seqs =  ( ( ( $n_splits - ( 1 * $n_samples ) ) * $n_sequences_per_split )  * 6 ) + $last_split_counts;
     return $n_seqs;
 }
 
@@ -353,6 +458,7 @@ sub build_sample_ffdb{
     my $hmmsearchlogs = $logs . "/hmmsearch/";
     my $blastlogs     = $logs . "/blast/";
     my $formatdblogs  = $logs . "/formatdb/";
+    my $transeqlogs  = $logs . "/transeq/";
     my $output        = $proj_dir . "/output/";
     if( -d $output ){
 	warn( "Output directory already exists at $output. Will not overwrite!\n");
@@ -390,12 +496,19 @@ sub build_sample_ffdb{
     else{
 	make_path( $formatdblogs ) || die "Can't create directory $formatdblogs in build_sample_ffdb: $!\n";
     }
+    if( -d $transeqlogs ){
+	warn( "Logs directory already exists at $transeqlogs. Will not overwrite!\n");
+    }
+    else{
+	make_path( $transeqlogs ) || die "Can't create directory $transeqlogs in build_sample_ffdb: $!\n";
+    }
 
     foreach my $sample( keys( %{ $self->get_samples() } ) ){
 	my $sample_dir = $proj_dir . $self->get_samples->{$sample}->{"id"} . "/";
 	my $raw_sample_dir = $sample_dir . "raw/";
 	my $orf_sample_dir = $sample_dir . "orfs/";
 	my $search_res     = $sample_dir . "search_results/";
+	my $unsplit_orfs   = $sample_dir . "unsplit_orfs/"; #not always used, always created in case used in alternative run
 	if( -d $sample_dir ){
 	    warn "Sample directory already exists at $sample_dir. Will not overwrite!\n";
 	}
@@ -447,6 +560,14 @@ sub build_sample_ffdb{
 	else{
 	    make_path( $orf_sample_dir ) || die "Can't create directory $orf_sample_dir in build_sample_ffdb: $!\n";
 	}
+	if( -d $unsplit_orfs ){
+	    warn "orf_sample_dir already exists for $sample at $unsplit_orfs. Will not overwrite!\n";
+	    die;
+	}
+	else{
+	    make_path( $unsplit_orfs ) || die "Can't create directory $unsplit_orfs in build_sample_ffdb: $!\n";
+	}
+
     }
     return $self;
 }
@@ -593,35 +714,75 @@ sub get_orfs_by_read_id{
     return $orfs;
 }
 
+sub get_orfs_by_sample{
+    my ( $self, $sample_id ) = @_;
+    my $orfs = $self->get_schema->resultset("Orf")->search(
+	{
+	    sample_id => $sample_id,
+	}
+    );
+    return $orfs;
+}
+
+
 sub get_families_with_orfs_by_project{
     my $self = shift;
     my $project_id = shift;
     if( !defined( $project_id ) ){
 	$project_id =  $self->get_project_id();
     }
-    my $fams = $self->get_schema->resultset('Familymember')->search(
+#    my $fams = $self->get_schema->resultset('Familymember')->search(
+#	{
+#	    project_id => $project_id
+#	},
+#	{
+#	    join      => { 'orf' => 'sample' },	
+#	}
+#	);
+    my $inside_samps = $self->get_schema->resultset('Sample')->search(
 	{
-	    project_id => $project_id
-	},
-	{
-	    join      => { 'orf' => 'sample' },
-	
+	    project_id => $project_id,
 	}
 	);
+    print Dumper $inside_samps->count();
+    my $inside_orfs =  $self->get_schema->resultset('Orf')->search(
+	{
+	    sample_id => { -in => $inside_samps->get_column('sample_id')->as_query },
+	}
+	);
+    print Dumper $inside_orfs->count();
+    my $fams =  $self->get_schema->resultset('Familymember')->search(
+	{
+	    orf_id => { -in => $inside_orfs->get_column('orf_id')->as_query },
+	}
+	);	    
+    print Dumper $fams->count();
     return $fams;
 }    
 
 
 sub get_families_with_orfs_by_sample{
     my ( $self, $sample_id ) = @_;
-    my $fams = $self->get_schema->resultset('Familymember')->search(
+#    my $fams = $self->get_schema->resultset('Familymember')->search(
+#	{
+#	    sample_id => $sample_id
+#	},
+#	{
+#	    join      => 'orf'
+#	}
+#	);
+    my $inside_orfs =  $self->get_schema->resultset('Orf')->search(
 	{
-	    sample_id => $sample_id
-	},
-	{
-	    join      => 'orf'
+	    sample_id => $sample_id,
 	}
 	);
+    print Dumper $inside_orfs->count();
+    my $fams =  $self->get_schema->resultset('Familymember')->search(
+	{
+	    orf_id => { -in => $inside_orfs->get_column('orf_id')->as_query },
+	}
+	);	    
+    print Dumper $fams->count();
     return $fams;
 }
 
@@ -665,14 +826,16 @@ sub insert_search_result{
 }
 
 #$self->MRC::DB::insert_family_member_orf( $qorf_id, $hmm );
-sub insert_family_member_orf{
-    my $self   = shift;
-    my $orf_id = shift;
-    my $famid  = shift;
+sub insert_familymember_orf{
+    my $self     = shift;
+    my $orf_id   = shift;
+    my $famid    = shift;
+    my $class_id = shift;
     my $inserted = $self->get_schema->resultset("Familymember")->create(
 	{
 	    famid  => $famid,
 	    orf_id => $orf_id,
+	    classification_id => $class_id,
 	}
 	);    
     return $inserted;
@@ -768,10 +931,22 @@ sub get_family_by_fci{
     return $families;
 }
 
+#use if you are certain that your gene_oids map to a single family
+sub get_famid_from_geneoid_fast{
+    my $self     = shift;
+    my $gene_oid = shift;
+    my $familymember = $self->get_schema->resultset("Familymember")->find(
+	{
+	    gene_oid => $gene_oid,
+	}
+   );
+   return $familymember->famid->famid; 
+}
+
 sub get_famid_from_geneoid{
     my $self = shift;
     my $gene_oid = shift;
-    my @fcis    = @{ $_[0] }; #optional
+    my @fcis     = @{ $self->get_fcis() };
     my $families = $self->get_schema->resultset("Familymember")->search(
 	{
 	    gene_oid => $gene_oid,
@@ -789,7 +964,7 @@ sub get_famid_from_geneoid{
 	if( @fcis ){
 	    my $family_rs = $self->MRC::DB::get_family_from_famid( $famid );
 	    my $fam_fci   = $family_rs->familyconstruction_id();
-	    my $is_fci  = 0;
+	    my $is_fci    = 0;
 	    foreach my $fci( @fcis ){
 		if( $fam_fci == $fci ){
 		    $is_fci = 1;
@@ -819,8 +994,6 @@ sub get_famid_from_fam_alt_id{
 	);
     return $famid;
 }
-
-
 
 sub get_family_sequences_by_fci{
     my $self = shift;
@@ -870,6 +1043,20 @@ sub get_gene_length{
     return $seqlen;
 }
 
+sub get_classification_id{
+    my ( $self, $evalue, $coverage, $score, $ref_db_name, $algo, $top_hit_type ) = @_;
+    my $method = $algo . ";" . "best_" . $top_hit_type;
+    my $inserted = $self->get_schema->resultset( "ClassificationParameter" )->find_or_create(
+	{
+	    evalue_threshold        => $evalue,
+	    coverage_threshold      => $coverage,
+	    score_threshold         => $score,
+	    method                  => $method,
+	    reference_database_name => $ref_db_name,
+	}
+	);
+    return $inserted;
+}
 ###
 # DB LOADER FUNCTIONS
 ###
@@ -891,13 +1078,31 @@ sub insert_family_construction{
 }
 
 sub insert_family{
-    my ( $self, $family_name, $family_desc, $fci ) = @_;
-    my $inserted = $self->get_schema->resultset("Family")->create(
+    my( $self, $familyconstruction_id, $fam_alt_id, $name,
+	$description, $alnpath, $seed_alnpath, $hmmpath,
+	$reftree, $alltree, $size, $universality,
+	$evenness, $arch_univ, $bact_univ, $euk_univ,
+	$unknown_genes, $pathogen_percent, $aquatic_percent ) = @_;
+    my $inserted = $self->get_schema->resultset( "Family" )->create(
 	{
-	    familyconstruction_id => $fci,
-#	    fam_alt_id            => $fam_alt_id,
-	    name                  => $family_name,
-	    description           => $family_desc,
+	    familyconstruction_id => $familyconstruction_id,
+	    fam_alt_id => $fam_alt_id,
+	    name => $name,
+	    description => $description,
+	    alnpath => $alnpath,
+	    seed_alnpath => $seed_alnpath,
+	    hmmpath => $hmmpath,
+	    reftree => $reftree,
+	    alltree => $alltree,
+	    size => $size,
+	    universality => $universality,
+	    evenness => $evenness,
+	    arch_univ => $arch_univ,
+	    bact_univ => $bact_univ,
+	    euk_univ => $euk_univ,
+	    unknown_genes => $unknown_genes,
+	    pathogen_percent => $pathogen_percent,
+	    aquatic_percent => $aquatic_percent,
 	}
 	);
     return $inserted;
@@ -936,13 +1141,21 @@ sub insert_gene_into_family_members{
 	);
 }
 
+sub get_max_column_value{
+    my( $self, $table, $column ) = @_;
+    my $maxvalue = $self->get_schema->resultset($table)->get_column($column)->max;
+    return $maxvalue;
+}
+
+#routines for database updates
+
 sub insert_genome{
     my ( $self, $ncbi_taxon_id, $ncbi_project_id, $completion, $domain, $genome_name, $directory, 
 	 $phylum, $class, $order, $family, $genus, $sequencing_center, $gene_count, 
 	 $genome_size, $scaffold_count, $img_release, $add_date, $is_public ) = @_;
     my $inserted = $self->get_schema->resultset("Genome")->find_or_create(
 	{
-	    ncbi_taxon_id => $ncbi_taxon_id,
+	    ncbi_taxon_id     => $ncbi_taxon_id,
 	    ncbi_project_id   => $ncbi_project_id,
 	    completion        => $completion,
 	    domain            => $domain,
@@ -965,10 +1178,253 @@ sub insert_genome{
     return $inserted;
 }
 
-sub get_max_column_value{
-    my( $self, $table, $column ) = @_;
-    my $maxvalue = $self->get_schema->resultset($table)->get_column($column)->max;
-    return $maxvalue;
+sub insert_gene{
+    my ( $self, $gene_oid, $taxon_oid, $protein_id, $type, $start, $end,
+	 $strand, $locus, $name, $description, $scaffold_name,
+	 $scaffold_id, $dna, $protein ) = @_;
+
+#    print join( "\t", $gene_oid, $taxon_oid, $protein_id, $type, $start, $end,
+#	 $strand, $locus, $name, $description, $scaffold_name,
+#	 $scaffold_id, $dna, $protein, "\n" );
+    my $inserted = $self->get_schema->resultset("Gene")->update_or_create(
+	{
+	    gene_oid      => $gene_oid,
+	    taxon_oid     => $taxon_oid,
+	    protein_id    => $protein_id,
+	    type          => $type,
+	    start         => $start,
+	    end           => $end,
+	    strand        => $strand,
+	    locus         => $locus,
+	    name          => $name,
+	    description   => $description,
+	    scaffold_name => $scaffold_name,
+	    scaffold_id   => $scaffold_id,
+	    dna           => $dna,
+	    protein       => $protein,
+	}
+	);
+    return $inserted;
+}
+
+sub insert_genome_from_hash{
+    my $self           = shift;
+    my $ra_genome_data = shift;
+    my $force          = shift; #forces an update of a column for which a taxon_oid exists. BE CAREFUL WITH THIS!
+    my %data = %{ $ra_genome_data };
+    #unfortunately, there has to be some hard coding of IMG/JGI taxon table headers given that they don't
+    #perfectly map to DB column names
+    ##since we're inserting data from jgi, let's see if we will specify the taxon_oid (instead of an autoincrement).
+    ##need to ensure the taxon_oid is unique to all over taxon_oids in the DB
+    my $taxon_oid         = _check_value( $data{ "taxon_oid" } );
+    my $is_unique         = $self->MRC::DB::check_taxon_oid_unique( $taxon_oid );
+    my $ncbi_taxon_id     = _check_value( $data{ "NCBI_Taxon_ID" } );
+    my $ncbi_project_id   = _check_value( $data{ "GenBank_Project_ID" } );
+    my $completion        = _check_value( $data{ "Status" } );
+    my $domain            = _check_value( $data{ "Domain"} );
+    my $genome_name       = _check_value( $data{ "Genome_Name" } );
+    my $directory         = _check_value( $data{ "Genome_Name" } );
+    $directory            =~ s/\s/\_/g;
+    $directory            =~ s/\//\_/g;
+    $directory            =~ s/\(/\_/g;
+    $directory            =~ s/\)/\_/g;
+    $directory            =~ s/\,/\_/g;
+    $directory            =~ s/\'/\_/g;
+    $directory            =~ s/\"/\_/g;
+    $directory            =~ s/\:/\_/g;
+    $directory            =~ s/\.//g;
+    my $phylum            = _check_value( $data{ "Phylum" } );
+    my $class             = _check_value( $data{ "Class" } );
+    my $order             = _check_value( $data{ "Order" } );
+    my $family            = _check_value( $data{ "Family" } );
+    my $genus             = _check_value( $data{ "Genus" } );
+    my $sequencing_center = _check_value( $data{ "Sequencing_Center" } );
+    my $gene_count        = _check_value( $data{ "Gene_Count" } );
+    my $genome_size       = _check_value( $data{ "Genome_Size" } );
+    my $scaffold_count    = _check_value( $data{ "Scaffold_Count" } );
+    my $img_release       = _check_value( $data{ "IMG_Release" } );
+    my $add_date          = _check_value( $data{ "Add_Date" } );
+    my $is_public         = _check_value( $data{ "Is_Public" } );
+    my $gc                = _check_value( $data{ "GC_%" } );
+    $gc                   = $gc * 100;
+    my $gram_stain        = _check_value( $data{ "Gram_Staining" } );
+    if( defined( $gram_stain) ){
+	$gram_stain           =~ s/Gram//;
+    }
+    my $shape             = _check_value( $data{ "Cell_Shape" } );
+    my $arrangement       = _check_value( $data{ "Cell_Arrangement" } );
+    my $endospores        = _check_value( $data{ "Sporulation" } );
+    my $motility          = _check_value( $data{ "Motility" } );
+    my $salinity          = _check_value( $data{ "Salinity" } );
+    my $oxygen_req        = _check_value( $data{ "Oxygen_Requirement" } );
+    my $habitat           = _check_value( $data{ "Ecosystem" } );
+    my $temp_range        = _check_value( $data{ "Temperature_Range" } );
+    my $pathogenic_in     = _check_value( $data{ "Hosts" } );
+    my $disease           = _check_value( $data{ "Diseases" } );
+    if( defined $disease && $disease eq "None" ){
+	$pathogenic_in = "No";
+	$disease       = undef;
+    }
+    elsif( !defined($disease) ){
+	$pathogenic_in = undef;
+	$disease       = undef;
+    }
+    #build the row
+    my $row = {
+	    taxon_oid         => $taxon_oid,
+	    ncbi_taxon_id     => $ncbi_taxon_id,
+	    ncbi_project_id   => $ncbi_project_id,
+	    completion        => $completion,
+	    domain            => $domain,
+	    name              => $genome_name,
+	    directory         => $directory,
+	    phylum            => $phylum,
+	    class             => $class,
+	    order             => $order,
+	    family            => $family,
+	    genus             => $genus,
+	    sequencing_center => $sequencing_center,
+	    gene_count        => $gene_count,
+	    genome_size       => $genome_size,
+	    scaffold_count    => $scaffold_count,
+	    img_release       => $img_release,
+	    add_date          => $add_date,
+	    is_public         => $is_public,
+	    gc                => $gc,
+	    gram_stain        => $gram_stain,
+	    shape             => $shape,
+	    arrangement       => $arrangement,
+	    endospores        => $endospores,
+	    motility          => $motility,
+	    salinity          => $salinity,
+	    oxygen_req        => $oxygen_req,
+	    habitat           => $habitat,
+	    temp_range        => $temp_range,
+	    pathogenic_in     => $pathogenic_in,
+	    disease           => $disease,
+    };	
+
+    #check to see if taxon is in the db or not
+    if( !$is_unique ){
+	if( $force ){
+	    my $updated = $self->get_schema->resultset("Genome")->update_or_create( $row, { key =>'primary' } );
+	    warn("The taxon_oid $taxon_oid is NOT UNIQUE to the database. Updated row since force is ON!\n!" );
+	    return $updated;
+	}
+	warn( "The taxon_oid $taxon_oid is NOT UNIQUE to the database. Passing on this entry!\n" );
+	return $self;
+    }
+    #insert the data to the database;
+    my $inserted = $self->get_schema->resultset("Genome")->create( $row );
+    return $inserted;
+}
+
+sub check_taxon_oid_unique{
+    my( $self, $taxon_oid ) =@_;
+    my $is_unique = 0;
+    my $genome = $self->get_schema->resultset('Genome')->find( { taxon_oid => $taxon_oid } );    
+    if( !defined( $genome ) ){
+	$is_unique = 1;
+    }
+    return $is_unique;
+}
+
+sub get_max_treeid{
+    my $self   = shift;
+    my $treeid = $self->get_schema->resultset('Tree')->get_column('treeid')->max();
+    return $treeid;
+}
+
+sub find_or_create_tree{
+    my( $self, $treepath, $treedesc, $treetype ) = @_;
+    my $tree = $self->get_schema->resultset('Tree')->find_or_create(
+	{
+	    treepath => $treepath,
+	    treedesc => $treedesc,
+	    treetype => $treetype,
+	},
+	);
+    return $tree;
+}
+
+sub find_gene_by_gene_oid{
+    my( $self, $gene_oid ) = @_;
+    my $gene = $self->get_schema->resultset( 'Gene' )->find(
+	{
+	    gene_oid => $gene_oid,
+	}
+	);
+    return $gene;
+}
+
+sub insert_familymember{
+    my( $self, $family, $gene_oid ) = @_;
+    my $inserted = $self->get_schema->resultset( 'Familymember' )->find_or_create(
+	{
+	    famid    => $family,
+	    gene_oid => $gene_oid,
+	}
+	);
+    return $inserted;
+}
+
+sub _check_value{
+    my $value = shift;
+    if( !defined( $value ) ){
+	$value = undef;
+    }
+    elsif( $value eq "_" ){
+	$value = undef;
+    }
+    return $value;
+}
+
+sub get_number_orfs_by_project{
+    my $self       = shift;
+    my $project_id = shift;
+    my $total      = 0;
+    my $samples = $self->get_schema->resultset('Sample')->search(
+	{
+	  project_id => $project_id  
+	}
+    );
+    while( my $sample = $samples->next() ){
+	print "getting n_classified orfs from sample" . $sample->id() . "\n";
+	my $count = $self->MRC::DB::get_number_orfs_by_samples( $sample->id() );
+	$total    = $total + $count;
+    }
+    return $total;
+}
+
+sub get_number_orfs_by_samples{
+    my ( $self, $sample_id ) = @_;
+    my $orfs = $self->get_schema->resultset("Orf")->search(
+	{
+	    sample_id => $sample_id,
+	}
+    );
+    return $orfs->count();
+
+}
+
+sub get_family_by_fam_alt_id{
+    my ( $self, $fam_alt_id ) = @_;
+    my $family = $self->get_schema->resultset("Family")->find(
+	{
+	    fam_alt_id => $fam_alt_id,
+	}
+	);
+    return $family;
+}
+
+sub get_gene_by_protein_id{
+    my ( $self, $protein_id ) = @_;
+    my $gene = $self->get_schema->resultset("Gene")->find(
+	{
+	    protein_id => $protein_id,
+	}
+	);
+    return $gene;
 }
 
 1;

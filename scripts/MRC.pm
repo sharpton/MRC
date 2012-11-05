@@ -23,6 +23,7 @@ package MRC;
 use strict;
 use MRC::DB;
 use MRC::Run;
+use Sfams::Schema;
 use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
@@ -42,10 +43,10 @@ sub new{
     my $proto = shift;
     my $class = ref($proto) || $proto;
     my $self  = {};
-    my @fcis  = ( 4,6 );
-    $self->{"fci"}         = \@fcis; #family construction ids that are allowed to be processed
+    $self->{"fci"}         = undef; #family construction ids that are allowed to be processed. array reference
     $self->{"workdir"}     = undef; #master path to MRC scripts
     $self->{"ffdb"}        = undef; #master path to the flat file database
+    $self->{"ffdb"}        = undef; #master path to the reference dabase flat file data is located
     $self->{"dbi"}         = undef; #DBI string to interact with DB
     $self->{"user"}        = undef; #username to interact with DB
     $self->{"pass"}        = undef; #password to interact with DB
@@ -69,9 +70,11 @@ sub new{
     $self->{"r_hmmscan_script"}   = undef; #location of the remote hmmscan script. holds a path string.
     $self->{"r_hmmsearch_script"} = undef; #location of the remote hmmsearch script. holds a path string.
     $self->{"r_blast_script"}     = undef; #location of the remote blast script. holds a path string.
-    $self->{"r_formatdb_script"}     = undef; #location of the remote blast script. holds a path string.
+    $self->{"r_formatdb_script"}  = undef; #location of the remote blast script. holds a path string.
     $self->{"r_project_logs"}     = undef; #location of the remote project logs directory. holds a path string.
-
+    $self->{"multiload"}          = 0; #should we multiload our insert statements?
+    $self->{"bulk_insert_count"}  = undef; #how many rows should be added at a time when using multi_load?
+    $self->{"schema_name"}        = undef; #stores the schema module name, e.g., Sfams::Schema
     bless($self);
     return $self;
 }
@@ -95,30 +98,6 @@ sub get_sample_ids{
 	push( @sample_ids, $sample_id );
     }
     return \@sample_ids;
-}
-
-=head2 set_fcis
-
- Title   : set_fcis
- Usage   : $analysis->set_fcis( 1, 4, 6 )
- Function: Sets which family construction ids should be used in the analysis
- Example : my @sample_ids = @{ analysis->get_sample_ids() };
- Returns : An array of family construction ids (array reference, optional)
- Args    : An array of family construction ids (array reference)
-
-=cut
-
-sub set_fcis{
-  my $self = shift;
-  my @fcis = @_;
-  if( !@fcis ){
-    warn "No fci value(s) supplied for set_fcis in MRC.pm. Using default value of ", @{ $self->{"fci"} }, ".\n";
-  }
-  else{
-      warn "Setting fci to @fcis\n";
-  }
-  $self->{"fci"} = \@fcis;
-  return $self->{"fci"};
 }
 
 =head2 set_scripts_dir
@@ -173,6 +152,23 @@ sub set_ffdb{
     return $self->{"ffdb"};
 }
 
+sub set_ref_ffdb{
+    my $self = shift;
+    my $path = shift;
+    if( !defined( $path ) ){
+      warn "No ref_ffdb path specified for set_ref_ffdb in MRC.pm. Cannot continue!\n";
+      die;
+    }
+    if( !( -e $path ) ){
+      warn "The method set_ffdb cannot access ref_ffdb path $path. Cannot continue!\n";
+      die;
+    }
+    $self->{"ref_ffdb"} = $path;
+    return $self->{"ref_ffdb"};
+}
+
+
+
 =head2 get_ffdb
 
  Title   : get_ffdb
@@ -188,6 +184,12 @@ sub set_ffdb{
 sub get_ffdb{
   my $self = shift;
   return $self->{"ffdb"};
+}
+
+
+sub get_ref_ffdb{
+  my $self = shift;
+  return $self->{"ref_ffdb"};
 }
 
 =head2 set_dbi_connection
@@ -206,6 +208,30 @@ sub set_dbi_connection{
     my $path = shift;
     $self->{"dbi"} = $path;
     return $self->{"dbi"};
+}
+
+
+sub get_dbi_connection{
+    my $self = shift;
+    return $self->{"dbi"};
+}
+
+sub multi_load{
+    my $self  = shift;
+    my $multi = shift;
+    if( defined( $multi ) ){
+	$self->{"multiload"} = $multi;
+    }
+    return $self->{"multiload"};
+}
+
+sub bulk_insert_count{
+    my $self = shift;
+    my $count = shift;
+    if( defined( $count ) ){
+	$self->{"bulk_insert_count"} = $count;
+    }
+    return $self->{"bulk_insert_count"};
 }
 
 =head2 set_project_path
@@ -278,6 +304,11 @@ sub set_username{
     return $self->{"user"};
 }
 
+sub get_username{
+    my $self = shift;
+    return $self->{"user"};
+}
+
 =head2 set_password
 
  Title   : set_password
@@ -298,6 +329,25 @@ sub set_password{
     return $self->{"pass"};
 }
 
+sub get_password{
+    my $self = shift;
+    return $self->{"pass"};
+}
+   
+
+sub schema_name{
+    my $self = shift;
+    my $database_name = shift;
+    if( defined( $database_name ) ){
+	$self->{"schema_name"} = $database_name . "::Schema";
+    }
+    if( !defined( $self->{"schema_name"} ) ){
+	warn( "You must define the schema name via MRC::schema_name() to connect to the DBIx engine! Defaulting to database Sfams\n" );
+	$self->{"schema_name"} = "Sfams::Schema";
+    }
+    return $self->{"schema_name"};
+}
+
 =head2 build_schema
 
  Title   : build_schema
@@ -310,8 +360,9 @@ sub set_password{
 =cut
 
 sub build_schema{
-    my $self = shift;
-    my $schema = IMG::Schema->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
+    my $self   = shift;
+#    my $schema = Sfams::Schema->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
+    my $schema = $self->schema_name->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
 				       #since we have terms in DB that are reserved words in mysql (e.g., order)
 				       #we need to put quotes around those field ids when calling SQL
 				       {
@@ -795,6 +846,8 @@ sub build_remote_ffdb{
     $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
     $command = "mkdir -p " . $rffdb . "/HMMdbs/";
     $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
+    $command = "mkdir -p " . $rffdb . "/BLASTdbs/";
+    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
     return $self;
 }
 
@@ -1017,6 +1070,34 @@ sub set_coverage_threshold{
 sub get_coverage_threshold{
     my $self = shift;
     return $self->{"t_coverage"};
+}
+
+=head2 set_fcis
+
+ Title   : set_fcis
+ Usage   : $analysis->set_fcis( 1, 4, 6 )
+ Function: Sets which family construction ids should be used in the analysis
+ Example : my @sample_ids = @{ analysis->get_sample_ids() };
+ Returns : An array of family construction ids (array reference, optional)
+ Args    : An array of family construction ids (array reference)
+
+=cut
+
+sub set_fcis{
+    my $self    = shift;
+    my $ra_fcis = shift;
+    my @fcis    = @{ $ra_fcis };
+    if( !@fcis ){
+	warn "No fci value(s) supplied for set_fcis in MRC.pm.\n";
+	exit(0)
+    }
+    $self->{"fci"} = \@fcis;
+    return $self->{"fci"};
+}
+
+sub get_fcis{
+    my $self = shift;
+    return $self->{"fci"};
 }
 
 1;

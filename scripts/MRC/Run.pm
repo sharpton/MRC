@@ -24,13 +24,13 @@ use strict;
 use MRC;
 use MRC::DB;
 use Data::Dumper;
-use IMG::Schema;
+use Sfams::Schema;
 use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 use IO::Compress::Gzip qw(gzip $GzipError);
-
 use Bio::SearchIO;
+use DBIx::Class::ResultClass::HashRefInflator;
 
 sub clean_project{
     my $self       = shift;
@@ -115,10 +115,22 @@ sub load_samples{
 	$samples{$sample}->{"id"} = $sid;
 	my $seqs    = Bio::SeqIO->new( -file => $samples{$sample}->{"path"}, -format => 'fasta' );
 	my $count   = 0;
-	while( my $read = $seqs->next_seq() ){
-	    my $read_name = $read->display_id();
-	    $self->MRC::DB::create_metaread( $read_name, $sid );
-	    $count++;
+	if( $self->multi_load() ){
+	    my @read_names = ();
+	    while( my $read = $seqs->next_seq() ){
+		my $read_name = $read->display_id();
+		
+		push( @read_names, $read_name );
+		$count++;
+	    }
+	    $self->MRC::DB::create_multi_metareads( $sid, \@read_names );
+	}
+	else{
+	    while( my $read = $seqs->next_seq() ){
+		my $read_name = $read->display_id();
+		$self->MRC::DB::create_metaread( $read_name, $sid );
+		$count++;
+	    }
 	}
 	warn("Loaded $count reads into DB for sample $sid\n");
     }
@@ -156,8 +168,10 @@ sub back_load_samples{
 	next if ( $file =~ m/^\./ || $file =~ m/logs/ || $file =~ m/hmmscan/ || $file =~ m/output/ || $file =~ m/\.sh/ );
 	my $sample_id = $file;
 	my $sample    = $self->MRC::DB::get_sample_by_sample_id( $sample_id );
-	my $sample_name = $sample->name();
-	$samples{$sample_name}->{"id"} = $sample_id;
+#	my $sample_name = $sample->name();
+#	$samples{$sample_name}->{"id"} = $sample_id;
+	my $sample_alt_id = $sample->sample_alt_id();
+	$samples{$sample_alt_id}->{"id"} = $sample_id;
     }
     $self->set_samples( \%samples );
     #back load remote data
@@ -234,6 +248,46 @@ sub load_orf{
     return $self;
 }
 
+sub load_multi_orfs{
+    my $self       = shift;
+    my $orfs       = shift; #a Bio::Seq object
+    my $sample_id  = shift;
+    my $algo       = shift;
+    my %orf_map    = (); #orf_alt_id to read_id
+    my %read_map   = (); #read_alt_id to read_id
+    my $count      = 0;
+    while( my $orf = $orfs->next_seq() ){
+	$count++;
+	my $orf_alt_id  = $orf->display_id();
+	my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, $algo );
+	#get the read id, but only if we haven't see this read before
+	my $read_id;
+	if( defined( $read_map{ $read_alt_id } ) ){
+	    $read_id = $read_map{ $read_alt_id };
+	}
+	else{
+	        my $reads = $self->get_schema->resultset("Metaread")->search(
+		    {
+			read_alt_id => $read_alt_id,
+			sample_id   => $sample_id,
+		    }
+		    );
+		if( $reads->count() > 1 ){
+		    warn "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!\n";
+		    die;
+		}
+		my $read = $reads->next();
+		$read_id = $read->read_id();
+		$read_map{ $read_alt_id } = $read_id;
+	}
+	$orf_map{ $orf_alt_id } = $read_id;
+    }
+    $self->MRC::DB::insert_multi_orfs( $sample_id, \%orf_map );
+    print "Bulk loaded $count orfs to the database.\n";
+    return $self;
+}
+
+
 #the efficiency of this method could be improved!
 sub load_orf_old{
     my $self        = shift;
@@ -262,13 +316,22 @@ sub parse_orf_id{
     my $method = shift;
     my $read_id = ();
     if( $method eq "transeq" ){
-	if( $orfid =~ m/^(.*)\_/ ){
+	if( $orfid =~ m/^(.*?)\_\d$/ ){
 	    $read_id = $1;
 	}
 	else{
 	    die "Can't parse read_id from $orfid\n";
 	}
     }
+    if( $method eq "transeq_split" ){
+	if( $orfid =~ m/^(.*?)\_\d_\d+$/ ){
+	    $read_id = $1;
+	}
+	else{
+	    die "Can't parse read_id from $orfid\n";
+	}
+    }
+
     return $read_id;
 }
 
@@ -279,69 +342,153 @@ sub classify_reads{
     my $self = shift;
     my $sample_id  = shift;
     my $orf_split  = shift; #just the file name of the split, not the full path
+    my $class_id   = shift; #the classification_id
     my $algo       = shift;
+    my $top_hit_type = shift;
     #remember, each orf_split has its own search_results sub directory
     my $search_results = $self->get_sample_path( $sample_id ) . "/search_results/" . $algo . "/" . $orf_split;
+    print "processing $search_results using best $top_hit_type\n";
 #    my $hmmdb_name     = $self->get_hmmdb_name();
 #    my $blastdb_name   = $self->get_blastdb_name();
     my $query_seqs     = $self->get_sample_path( $sample_id ) . "/orfs/" . $orf_split;
-    my %hit_map        = %{ initialize_hit_map( $query_seqs ) };
+    #this is a hash
+    my $hit_map        = initialize_hit_map( $query_seqs );
     #open search results, get all results for this split
     opendir( RES, $search_results ) || die "Can't open $search_results for read in classify_reads: $!\n";
     my @result_files = readdir( RES );
     closedir( RES );
     foreach my $result_file( @result_files ){
 	next unless( $result_file =~ m/$orf_split/ );
+	#troubleshooting
+#	next unless( $result_file =~ m/\_110\.tab/ );
+
 	if( $algo eq "hmmscan" ){
-	    %hit_map = %{ $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "hmmscan", \%hit_map ) };
+	    #use the database name to enable multiple searches against different databases
+	    my $database_name = $self->get_hmmdb_name();
+	    next unless( $result_file =~ m/$database_name/ );	
+	    $hit_map = $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "hmmscan", $hit_map );
 	}
 	elsif( $algo eq "hmmsearch" ){
-	    %hit_map = %{ $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "hmmsearch", \%hit_map ) };
+	    #use the database name to enable multiple searches against different databases
+	    my $database_name = $self->get_hmmdb_name();
+	    next unless( $result_file =~ m/$database_name/ );
+	    print "processing $result_file\n";
+	    $hit_map = $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "hmmsearch", $hit_map );
 	}
 	elsif( $algo eq "blast" ){
+	    #use the database name to enable multiple searches against different databases
+	    my $database_name = $self->get_blastdb_name();
+	    next unless( $result_file =~ m/$database_name/ );
 	    #because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
-	    %hit_map = %{ $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "blast", \%hit_map, $query_seqs ) };
+	    $hit_map = $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "blast", $hit_map, $query_seqs );
 	}
     }
     #now insert the data into the database
     my $is_strict = $self->is_strict_clustering();
     my $n_hits    = 0;
-    foreach my $orf_alt_id( keys( %hit_map ) ){
+    my %orf_hits   = (); #a hash for bulk loading hits: orf_id -> famid, only works for strict clustering!
+    #if we want best hit per metaread, use this block
+    if( $top_hit_type eq "read" ){
+	$hit_map = $self->MRC::Run::filter_hit_map_for_top_reads( $sample_id, $is_strict, $hit_map );	
+    }
+    while( my ( $orf_alt_id, $value) = each %$hit_map ){
 	#note: since we know which reads don't have hits, we could, here produce a summary stat regarding unclassified reads...
 	#for now, we won't add these to the datbase
-	next unless( $hit_map{$orf_alt_id}->{"has_hit"} );
+	next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
 	#how we insert into the db may change depending on whether we do strict of fuzzy clustering
 	if( $is_strict ){
 	    $n_hits++;
-	    my $evalue   = $hit_map{$orf_alt_id}->{$is_strict}->{"evalue"};
-	    my $coverage = $hit_map{$orf_alt_id}->{$is_strict}->{"coverage"};
-	    my $score    = $hit_map{$orf_alt_id}->{$is_strict}->{"score"};
-	    my $famid    = $hit_map{$orf_alt_id}->{$is_strict}->{"target"};
+	    #turn these on if you decide to add search result into the database
+#	    my $evalue   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+#	    my $coverage = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+#	    my $score    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+	    my $hit    = $hit_map->{$orf_alt_id}->{$is_strict}->{"target"};
+	    my $famid;
+	    #blast hits are gene_oids, which map to famids via the database (might change refdb seq headers to include famid in header
+	    #which would enable faster flatfile lookup).
+	    if( $algo eq "blast" ){
+		$famid = $self->MRC::DB::get_famid_from_geneoid( $hit );
+	    }
+	    else{
+		$famid = $hit;
+	    }	
+	    #because we have an index on sample_id and orf_alt_id, we can speed this up by passing sample id
 	    my $orf_id = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id )->orf_id();
-	    print "$orf_alt_id \t $orf_id \t $famid \n";
-	    #need to ensure that this stores the raw values, need some upper limit thresholds, so maybe we need classification_id here. simpler to store anything with evalue < 1.
-	    $self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
-	    #need to add classification_id here
-	    $self->MRC::DB::insert_family_member_orf( $orf_id, $famid );
+	    #need to ensure that this stores the raw values, need some upper limit thresholds, so maybe we need classification_id here. simpler to store anything with evalue < 1. Still not sure I want to store this in the DB.
+	    #$self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
+	    
+	    #let's try bulk loading to speed things up....
+	    if( $self->multi_load() ){
+		$orf_hits{$orf_id} = $famid; #currently only works for strict clustering!
+	    }
+	    #otherwise, the slow way...
+	    else{
+		$self->MRC::DB::insert_familymember_orf( $orf_id, $famid, $class_id );
+	    }
 	}
     }
+    #bulk load here:
+    if( $self->multi_load() ){
+	print "Bulk loading classified reads into database\n";
+	$self->MRC::DB::create_multi_familymemberss( $class_id, \%orf_hits);
+    }
     print "Found and inserted $n_hits threshold passing search results into the database\n";
+}
+
+sub filter_hit_map_for_top_reads{
+    my ( $self, $sample_id, $is_strict, $hit_map ) = @_;
+    my $orfs = $self->MRC::DB::get_orfs_by_sample( $sample_id );
+    my $read_map = {}; #stores best hit data for each read
+    while( my $orf = $orfs->next() ){
+	my $orf_alt_id = $orf->orf_alt_id();
+	next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+	my $read_id = $orf->read_id();
+	if( !defined( $read_map->{$read_id} ) ){
+#	    print "adding orf $orf_alt_id\n";
+	    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
+	    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+	    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+	    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+	}
+	else{
+	    print "$orf_alt_id is in hash...\n";
+	    #for now, we'll simply sort on evalue, since they both pass coverage threshold
+	    if( $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ){
+		print "Updating $orf_alt_id\n";
+		$read_map->{$read_id}->{"target"}   = $orf_alt_id;
+		$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+	    }
+	    else{
+		print "Canceling $orf_alt_id\n";
+		#get rid of the hit if it's not better than the current top for the read
+		$hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+	    }
+	}
+    }
+    $read_map = {};
+    return $hit_map;
 }
 
 sub parse_search_results{
     my $self         = shift;
     my $file         = shift;
     my $type         = shift;
-    my $r_hit_map    = shift;
+    my $hit_map      = shift;
     my $orfs_file    = shift; #only required for blast; used to get sequence lengths for coverage calculation
-    my %hit_map      = %{ $r_hit_map };
+#    my %hit_map      = %{ $r_hit_map };
     #define clustering thresholds
     my $t_evalue   = $self->get_evalue_threshold();   #dom-ieval threshold
     my $t_coverage = $self->get_coverage_threshold(); #coverage threshold (applied to query)
     my $is_strict  = $self->is_strict_clustering();   #strict (top-hit) v. fuzzy (all hits above thresholds) clustering. Fuzzy not yet implemented   
     #because blast table doesn't print the sequence lengths (ugh) we have to look up the query length
-    my %seqlens  = %{ _get_sequence_lengths_from_file( $orfs_file ) };
+    my %seqlens    = ();
+    if( $type eq "blast" ){
+	%seqlens   = %{ _get_sequence_lengths_from_file( $orfs_file ) };
+    }
     #open the file and process each line
+    print "classifying reads from $file\n";
     open( RES, "$file" ) || die "can't open $file for read: $!\n";    
     while(<RES>){
 	chomp $_;
@@ -356,71 +503,110 @@ sub parse_search_results{
 	    $tid  = $data[0];
 	    $tlen = $data[2];
 	    $evalue = $data[12]; #this is dom_ievalue
-	    $score  = $data[9];  #this is dom score
+	    $score  = $data[7];  #this is dom score
 	    $start  = $data[19]; #this is env_start
 	    $stop   = $data[20]; #this is env_stop
 	}
 	elsif( $type eq "hmmsearch" ){
-	    my @data = split( ' ', $_ );
-	    $qid  = $data[0];
-	    $qlen = $data[2];
-	    $tid  = $data[3];
-	    $tlen = $data[5];
-	    $evalue = $data[12]; #this is dom_ievalue
-	    $score  = $data[9];  #this is dom score
-	    $start  = $data[19]; #this is env_start
-	    $stop   = $data[20]; #this is env_stop
+	    #the fast parse way
+	    if( $_ =~ m/(.*?)\s+(.*?)\s+(\d+?)\s+(\d+?)\s+(.*?)\s+(\d+?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s(.*)/ ){
+		$qid    = $1;
+		$qlen   = $3;
+		$tid    = $4;
+		$tlen   = $6;
+		$evalue = $13; #this is dom_ievalue
+		$score  = $8;  #this is dom score
+		$start  = $20; #this is env_start
+		$stop   = $21; #this is env_stop
+	    }
+	    else{
+		warn( "couldn't parse results from $type file:\n$_\n");
+		next;
+	    }
+	    #the old and slow way
+	    if( 0 ){
+		my @data = split( ' ', $_ );
+		$qid  = $data[0];
+		$qlen = $data[2];
+		$tid  = $data[3];
+		$tlen = $data[5];
+		$evalue = $data[12]; #this is dom_ievalue
+		$score  = $data[7];  #this is dom score
+		$start  = $data[19]; #this is env_start
+		$stop   = $data[20]; #this is env_stop
+	    }
 	}
 	if( $type eq "blast" ){
-	    my @data = split( "\t", $_ );
-	    $qid  = $data[0];
-#	    $qlen = $data[2];
-	    $tid  = $data[3];
-#	    $tlen = $data[5];
-	    $evalue = $data[10]; #this is evalue
-	    $score  = $data[11];  #this is bit score
-	    $start  = $data[6];  #this is qstart
-	    $stop   = $data[7];  #this is qstop
-	    $qlen   = $seqlens{$qid};	    
-	    #won't calculate $tlen because it is messy - requires a DB lookup - and prolly unnecessary
+	    if( $_ =~ m/^(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)$/ ){
+		$qid    = $1;
+		$tid    = $2;
+		$start  = $9; 
+		$stop   = $10; 
+		$evalue = $11; 
+		$score  = $12;
+		$qlen   = $seqlens{$qid};	    
+#		print "$qid\n";
+#		print "$evalue\n";
+#		print "A" . $score . "B\n";
+	    }
+	    else{
+		warn( "couldn't parse results from $type file:\n$_\n");
+		next;
+	    }
+	    #old and slow way
+	    if( 0 ){
+		my @data = split( "\t", $_ );
+		$qid  = $data[0];
+		$tid  = $data[3];
+		$evalue = $data[10]; #this is evalue
+		$score  = $data[11];  #this is bit score
+		$start  = $data[6];  #this is qstart
+		$stop   = $data[7];  #this is qstop
+		$qlen   = $seqlens{$qid};	    
+		#won't calculate $tlen because it is messy - requires a DB lookup - and prolly unnecessary
+	    }
 	}
 	#calculate coverage from query perspective
 	my $coverage  = 0;
 	if( $stop > $start ){
-	    my $len = $stop - $start + 1; #coverage calc must include first base!
+	    my $len   = $stop - $start + 1; #coverage calc must include first base!
 	    $coverage = $len / $qlen;
 	}
 	if( $start > $stop ){
-	    my $len = $start - $stop;
+	    my $len   = $start - $stop;
 	    $coverage = $len / $qlen;
 	}
 	#does hit pass threshold?
 	if( $evalue <= $t_evalue && $coverage >= $t_coverage ){
 	    #is this the first hit for the query?
-	    if( $hit_map{$qid}->{"has_hit"} == 0 ){
+	    if( $hit_map->{$qid}->{"has_hit"} == 0 ){
 		#note that we use is_strict to differentiate top hit clustering from fuzzy clustering w/in hash
-		$hit_map{$qid}->{$is_strict}->{"target"}   = $tid;
-		$hit_map{$qid}->{$is_strict}->{"evalue"}   = $evalue;
-		$hit_map{$qid}->{$is_strict}->{"coverage"} = $coverage;
-		$hit_map{$qid}->{$is_strict}->{"score"}    = $score;
-		$hit_map{$qid}->{"has_hit"} = 1;
+		$hit_map->{$qid}->{$is_strict}->{"target"}   = $tid;
+		$hit_map->{$qid}->{$is_strict}->{"evalue"}   = $evalue;
+		$hit_map->{$qid}->{$is_strict}->{"coverage"} = $coverage;
+		$hit_map->{$qid}->{$is_strict}->{"score"}    = $score;
+		$hit_map->{$qid}->{"has_hit"} = 1;
 	    }
 	    elsif( $is_strict ){
 		#only add if the current hit is better than the prior best hit. start with best evalue
-		if( $evalue < $hit_map{$qid}->{$is_strict}->{"evalue"} ||
+#		print "evalue: $evalue\n";
+#		print "coverage: $coverage\n";
+#		print "score: $score\n";
+#		print "stored: " . $hit_map->{$qid}->{$is_strict}->{"evalue"} . "\n";
+		if( $evalue < $hit_map->{$qid}->{$is_strict}->{"evalue"} ||
 		    #if evalues tie, use coverage to break
-		    ( $evalue == $hit_map{$qid}->{$is_strict}->{"evalue"} &&
-		      $coverage >   $hit_map{$qid}->{$is_strict}->{"coverage"} ) ||
+		    ( $evalue == $hit_map->{$qid}->{$is_strict}->{"evalue"} &&
+		      $coverage > $hit_map->{$qid}->{$is_strict}->{"coverage"} ) ||
 		    #finally, if evalue and coverage tie, use score to break
-		    ( $evalue == $hit_map{$qid}->{$is_strict}->{"evalue"} &&
-		      $coverage  == $hit_map{$qid}->{$is_strict}->{"coverage"} &&
-		      $score >  $hit_map{$qid}->{$is_strict}->{"score"} ) 
+		    ( $evalue == $hit_map->{$qid}->{$is_strict}->{"evalue"} &&
+		      $coverage  == $hit_map->{$qid}->{$is_strict}->{"coverage"} &&
+		      $score >  $hit_map->{$qid}->{$is_strict}->{"score"} ) 
 		    ){
 		    #add the hits here
-		    $hit_map{$qid}->{$is_strict}->{"target"}   = $tid;
-		    $hit_map{$qid}->{$is_strict}->{"evalue"}   = $evalue;
-		    $hit_map{$qid}->{$is_strict}->{"coverage"} = $coverage;
-		    $hit_map{$qid}->{$is_strict}->{"score"}    = $score;
+		    $hit_map->{$qid}->{$is_strict}->{"target"}   = $tid;
+		    $hit_map->{$qid}->{$is_strict}->{"evalue"}   = $evalue;
+		    $hit_map->{$qid}->{$is_strict}->{"coverage"} = $coverage;
+		    $hit_map->{$qid}->{$is_strict}->{"score"}    = $score;
 		}
 	    }
 	    else{
@@ -429,14 +615,15 @@ sub parse_search_results{
 		    next;
 		}
 		#else, add every threshold passing hit to the hash
-		$hit_map{$qid}->{$is_strict}->{$tid}->{"evalue"}   = $evalue;
-		$hit_map{$qid}->{$is_strict}->{$tid}->{"coverage"} = $coverage;
-		$hit_map{$qid}->{$is_strict}->{$tid}->{"score"}    = $score;
+		#since we aren't yet storing search results in db, we don't need to do this. turning off for speed and RAM
+#		$hit_map{$qid}->{$is_strict}->{$tid}->{"evalue"}   = $evalue;
+#		$hit_map{$qid}->{$is_strict}->{$tid}->{"coverage"} = $coverage;
+#		$hit_map{$qid}->{$is_strict}->{$tid}->{"score"}    = $score;
 	    }
 	}
     }
     close RES;
-    return \%hit_map;
+    return $hit_map;
 }
 
 #produce a hashtab that maps sequence ids to sequence lengths
@@ -471,13 +658,22 @@ sub _get_sequence_lengths_from_file{
 #initialize a lookup hash by pulling seq_ids from a fasta file and dumping them into hash keys
 sub initialize_hit_map{
     my $seq_file = shift;
-    my $seqs     = Bio::SeqIO->new( -file => $seq_file, -format => 'fasta' );
-    my %hit_map  = ();
-    while( my $seq = $seqs->next_seq() ){
-	my $id = $seq->display_id();
-	$hit_map{$id}->{"has_hit"} = 0;
+#    my $seqs     = Bio::SeqIO->new( -file => $seq_file, -format => 'fasta' );
+    my $hit_map  = {}; #a hashref
+#    while( my $seq = $seqs->next_seq() ){
+#	my $id = $seq->display_id();
+#	$hit_map{$id}->{"has_hit"} = 0;
+#    }
+    open( SEQS, $seq_file ) || die "can't open $seq_file in initialize_hit_map\n";
+    while( <SEQS> ){
+	next unless ( $_ =~ m/^\>/ );
+	chomp $_;
+	$_ =~ s/^\>//;
+	$hit_map->{$_}->{"has_hit"} = 0;
+	
     }
-    return \%hit_map;
+    close SEQS;
+    return $hit_map;
 }
 
 #this is a depricated function given upstream changes in the workflow. use classify_reads instead
@@ -507,7 +703,7 @@ sub classify_reads_depricated{
 		  my $hsplen = $hsp->length('total');
 		  my $hqlen  = $hsp->length('query');
 		  my $hhlen  = $hsp->length('hit');
-		  print join ("\t", $qorf, $qacc, $qdes, $qlen, $nhit, $hmm, $score, $signif, $hqlen, "\n");
+		  #print join ("\t", $qorf, $qacc, $qdes, $qlen, $nhit, $hmm, $score, $signif, $hqlen, "\n");
 		  #if hit passes thresholds, push orf into the family
 		  if( $signif <= $evalue && 
 		      ( $hqlen / $qlen)  >= $coverage ){
@@ -529,7 +725,10 @@ sub build_search_db{
     my $split_size  = shift; #integer - how many hmms per split?
     my $force       = shift; #0/1 - force overwrite of old DB during compression.
     my $type        = shift; #blast/hmm
+    my $reps_only   = shift;
     my $ffdb        = $self->get_ffdb();
+    my $ref_ffdb    = $self->get_ref_ffdb();
+
     #where is the hmmdb going to go? each hmmdb has its own dir
     my $db_path;
     my $length      = 0;
@@ -543,7 +742,7 @@ sub build_search_db{
     #Have you built this DB already?
     if( -d $db_path && !($force) ){
 	warn "You've already built an $type database with the name $db_name at $db_path. Please delete or overwrite by using the -f option.\n";
-	die;
+	exit(0);
     }
     #create the HMMdb dir that will hold our split hmmdbs
     $self->MRC::DB::build_db_ffdb( $db_path );
@@ -557,14 +756,60 @@ sub build_search_db{
     my $count      = 0;
     my @split      = (); #array of family HMMs/sequences (compressed)
     my $n_proc     = 0;
-    foreach my $family( @families ){
+    my @fcis       = @{ $self->get_fcis() };
+    FAM: foreach my $family( @families ){
 	#find the HMM/sequences associated with the family (compressed)
-	my $family_db;
+	my $family_db;	
 	if( $type eq "hmm" ){
-	    $family_db = $ffdb . "/HMMs/" . $family . ".hmm.gz";
+	    foreach my $fci( @fcis ){
+		my $path = $ref_ffdb . "fci_" . $fci . "/HMMs/" . $family . ".hmm.gz";
+		if( -e $path ){
+		    $family_db = $path;
+		}
+	    }
+	    if( !defined( $family_db ) ){
+		warn( "Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
+		exit(0);
+	    }
 	}
 	elsif( $type eq "blast" ){
-	    $family_db =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
+	    foreach my $fci( @fcis ){
+		#short term hack for the merged fci blast directory for 0 and 1
+		if( $fci == 0 ){
+		    $fci = 1;
+		}
+		my $path = $ref_ffdb . "fci_" . $fci . "/seqs/" . $family . ".fa.gz";
+		if( -e $path ){
+		    $family_db = $path;
+		    #do we only want rep sequences from big families?
+		    if( $reps_only ){
+			#first see if there is a reps file for the family
+			my $reps_list_path = $ref_ffdb . "reps/fci_" . $fci . "/list/" . $family . ".mcl";
+			#if so, see if we need to build the seq file
+			if( -e $reps_list_path ){
+			    #we add the .gz extension in the gzip command inside grab_seqs_from_lookup_list
+			    my $reps_seq_path = $ref_ffdb . "reps/fci_" . $fci . "/seqs/" . $family . ".fa";
+			    if( ! -e $reps_seq_path . ".gz" ){
+				print "Building reps sequence file for $family\n";
+				_grab_seqs_from_lookup_list( $reps_list_path, $family_db, $reps_seq_path );
+				if( ! -e $reps_seq_path . ".gz" ){
+				    warn( "Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.\n" );
+				    exit(0);
+				}
+			    }
+			    #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
+			    $family_db = $reps_seq_path . ".gz";
+			}
+		    }
+		    #because of the fci hack, if we made it here, we don't want to rerun the above
+#		    last;
+		}
+	    }
+	    if( !defined( $family_db ) ){
+		warn( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
+		exit(0);
+	    }
+#	    $family_db =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
 	    $length   += $self->MRC::Run::get_sequence_length_from_file( $family_db );
 	}       
 	push( @split, $family_db );
@@ -595,6 +840,31 @@ sub build_search_db{
     }
     warn "$type DB successfully built and compressed.\n";
     return $self;
+}
+
+sub _grab_seqs_from_lookup_list{
+    my $seq_id_list = shift; #list of sequence ids to retain
+    my $seq_file    = shift; #compressed sequence file
+    my $out_seqs    = shift; #compressed retained sequences
+    my $lookup      = {};
+    print "Selecting reps from $seq_file, using $seq_id_list. Results in $out_seqs\n";
+    #build lookup hash
+    open( LOOK, $seq_id_list ) || die "Can't open $seq_id_list for read: $!\n";
+    while(<LOOK>){
+	chomp $_;
+	$lookup->{$_}++;
+    }
+    close LOOK;
+    my $seqs_in  = Bio::SeqIO->new( -file => "zcat $seq_file |", -format => 'fasta' );
+    my $seqs_out = Bio::SeqIO->new( -file => ">$out_seqs", -format => 'fasta' );
+    while( my $seq = $seqs_in->next_seq() ){
+	my $id = $seq->display_id();
+	if( defined( $lookup->{$id} ) ){
+	    $seqs_out->write_seq( $seq );
+	}
+    }
+    gzip_file( $out_seqs );    
+    unlink( $out_seqs );
 }
 
 #calculates total amount of sequence in a file
@@ -664,9 +934,21 @@ sub build_hmm_db_by_n_splits{
     my $count      = 0;
     my @split      = (); #array of family HMMs (compressed)
     my $n_proc     = 0;
+    my $ref_ffdb   = $self->get_ref_ffdb();
+    my @fcis       = @{ $self->get_fcis() };
     foreach my $family( @families ){
 	#find the HMM associated with the family (compressed)
-	my $family_hmm = $ffdb . "/HMMs/" . $family . ".hmm.gz";
+	my $family_hmm;
+	foreach my $fci( @fcis ){
+	    my $path = $ref_ffdb . "fci_" . $fci . "/HMMs/" . $family . ".hmm.gz";
+	    if( -e $path ){
+		$family_hmm = $path;
+	    }
+	}
+	if( !defined( $family_hmm ) ){
+	    warn( "Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
+	    exit(0);
+	}
 	push( @split, $family_hmm );
 	$count++;
 	#if we've hit our split size, process the split
@@ -685,11 +967,13 @@ sub build_hmm_db_by_n_splits{
 }
 
 sub cat_db_split{
-    my $db_path  = shift;
-    my $n_proc   = shift;
-    my $ffdb     = shift;
-    my $suffix   = shift;
-    my @families = @{ $_[0] };
+    my $db_path      = shift;
+    my $n_proc       = shift;
+    my $ffdb         = shift;
+    my $suffix       = shift;
+    my $ra_families  = shift;
+    my @families     = @{ $ra_families };
+
     my $split_db_path = $db_path . "_" . $n_proc . $suffix;
     my $fh;
     open( $fh, ">>$split_db_path" ) || die "Can't open $split_db_path for write: $!\n";
@@ -733,31 +1017,37 @@ sub load_project_remote{
 #the qsub -sync y option keeps the connection open. lower chance of a connection failure due to a ping flood, but if connection between
 #local and remote tends to drop, this may not be foolproof
 sub translate_reads_remote{
-    my $self = shift;
-    my $waittime = shift;
+    my $self       = shift;
+    my $waittime   = shift;
+    my $logsdir    = shift;
+    my $split_orfs = shift; #split orfs on stop? 1/0    
     my @sample_ids = @{ $self->get_sample_ids() };
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     my @job_ids = ();
     foreach my $sample_id( @sample_ids ){
 	my $remote_input_dir  = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/raw/";
 	my $remote_output_dir =  $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-#	my @sample_files = @{ $self->MRC::DB::get_split_sequence_paths( $self->get_samples->{$sample}, 0 ) };
-#this block will run each split in series. to do parallel, i need to execute qsub on the remote side. this will also cut back on active ssh connections to remote
-#	foreach my $sample_file( @sample_files ){    
-#	    my $remote_input  = $remote_input_dir . $sample_file;
-#	    my $remote_output = $remote_output_dir . $sample_file;
-#	    my $remote_cmd = "\'qsub -sync y " . $self->get_remote_scripts() . "run_transeq.sh " . $remote_input . " " . $remote_output . "\'";	
-#	}
-# If we want to submit directly from local, use the line below
-#	my $remote_cmd = "\'qsub -sync y perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waittime . "\'";	
-# It is more efficient, however, to submit jobs to cluster on remote: Note that we have to pass r_scripts_path to command so that we can execute queue submission script off on remote server
-	my $remote_cmd = "\'perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waittime . " -s " . $self->get_remote_scripts() . "\'";	
 	my $remote_orfs = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
 	my $local_orfs  = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-	print( "translating reads\n" );
-	$self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-	print( "translation complete. Transferring orfs\n" );
-	$self->MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' );
+	if( $split_orfs ){
+	    my $local_unsplit_orfs = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
+	    my $remote_unsplit_orfs = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
+	    my $remote_cmd   = "\'perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waittime . 
+		" -l " . $logsdir . " -s " . $self->get_remote_scripts() . " -u " . $remote_unsplit_orfs . " > ~/tmp.out\'";	
+	    print( "translating reads, splitting orfs on stop codon\n" );       
+	    $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
+	    print( "translation complete, Transferring split and raw translated orfs\n" );
+	    $self->MRC::Run::remote_transfer( $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_unsplit_orfs, $local_unsplit_orfs, 'c' ); #the unsplit orfs
+	    $self->MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' ); #the split orfs
+	}
+	else{ #no splitting of the orfs
+	    my $remote_cmd = "\'perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waittime . 
+		" -l " . $logsdir . " -s " . $self->get_remote_scripts() . "\'";	
+	    print( "translating reads\n" );       
+	    $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
+	    print( "translation complete. Transferring orfs\n" );
+	    $self->MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' );
+	}
 	print( "transfer of orfs successful\n");	
     }
     warn( "All reads were translated on the remote server and locally acquired\n" );
@@ -1165,7 +1455,6 @@ sub run_hmmscan_remote_ping{
     warn( "Hmmscan was conducted translated in approximately $time seconds on remote server\n");
     #consider that a completed job doesn't mean a successful run!
     warn( "Pulling hmmscan reads from remote server\n" );
-    print Dumper %jobs;
     foreach my $job( keys( %jobs ) ){
 	foreach my $sample_id( @sample_ids ){
 	    foreach my $hmmdb( keys( %hmmdbs ) ){
@@ -1199,9 +1488,10 @@ sub get_family_size_by_id{
 }
 
 sub build_PCA_data_frame{
-    my $self = shift;
+    my $self     = shift;
+    my $class_id = shift;
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/PCA_data_frame.tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/PCA_data_frame_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!\n";    
     print OUT join("\t", "OPF", @{ $self->get_sample_ids() }, "\n" );
     my %opfs        = ();
@@ -1209,9 +1499,10 @@ sub build_PCA_data_frame{
     my %sample_cnts = (); #sample_cnts{$sample_id} = total_hits_in_sample
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
 	my $family_rs  = $self->MRC::DB::get_families_with_orfs_by_sample( $sample_id );
+	$family_rs->result_class('DBIx::Class::ResultClass::HashRefInflator');
 	my $sample_total = 0;
 	while( my $family = $family_rs->next() ){
-	    my $famid  = $family->famid->famid();
+	    my $famid = $family->{"famid"};
 	    $opfs{$famid}++;
 	    $opf_map{ $sample_id }->{ $famid }++;
 	    $sample_total++; 
@@ -1239,21 +1530,23 @@ sub build_PCA_data_frame{
 }
 
 sub calculate_project_richness{
-    my $self = shift;
+    my $self     = shift;
+    my $class_id = shift;
     #identify which families were uniquely found across the project
-    my %hit_fams = ();
-    my $family_rs = $self->MRC::DB::get_families_with_orfs_by_project( $self->get_project_id() );
+    my $hit_fams = {}; #hashref
+
+    my $family_rs = $self->MRC::DB::get_families_with_orfs_by_project( $self->get_project_id(), $class_id );
     while( my $family = $family_rs->next() ){
 	my $famid = $family->famid->famid();
-	next if( defined( $hit_fams{$famid} ) );
-	$hit_fams{$famid}++;
+	next if( defined( $hit_fams->{$famid} ) );
+	$hit_fams->{$famid}++;
     }
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_richness.tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_richness_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in calculate_project_richness: $!\n";    
     print OUT join( "\t", "opf", "\n" );
     #dump the famids that were found in the project to the output
-    foreach my $famid( keys( %hit_fams ) ){
+    foreach my $famid( keys( %$hit_fams ) ){
 	print OUT "$famid\n";
     }
     close OUT;
@@ -1261,9 +1554,10 @@ sub calculate_project_richness{
 }
 
 sub calculate_sample_richness{
-    my $self = shift;
+    my $self     = shift;
+    my $class_id = shift;
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/sample_richness.tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/sample_richness_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in calculate_sample_richness: $!\n";    
     print OUT join( "\t", "sample", "opf", "\n" );
     #identify which families were uniquely hit in each sample
@@ -1285,49 +1579,54 @@ sub calculate_sample_richness{
 
 #divides total number of reads per OPF by all classified reads
 sub calculate_project_relative_abundance{
-    my $self = shift;
+    my $self     = shift;
+    my $class_id = shift;
     #identify number of times each family hit across the project. also, how many reads were classified. 
-    my %hit_fams = ();
-    my $total    = 0;
+    my $hit_fams = {};
+    my $total     = $self->MRC::DB::get_number_orfs_by_project( $self->get_project_id() );
+    print "getting families that have orfs\n";
     my $family_rs = $self->MRC::DB::get_families_with_orfs_by_project( $self->get_project_id() );    
+    $family_rs->result_class('DBIx::Class::ResultClass::HashRefInflator');
     while( my $family = $family_rs->next() ){
-	my $famid = $family->famid->famid();
-	$hit_fams{$famid}++;
-	$total++;	   
+	my $famid = $family->{"famid"};
+	$hit_fams->{$famid}++;
     }
+    print "creating outfile...\n";
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_relative_abundance.tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_relative_abundance_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in calculate_project_relative_abundance: $!\n" ;    
-    print OUT join( "\t", "opf", "r_abundance", "hits", "total_reads", "\n" );
+    print OUT join( "\t", "opf", "r_abundance", "hits", "total_orfs", "\n" );
     #dump the famids that were found in the project to the output
-    foreach my $famid( keys( %hit_fams ) ){
-	my $relative_abundance = $hit_fams{$famid} / $total;
-	print OUT join("\t", $famid, $relative_abundance, $hit_fams{$famid}, $total, "\n");
+    foreach my $famid( keys( %$hit_fams ) ){
+	my $relative_abundance = $hit_fams->{$famid} / $total;
+	print OUT join("\t", $famid, $relative_abundance, $hit_fams->{$famid}, $total, "\n");
     }
     close OUT;
+    print "outfile created!\n";
     return $self;
 }
 
 #for each sample, divides total number of reads per OPF by all classified reads
 sub calculate_sample_relative_abundance{
-    my $self = shift;
+    my $self     = shift;
+    my $class_id = shift;
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/sample_relative_abundance.tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/sample_relative_abundance_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in calculate_sample_relative_abundance: $!\n";    
-    print OUT join( "\t", "sample", "opf", "r_abundance", "hits", "sample_reads", "\n" );
+    print OUT join( "\t", "sample", "opf", "r_abundance", "hits", "sample_orfs", "\n" );
     #identify number of times each family hit in each sample. also, how many reads were classified.
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
-	my %hit_fams  = ();
-	my $total     = 0;
+	my $hit_fams  = {};
+	my $total     = $self->MRC::DB::get_number_orfs_by_samples( $sample_id );
 	my $family_rs = $self->MRC::DB::get_families_with_orfs_by_sample( $sample_id );
+	$family_rs->result_class('DBIx::Class::ResultClass::HashRefInflator');
 	while( my $family = $family_rs->next() ){
-	    my $famid = $family->famid->famid();
-	    $hit_fams{$famid}++;
-	    $total++;
+	    my $famid = $family->{"famid"};
+	    $hit_fams->{$famid}++;
 	}
-	foreach my $famid( keys( %hit_fams ) ){
-	    my $relative_abundance = $hit_fams{$famid} / $total;
-	    print OUT join("\t", $sample_id, $famid, $relative_abundance, $hit_fams{$famid}, $total, "\n");
+	foreach my $famid( keys( %$hit_fams ) ){
+	    my $relative_abundance = $hit_fams->{$famid} / $total;
+	    print OUT join("\t", $sample_id, $famid, $relative_abundance, $hit_fams->{$famid}, $total, "\n");
 	}	
     }
     close OUT;
@@ -1336,16 +1635,18 @@ sub calculate_sample_relative_abundance{
 
 #maps project_id -> sample_id -> read_id -> orf_id -> famid
 sub build_classification_map{
-    my $self = shift;
+    my $self     = shift;
+    my $class_id = shift;
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/classification_map.tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/classification_map_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!\n";    
     print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "\n" );
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
 	my $family_rs = $self->MRC::DB::get_families_with_orfs_by_sample( $sample_id );
+	$family_rs->result_class('DBIx::Class::ResultClass::HashRefInflator');
 	while( my $family = $family_rs->next() ){
-	    my $famid  = $family->famid->famid();
-	    my $orf_id = $family->orf_id();
+	    my $famid   = $family->{"famid"};
+	    my $orf_id  = $family->{"orf_id"};
 	    my $read_id = $self->MRC::DB::get_orf_by_orf_id( $orf_id )->read_id();
 	    print OUT join("\t", $self->get_project_id(), $sample_id, $read_id, $orf_id, $famid, "\n" );
 	}	
