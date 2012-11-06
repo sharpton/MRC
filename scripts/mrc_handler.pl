@@ -34,15 +34,27 @@ my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
 my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
 my $nseqs_per_samp_split = 100000; #how many seqs should each sample split file contain?
 my @fcis                 = ( 0, 1 ); #what family construction ids are allowed to be processed?
-my $hmmdb_name           = "SFams_all_v0_" . $hmm_db_split_size;
+my $db_basename          = "SFams_all_v0"; #set the basename of your database here.
+my $hmmdb_name           = $db_basename . "_" . $hmm_db_split_size;
 #"SFams_all_v1.03_500"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
 my $reps_only            = 1; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
+my $nr_db                = 1; #should we build a non-redundant version of the sequence database?
 my $blastdb_name; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/BLASTdbs/ Might change how this works. If you don't want to use a blastdb, leave undefined
 if( $reps_only ){
-    $blastdb_name = "SFams_all_v0_reps_" . $blast_db_split_size; 
+    if( $nr_db ){
+	$blastdb_name = $db_basename . "_reps_nr_" . $blast_db_split_size; 
+    }
+    else{
+	$blastdb_name = $db_basename . "_reps_" . $blast_db_split_size; 
+    }
 }
 else{
-    $blastdb_name = "SFams_all_v0_" . $blast_db_split_size; 
+    if( $nr_db ){
+	$blastdb_name = $db_basename . "_nr_" . $blast_db_split_size; 
+    }
+    else{
+	$blastdb_name = $db_basename . "_" . $blast_db_split_size; 
+    }
 }
 my $hmmdb_build    = 0;
 my $blastdb_build  = 0;
@@ -61,8 +73,8 @@ my $top_hit_type   = "orf"; # "orf" or "read" Read means each read can have one 
 
 my $use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
 my $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
-my $use_blast      = 1; #should we use blast to compare SFam reference sequences to reads?
-
+my $use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
+my $use_last       = 1; #should we use last to compare SFam reference sequences to reads?
 
 #remote compute (e.g., SGE) vars
 my $remote         = 1;
@@ -139,7 +151,7 @@ $analysis->set_family_subset( $family_subset_list, $check );
 if( $use_hmmscan || $use_hmmsearch ){
     $analysis->set_hmmdb_name( $hmmdb_name );
 }
-if( $use_blast ){
+if( $use_blast || $use_last ){
     $analysis->set_blastdb_name( $blastdb_name );
 }
 $analysis->is_remote( $remote );
@@ -157,6 +169,9 @@ if( $remote ){
 }
 
 print( "Starting a classification run using the following settings:\n" );
+if( $use_last ){
+    print "Algorithm: last\n";
+}
 if( $use_blast ){
     print "Algorithm: blast\n";
 }
@@ -203,6 +218,7 @@ if( -d $project_file ){
 	$analysis->set_remote_hmmscan_script( $analysis->get_remote_project_path() . "run_hmmscan.sh" );
 	$analysis->set_remote_hmmsearch_script( $analysis->get_remote_project_path() . "run_hmmsearch.sh" );
 	$analysis->set_remote_blast_script( $analysis->get_remote_project_path() . "run_blast.sh" );
+	$analysis->set_remote_last_script( $analysis->get_remote_project_path() . "run_last.sh" );
 	$analysis->set_remote_formatdb_script( $analysis->get_remote_project_path() . "run_formatdb.sh" );
 	$analysis->set_remote_project_log_dir( $analysis->get_remote_project_path() . "/logs/" );
     }

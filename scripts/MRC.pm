@@ -70,7 +70,9 @@ sub new{
     $self->{"r_hmmscan_script"}   = undef; #location of the remote hmmscan script. holds a path string.
     $self->{"r_hmmsearch_script"} = undef; #location of the remote hmmsearch script. holds a path string.
     $self->{"r_blast_script"}     = undef; #location of the remote blast script. holds a path string.
-    $self->{"r_formatdb_script"}  = undef; #location of the remote blast script. holds a path string.
+    $self->{"r_last_script"}      = undef; #location of the remote last script. holds a path string.
+    $self->{"r_formatdb_script"}  = undef; #location of the remote formatdb script (for blast). holds a path string.
+    $self->{"r_lastdb_script"}    = undef; #location of the remote lastdb script (for last). holds a path string.
     $self->{"r_project_logs"}     = undef; #location of the remote project logs directory. holds a path string.
     $self->{"multiload"}          = 0; #should we multiload our insert statements?
     $self->{"bulk_insert_count"}  = undef; #how many rows should be added at a time when using multi_load?
@@ -884,11 +886,25 @@ sub set_remote_blast_script{
     return $self;
 }
 
+sub set_remote_last_script{
+    my $self     = shift;
+    my $filepath = shift; 
+    $self->{"r_last_script"} = $filepath;
+    return $self;
+}
+
 
 sub set_remote_formatdb_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_formatdb_script"} = $filepath;
+    return $self;
+}
+
+sub set_remote_lastdb_script{
+    my $self     = shift;
+    my $filepath = shift; 
+    $self->{"r_lastdb_script"} = $filepath;
     return $self;
 }
 
@@ -920,10 +936,15 @@ sub get_remote_blast_script{
     return $self->{"r_blast_script"};
 }
 
-
-sub get_remote_formatdb_script{
+sub get_remote_last_script{
     my $self = shift;
-    return $self->{"r_formatdb_script"};
+    return $self->{"r_last_script"};
+}
+
+
+sub get_remote_lastdb_script{
+    my $self = shift;
+    return $self->{"r_lastdb_script"};
 }
 
 

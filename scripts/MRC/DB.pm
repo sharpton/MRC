@@ -457,52 +457,20 @@ sub build_sample_ffdb{
     my $hmmscanlogs   = $logs . "/hmmscan/";
     my $hmmsearchlogs = $logs . "/hmmsearch/";
     my $blastlogs     = $logs . "/blast/";
+    my $lastlogs      = $logs . "/last/";
     my $formatdblogs  = $logs . "/formatdb/";
-    my $transeqlogs  = $logs . "/transeq/";
+    my $lastdblogs    = $logs . "/lastdb/";
+    my $transeqlogs   = $logs . "/transeq/";
     my $output        = $proj_dir . "/output/";
-    if( -d $output ){
-	warn( "Output directory already exists at $output. Will not overwrite!\n");
+    my @paths = ( $output, $logs, $hmmscanlogs, $hmmsearchlogs, $blastlogs, $lastlogs, $formatdblogs, $lastdblogs, $transeqlogs );
+    foreach my $path( @paths ){
+	if( -d $path){
+	    warn( "Directory already exists at $path. Will not overwrite!\n");
+	}
+	else{
+	    make_path( $path ) || die "Can't create directory $path in build_sample_ffdb: $!\n";
+	}
     }
-    else{
-	make_path( $output ) || die "Can't create directory $output in build_sample_ffdb: $!\n";
-    }
-    if( -d $logs ){
-	warn( "Logs directory already exists at $logs. Will not overwrite!\n");
-    }
-    else{
-	make_path( $logs ) || die "Can't create directory $logs in build_sample_ffdb: $!\n";
-    }
-    if( -d $hmmscanlogs ){
-	warn( "Logs directory already exists at $hmmscanlogs. Will not overwrite!\n");
-    }
-    else{
-	make_path( $hmmscanlogs ) || die "Can't create directory $hmmscanlogs in build_sample_ffdb: $!\n";
-    }
-    if( -d $hmmsearchlogs ){
-	warn( "Logs directory already exists at $hmmsearchlogs. Will not overwrite!\n");
-    }
-    else{
-	make_path( $hmmsearchlogs ) || die "Can't create directory $hmmsearchlogs in build_sample_ffdb: $!\n";
-    }
-    if( -d $blastlogs ){
-	warn( "Logs directory already exists at $blastlogs. Will not overwrite!\n");
-    }
-    else{
-	make_path( $blastlogs ) || die "Can't create directory $blastlogs in build_sample_ffdb: $!\n";
-    }
-    if( -d $formatdblogs ){
-	warn( "Logs directory already exists at $formatdblogs. Will not overwrite!\n");
-    }
-    else{
-	make_path( $formatdblogs ) || die "Can't create directory $formatdblogs in build_sample_ffdb: $!\n";
-    }
-    if( -d $transeqlogs ){
-	warn( "Logs directory already exists at $transeqlogs. Will not overwrite!\n");
-    }
-    else{
-	make_path( $transeqlogs ) || die "Can't create directory $transeqlogs in build_sample_ffdb: $!\n";
-    }
-
     foreach my $sample( keys( %{ $self->get_samples() } ) ){
 	my $sample_dir = $proj_dir . $self->get_samples->{$sample}->{"id"} . "/";
 	my $raw_sample_dir = $sample_dir . "raw/";
