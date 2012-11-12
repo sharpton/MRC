@@ -149,7 +149,9 @@ sub back_load_project{
 	$self->set_remote_hmmscan_script( $self->get_remote_project_path() . "run_hmmscan.sh" );
 	$self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "run_hmmsearch.sh" );
         $self->set_remote_blast_script( $self->get_remote_project_path() . "run_blast.sh" );
+        $self->set_remote_last_script( $self->get_remote_project_path() . "run_last.sh" );
         $self->set_remote_formatdb_script( $self->get_remote_project_path() . "run_formatdb.sh" );
+        $self->set_remote_lastdb_script( $self->get_remote_project_path() . "run_lastdb.sh" );
 	$self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
     }
     return $self;
@@ -382,6 +384,13 @@ sub classify_reads{
 	    #because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
 	    $hit_map = $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "blast", $hit_map, $query_seqs );
 	}
+	elsif( $algo eq "last" ){
+	    #use the database name to enable multiple searches against different databases
+	    my $database_name = $self->get_blastdb_name();
+	    next unless( $result_file =~ m/$database_name/ );
+	    #because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
+	    $hit_map = $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "last", $hit_map, $query_seqs );
+	}
     }
     #now insert the data into the database
     my $is_strict = $self->is_strict_clustering();
@@ -556,14 +565,28 @@ sub parse_search_results{
 	    #old and slow way
 	    if( 0 ){
 		my @data = split( "\t", $_ );
-		$qid  = $data[0];
-		$tid  = $data[3];
+		$qid    = $data[0];
+		$tid    = $data[3];
 		$evalue = $data[10]; #this is evalue
 		$score  = $data[11];  #this is bit score
 		$start  = $data[6];  #this is qstart
 		$stop   = $data[7];  #this is qstop
 		$qlen   = $seqlens{$qid};	    
 		#won't calculate $tlen because it is messy - requires a DB lookup - and prolly unnecessary
+	    }
+	}
+	if( $type eq "last" ){
+	    if( $_ =~ m/^(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)$/ ){
+		$score  = $1;
+		$tid    = $2;
+		$qid    = $7;
+		$start  = $8;
+		$stop   = $start + $9;
+		$qlen   = $11;
+	    }
+	    else{
+		warn( "couldn't parse results from $type file:\n$_\n");
+		next;
 	    }
 	}
 	#calculate coverage from query perspective
@@ -1300,6 +1323,14 @@ sub run_search_remote{
 	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/blast/";
 	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";	
     }
+    if( $type eq "last" ){
+	$search_handler_log    = $self->get_remote_project_log_dir() . "/last_handler";
+	$r_script_path         = $self->get_remote_last_script();
+	$db_name               = $self->get_blastdb_name();
+	$remote_db_dir         = $self->get_remote_ffdb . "/BLASTdbs/" . $db_name . "/";
+	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/last/";
+	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";	
+    }
     if( $type eq "hmmsearch" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmsearch_handler";
 	$r_script_path         = $self->get_remote_hmmsearch_script();
@@ -1331,6 +1362,10 @@ sub get_remote_search_results{
     if( $type eq "blast" ){
 	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/blast/";
 	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/blast/";
+    }
+    elsif( $type eq "last" ){
+	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/last/";
+	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/last/";
     }
     elsif( $type eq "hmmsearch" ){
 	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmsearch/";

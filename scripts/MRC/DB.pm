@@ -495,6 +495,8 @@ sub build_sample_ffdb{
 	    make_path( $hmmsearch_results ) || die "Can't create directory $hmmsearch_results in build_sample_ffdb: $!\n";
 	    my $blast_results = $search_res . "/blast";
 	    make_path( $blast_results ) || die "Can't create directory $blast_results in build_sample_ffdb: $!\n";
+	    my $last_results = $search_res . "/last";
+	    make_path( $last_results ) || die "Can't create directory $last_results in build_sample_ffdb: $!\n";
 	}
 	if( -d $raw_sample_dir ){
 	    warn "Data already exists in $raw_sample_dir. Will not overwrite!\n";

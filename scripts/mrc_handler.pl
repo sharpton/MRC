@@ -38,7 +38,7 @@ my $db_basename          = "SFams_all_v0"; #set the basename of your database he
 my $hmmdb_name           = $db_basename . "_" . $hmm_db_split_size;
 #"SFams_all_v1.03_500"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
 my $reps_only            = 1; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
-my $nr_db                = 1; #should we build a non-redundant version of the sequence database?
+my $nr_db                = 0; #should we build a non-redundant version of the sequence database?
 my $blastdb_name; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/BLASTdbs/ Might change how this works. If you don't want to use a blastdb, leave undefined
 if( $reps_only ){
     if( $nr_db ){
@@ -220,6 +220,7 @@ if( -d $project_file ){
 	$analysis->set_remote_blast_script( $analysis->get_remote_project_path() . "run_blast.sh" );
 	$analysis->set_remote_last_script( $analysis->get_remote_project_path() . "run_last.sh" );
 	$analysis->set_remote_formatdb_script( $analysis->get_remote_project_path() . "run_formatdb.sh" );
+	$analysis->set_remote_lastdb_script( $analysis->get_remote_project_path() . "run_lastdb.sh" );
 	$analysis->set_remote_project_log_dir( $analysis->get_remote_project_path() . "/logs/" );
     }
 }
@@ -300,7 +301,7 @@ if( $blastdb_build ){
     print printhead( "BUILDING BLAST DATABASE" );
     system( "date" );
     #need to build the nr module here
-    $analysis->MRC::Run::build_search_db( $blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only, $nr );
+    $analysis->MRC::Run::build_search_db( $blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only, $nr_db );
 }
 
 REMOTESTAGE:
@@ -315,9 +316,9 @@ if( $remote && $stage ){
 	}
     }
     if( defined( $blastdb_name ) && ( $use_blast || $use_last ) ){
-	$analysis->MRC::Run::remote_transfer_search_db( $blastdb_name, "blast" );
+#	$analysis->MRC::Run::remote_transfer_search_db( $blastdb_name, "blast" );
 	#should do optimization here. Also, should roll over to blast+
-	$analysis->MRC::Run::gunzip_remote_dbs( $blastdb_name, "blast" );
+#	$analysis->MRC::Run::gunzip_remote_dbs( $blastdb_name, "blast" );
 	if( $use_blast ){
 	    print "Building remote formatdb script\n";
 	    my $script_path       = $ffdb . "/projects/" . $analysis->get_project_id() . "/run_formatdb.sh";
@@ -332,13 +333,11 @@ if( $remote && $stage ){
 	    my $script_path     = $ffdb . "/projects/" . $analysis->get_project_id() . "/run_lastdb.sh";
 	    my $r_script_path   = $analysis->get_remote_lastdb_script();
 	    my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits( "blast" );
-	    #need to build this
 	    build_remote_lastdb_script( $script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch );
+	    #built
 	    $analysis->MRC::Run::remote_transfer( $script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path, "f" );
-	    #we might be able to use the blast code (commented line), but we might
-	    #need to build this (uncommented line)
-	    #$analysis->MRC::Run::format_remote_blast_dbs( $r_script_path );
-	    $analysis->MRC::Run::format_remote_last_dbs( $r_script_path );
+	    #we can use the blast code here 
+	    $analysis->MRC::Run::format_remote_blast_dbs( $r_script_path );
 	}
     }
 }
@@ -386,12 +385,12 @@ if( $remote ){
 	system( "date" );
 	#we use the blast script code as a template given the similarity between the methods, so there are some common var names between the block here and above
 	my $b_script_path     = $ffdb . "/projects/" . $analysis->get_project_id() . "/run_last.sh";
-	my $r_b_script_path   = $analysis->get_remote_blast_script();
+	my $r_b_script_path   = $analysis->get_remote_last_script();
 	my $db_length         = $analysis->MRC::DB::get_blast_db_length( $blastdb_name );
 	print "database length is $db_length\n";
 	my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits( "blast" );
 	print "number of last db splits: $n_blastdb_splits\n";
-	#need to build this (should be very similar to the blast script)
+	#built
 	build_remote_lastsearch_script( $b_script_path, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch );
 	$analysis->MRC::Run::remote_transfer( $b_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_b_script_path, "f" );
     }
@@ -412,6 +411,9 @@ if( $remote ){
 	}
 	if( $use_hmmsearch ){
 	    $analysis->MRC::Run::run_search_remote( $sample_id, "hmmsearch", $waittime, $verbose );
+	}
+	if( $use_last ){
+	    $analysis->MRC::Run::run_search_remote( $sample_id, "last", $waittime, $verbose );
 	}
 	system( "date" );
     }
@@ -450,12 +452,13 @@ if( $remote ){
 	    $analysis->MRC::Run::get_remote_search_results( $sample_id, "blast" );
 	}
 	if( $use_last ){
-	    #build this routine
 	    $analysis->MRC::Run::get_remote_search_results( $sample_id, "last" );
 	}
 	
     }
 }
+
+die;
 
 #PARSE AND LOAD RESULTS
 CLASSIFYREADS:
@@ -608,7 +611,7 @@ sub build_remote_blastsearch_script{
 #need to build
 sub build_remote_lastsearch_script{
     my ( $b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch ) = @_;
-    my @args = ( "build_remote_blast_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch" );
+    my @args = ( "build_remote_last_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch" );
     print( "perl " . "@args\n" );
     my $results = capture( "perl " . "@args" );
     if( $EXITVAL != 0 ){
@@ -622,6 +625,18 @@ sub build_remote_lastsearch_script{
 sub build_remote_formatdb_script{
     my ( $script_path, $blastdb_basename, $n_splits, $project_path, $scratch ) = @_;
     my @args = ( "build_remote_formatdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch" );
+    print( "perl " . "@args\n" );
+    my $results = capture( "perl " . "@args" );
+    if( $EXITVAL != 0 ){
+	warn( $results );
+	exit(0);
+    }
+    return $results;    
+}
+
+sub build_remote_lastdb_script{
+    my ( $script_path, $blastdb_basename, $n_splits, $project_path, $scratch ) = @_;
+    my @args = ( "build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch" );
     print( "perl " . "@args\n" );
     my $results = capture( "perl " . "@args" );
     if( $EXITVAL != 0 ){

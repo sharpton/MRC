@@ -941,7 +941,6 @@ sub get_remote_last_script{
     return $self->{"r_last_script"};
 }
 
-
 sub get_remote_lastdb_script{
     my $self = shift;
     return $self->{"r_lastdb_script"};
