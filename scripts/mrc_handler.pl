@@ -66,7 +66,7 @@ my $check          = 0;
 my $evalue         = 0.001; #a float
 #my $coverage       = 0.8;
 my $coverage       = 0; #between 0-1
-my $score          = undef; #optionally set
+my $score          = 20; #optionally set
 my $is_strict      = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
 my $top_hit        = 1;
 my $top_hit_type   = "orf"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
@@ -159,6 +159,7 @@ $analysis->is_remote( $remote );
 $analysis->is_strict_clustering( $is_strict );
 $analysis->set_evalue_threshold( $evalue );
 $analysis->set_coverage_threshold( $coverage );
+$analysis->set_score_threshold( $score );
 #if using a remote server for compute, set vars here
 if( $remote ){
     $analysis->set_remote_server( $remote_ip );
@@ -457,8 +458,6 @@ if( $remote ){
 	
     }
 }
-
-die;
 
 #PARSE AND LOAD RESULTS
 CLASSIFYREADS:

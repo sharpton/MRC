@@ -12,7 +12,8 @@ my $bigmem         = 0; #should this select a big memory machine or not?
 my $array          = 1; #should this use array jobs or not?
 #might need to tune this variable
 my $memory         = "10G"; #include units in this string, G for Gigabytes, K for Kilobytes
-my $walltime       = "336:00:0";
+#my $walltime       = "336:00:0";
+my $walltime       = "0:29:0";
 my $projectdir     = ""; #what is the top level project dir on the remote server?
 my $db_name_stem   = ""; #what is the basename of the db splits, ignoring the arrayjob split number?
 my $scratch        = 0; #should we use the local scratch directory?

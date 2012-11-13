@@ -415,7 +415,7 @@ sub classify_reads{
 	    my $famid;
 	    #blast hits are gene_oids, which map to famids via the database (might change refdb seq headers to include famid in header
 	    #which would enable faster flatfile lookup).
-	    if( $algo eq "blast" ){
+	    if( $algo eq "blast" || $algo eq "last" ){
 		$famid = $self->MRC::DB::get_famid_from_geneoid( $hit );
 	    }
 	    else{
@@ -490,6 +490,7 @@ sub parse_search_results{
     #define clustering thresholds
     my $t_evalue   = $self->get_evalue_threshold();   #dom-ieval threshold
     my $t_coverage = $self->get_coverage_threshold(); #coverage threshold (applied to query)
+    my $t_score    = $self->get_score_threshold();
     my $is_strict  = $self->is_strict_clustering();   #strict (top-hit) v. fuzzy (all hits above thresholds) clustering. Fuzzy not yet implemented   
     #because blast table doesn't print the sequence lengths (ugh) we have to look up the query length
     my %seqlens    = ();
@@ -583,6 +584,7 @@ sub parse_search_results{
 		$start  = $8;
 		$stop   = $start + $9;
 		$qlen   = $11;
+		$evalue = 0; #hacky - no evalue reported for last, but want to use the same code below
 	    }
 	    else{
 		warn( "couldn't parse results from $type file:\n$_\n");
@@ -600,7 +602,8 @@ sub parse_search_results{
 	    $coverage = $len / $qlen;
 	}
 	#does hit pass threshold?
-	if( $evalue <= $t_evalue && $coverage >= $t_coverage ){
+	if( ( $evalue <= $t_evalue && $coverage >= $t_coverage ) ||
+	    ( $type eq "last" && $score >= $t_score && $coverage >= $t_coverage ) ){
 	    #is this the first hit for the query?
 	    if( $hit_map->{$qid}->{"has_hit"} == 0 ){
 		#note that we use is_strict to differentiate top hit clustering from fuzzy clustering w/in hash
@@ -616,14 +619,11 @@ sub parse_search_results{
 #		print "coverage: $coverage\n";
 #		print "score: $score\n";
 #		print "stored: " . $hit_map->{$qid}->{$is_strict}->{"evalue"} . "\n";
-		if( $evalue < $hit_map->{$qid}->{$is_strict}->{"evalue"} ||
-		    #if evalues tie, use coverage to break
+		if( ( $evalue < $hit_map->{$qid}->{$is_strict}->{"evalue"} ||
+		    ( $type eq "last" && $score > $hit_map->{$qid}->{$is_strict}->{"score"} ) ) ||
+		    #if tie, use coverage to break
 		    ( $evalue == $hit_map->{$qid}->{$is_strict}->{"evalue"} &&
-		      $coverage > $hit_map->{$qid}->{$is_strict}->{"coverage"} ) ||
-		    #finally, if evalue and coverage tie, use score to break
-		    ( $evalue == $hit_map->{$qid}->{$is_strict}->{"evalue"} &&
-		      $coverage  == $hit_map->{$qid}->{$is_strict}->{"coverage"} &&
-		      $score >  $hit_map->{$qid}->{$is_strict}->{"score"} ) 
+		      $coverage > $hit_map->{$qid}->{$is_strict}->{"coverage"} ) 
 		    ){
 		    #add the hits here
 		    $hit_map->{$qid}->{$is_strict}->{"target"}   = $tid;

@@ -1092,6 +1092,17 @@ sub get_coverage_threshold{
     return $self->{"t_coverage"};
 }
 
+sub set_score_threshold{
+    my ( $self, $value ) = @_;    
+    $self->{"t_score"} = $value;
+    return $self->{"t_score"};
+}
+
+sub get_score_threshold{
+    my $self = shift;
+    return $self->{"t_score"};
+}
+
 =head2 set_fcis
 
  Title   : set_fcis
