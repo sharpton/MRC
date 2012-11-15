@@ -26,6 +26,7 @@ use MRC::DB;
 use Data::Dumper;
 use Sfams::Schema;
 use File::Basename;
+use File::Cat;
 use IPC::System::Simple qw(capture $EXITVAL);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 use IO::Compress::Gzip qw(gzip $GzipError);
@@ -748,7 +749,11 @@ sub build_search_db{
     my $split_size  = shift; #integer - how many hmms per split?
     my $force       = shift; #0/1 - force overwrite of old DB during compression.
     my $type        = shift; #blast/hmm
-    my $reps_only   = shift;
+    my $reps_only   = shift; #0/1 - should we only use representative sequences in our sequence DB
+    my $nr_db       = shift; #0/1 - should we use a non-redundant version of the DB (sequence DB only)
+    if( !defined( $nr_db ) ){
+	$nr_db = 0;
+    }
     my $ffdb        = $self->get_ffdb();
     my $ref_ffdb    = $self->get_ref_ffdb();
 
@@ -843,10 +848,11 @@ sub build_search_db{
 	    #build the DB
 	    my $split_db_path;
 	    if( $type eq "hmm" ){
-		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".hmm", \@split );
+		$nr_db = 0; #Makes no sense to build a NR HMM DB
+		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".hmm", \@split, $nr_db );
 	    }
 	    elsif( $type eq "blast" ){
-		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".fa", \@split );
+		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".fa", \@split, $nr_db );
 	    }
 	    #we do want DBs to be gzipped 
 	    gzip_file( $split_db_path );
@@ -864,6 +870,58 @@ sub build_search_db{
     warn "$type DB successfully built and compressed.\n";
     return $self;
 }
+
+sub cat_db_split{
+    my $db_path      = shift;
+    my $n_proc       = shift;
+    my $ffdb         = shift;
+    my $suffix       = shift;
+    my $ra_families  = shift;
+    my $nr_db        = shift;
+    my @families     = @{ $ra_families };
+
+    my $split_db_path = $db_path . "_" . $n_proc . $suffix;
+    my $fh;
+    open( $fh, ">>$split_db_path" ) || die "Can't open $split_db_path for write: $!\n";
+    foreach my $family( @families ){
+	#do we want a nonredundant version of the DB? 
+	if( $nr_db ){
+	    #make a temp file for the nr 
+	    my $tmp = _build_nr_seq_db( $family );
+	    cat( $tmp, $fh );
+	    unlink( $tmp );
+	}
+	else{
+	    gunzip $family => $fh;
+	}
+    }
+    close $fh;
+    return $split_db_path;
+}
+
+#Note heuristic here: builiding an NR version of each family_db rather than across the complete DB. 
+#Assumes identical sequences are in same family, decreases RAM requirement. First copy of seq is retained
+sub _build_nr_seq_db{
+    my $family    = shift;
+    my $family_nr = $family . "_nr";
+    my $seqin  = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
+    my $seqout = Bio::SeqIO->new( -file => ">$family_nr", -format => 'fasta' );
+    my $dict   = {};
+    while( my $seq = $seqin->next_seq ){
+	my $id       = $seq->display_id();
+	my $sequence = $seq->seq();
+	#if we haven't seen this seq before, print it out
+	if( !defined( $dict->{$sequence} ) ){
+	    $seqout->write_seq( $seq );
+	    $dict->{$sequence}++;
+	}
+	else{
+	    #print "Removing duplication sequence $id\n";
+	}
+    }
+    return $family_nr;
+}
+
 
 sub _grab_seqs_from_lookup_list{
     my $seq_id_list = shift; #list of sequence ids to retain
@@ -989,23 +1047,6 @@ sub build_hmm_db_by_n_splits{
     return $self;
 }
 
-sub cat_db_split{
-    my $db_path      = shift;
-    my $n_proc       = shift;
-    my $ffdb         = shift;
-    my $suffix       = shift;
-    my $ra_families  = shift;
-    my @families     = @{ $ra_families };
-
-    my $split_db_path = $db_path . "_" . $n_proc . $suffix;
-    my $fh;
-    open( $fh, ">>$split_db_path" ) || die "Can't open $split_db_path for write: $!\n";
-    foreach my $family( @families ){
-	gunzip $family => $fh;
-    }
-    close $fh;
-    return $split_db_path;
-}
 
 sub compress_hmmdb{
     my $file  = shift;
