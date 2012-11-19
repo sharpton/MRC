@@ -1088,6 +1088,12 @@ sub translate_reads_remote{
     my @sample_ids = @{ $self->get_sample_ids() };
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     my @job_ids = ();
+    #push translation scripts to remote server
+    my $rscripts        = $self->get_remote_scripts();
+    my $remote_handler  = $self->get_scripts_dir . "/remote/run_transeq_handler.pl";
+    my $remote_script   = $self->get_scripts_dir . "/remote/run_transeq_array.sh";
+    $self->MRC::Run::remote_transfer( $remote_handler, $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts, 'f' );
+    $self->MRC::Run::remote_transfer( $remote_script,  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts, 'f' );
     foreach my $sample_id( @sample_ids ){
 	my $remote_input_dir  = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/raw/";
 	my $remote_output_dir =  $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";

@@ -128,6 +128,11 @@ sub set_scripts_dir{
   return $self->{"workdir"};
 }
 
+sub get_scripts_dir{
+    my $self = shift;
+    return $self->{"workdir"};
+}
+
 =head2 set_ffdb
 
  Title   : set_ffdb

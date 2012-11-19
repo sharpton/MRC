@@ -33,8 +33,8 @@ my $db_hostname    = "lighthouse.ucsf.edu";
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
 my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
 my $nseqs_per_samp_split = 100000; #how many seqs should each sample split file contain?
-my @fcis                 = ( 0, 1 ); #what family construction ids are allowed to be processed?
-my $db_basename          = "SFams_all_v0"; #set the basename of your database here.
+my @fcis                 = ( 0, 1, 2 ); #what family construction ids are allowed to be processed?
+my $db_basename          = "SFams_all_v1.03_500"; #set the basename of your database here.
 my $hmmdb_name           = $db_basename . "_" . $hmm_db_split_size;
 #"SFams_all_v1.03_500"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
@@ -134,6 +134,7 @@ system( "date" );
 
 #Initialize the project
 my $analysis = MRC->new();
+$analysis->set_scripts_dir( $scripts_path );
 #Get a DB connection 
 $analysis->set_dbi_connection( "DBI:mysql:$database_name:$db_hostname" );
 $analysis->set_username( $username );
@@ -344,6 +345,8 @@ if( $remote && $stage ){
     }
 }
 
+die;
+
 BUILDHMMSCRIPT:
 if( $remote ){
     if( $use_hmmscan ){
@@ -396,7 +399,6 @@ if( $remote ){
 	build_remote_lastsearch_script( $b_script_path, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch );
 	$analysis->MRC::Run::remote_transfer( $b_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_b_script_path, "f" );
     }
-
 }
 
 #RUN HMMSCAN
