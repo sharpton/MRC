@@ -319,9 +319,9 @@ if( $remote && $stage ){
 	}
     }
     if( defined( $blastdb_name ) && ( $use_blast || $use_last ) ){
-#	$analysis->MRC::Run::remote_transfer_search_db( $blastdb_name, "blast" );
+	$analysis->MRC::Run::remote_transfer_search_db( $blastdb_name, "blast" );
 	#should do optimization here. Also, should roll over to blast+
-#	$analysis->MRC::Run::gunzip_remote_dbs( $blastdb_name, "blast" );
+	$analysis->MRC::Run::gunzip_remote_dbs( $blastdb_name, "blast" );
 	if( $use_blast ){
 	    print "Building remote formatdb script\n";
 	    my $script_path       = $ffdb . "/projects/" . $analysis->get_project_id() . "/run_formatdb.sh";
@@ -337,15 +337,12 @@ if( $remote && $stage ){
 	    my $r_script_path   = $analysis->get_remote_lastdb_script();
 	    my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits( "blast" );
 	    build_remote_lastdb_script( $script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch );
-	    #built
 	    $analysis->MRC::Run::remote_transfer( $script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path, "f" );
 	    #we can use the blast code here 
 	    $analysis->MRC::Run::format_remote_blast_dbs( $r_script_path );
 	}
     }
 }
-
-die;
 
 BUILDHMMSCRIPT:
 if( $remote ){

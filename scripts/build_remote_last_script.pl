@@ -11,15 +11,15 @@ my $n_splits       = 1;
 my $bigmem         = 0; #should this select a big memory machine or not?
 my $array          = 1; #should this use array jobs or not?
 #might need to tune this variable
-my $memory         = "10G"; #include units in this string, G for Gigabytes, K for Kilobytes
+my $memory         = "5G"; #include units in this string, G for Gigabytes, K for Kilobytes
 #my $walltime       = "336:00:0";
-my $walltime       = "0:29:0";
+my $walltime       = "0:30:0";
 my $projectdir     = ""; #what is the top level project dir on the remote server?
 my $db_name_stem   = ""; #what is the basename of the db splits, ignoring the arrayjob split number?
 my $scratch        = 0; #should we use the local scratch directory?
 my $format         = 0; #last setting: -f optoin; 0=tab, 1=maf
-my $max_multiplicity = 100; #last setting: -m option
-my $min_aln_score    = 70;  #last setting: -e option
+my $max_multiplicity = 1000; #last setting: -m option
+my $min_aln_score    = 40;  #last setting: -e option
 
 GetOptions(
     "o=s"    => \$outfile,
@@ -45,9 +45,10 @@ print OUT join( "\n",
 		"#!/bin/bash", 
 		"#", 
 		"#\$ -S /bin/bash", 
-		"#\$ -l arch=lx24-amd64", 
+#		"#\$ -l arch=lx24-amd64", 
+		"#\$ -l arch=linux-x64", 
 		"#\$ -l h_rt=" . $walltime, 
-		"#\$ -l scratch=" . $memory,
+		"#\$ -l scratch=0.25G",
 		"#\$ -pe smp 2",
 		"#\$ -cwd", 
 		"#\$ -r y",
@@ -63,7 +64,7 @@ if( $bigmem ){
     print OUT "#\$ -l xe5520=true\n";
 }
 else{
-    print OUT "#\$ -l mem_free=1G\n";
+    print OUT "#\$ -l mem_free=" . $memory . "\n";
 }
 #GET VARS FROM COMMAND LINE
 print OUT join( "\n", "INPATH=\$1", "INPUT=\$2", "DBPATH=\$3", "OUTPATH=\$4", "OUTSTEM=\$5", "\n" );

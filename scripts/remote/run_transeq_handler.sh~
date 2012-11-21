@@ -1,0 +1,21 @@
+#!/usr/bin/perl -w
+
+use strict;
+use Getopt::Long;
+
+my( $indir, $outdir );
+GetOptions(
+    "i=s" => \$indir,
+    "o=s" => \$outdir,
+);
+
+opendir( IN, $indir ) || die "Can't opendir $indir for read: $!\n";
+my @infiles = @readdir( IN );
+closedir( OUT );
+foreach my $file( @infiles ){
+    next if( $file =~ m/^\./ );
+    my $input = $indir . $file;
+    my $outfile = $file;
+    $outfile ~= s/raw/orf/;
+    my $output  = $outdir . $outfile; 
+}
