@@ -26,7 +26,9 @@ use Data::Dumper;
 use File::Basename;
 use File::Copy;
 use File::Path qw(make_path rmtree);
+use DBIx::Class::ResultClass::HashRefInflator;
 use DBI; #used only for DBIx::BulkLoader::Mysql
+use DBD::mysql;
 use DBIx::BulkLoader::Mysql; #Used only for multi-row inserts
 
 #returns samples result set
@@ -300,7 +302,7 @@ sub insert_multi_orfs{
     }
     $bulk->flush();
     if( defined $dbh->errstr ){
-	warn(  $dbh->errstr );
+	warn( $dbh->errstr );
 	exit;
     }    
     return $self;
@@ -684,16 +686,64 @@ sub get_orfs_by_read_id{
     return $orfs;
 }
 
+
 sub get_orfs_by_sample{
-    my ( $self, $sample_id ) = @_;
-    my $orfs = $self->get_schema->resultset("Orf")->search(
+    my ( $self, $sample_id, $page ) = @_;
+#    my $orfs = $self->get_schema->resultset("Orf")->search(
+#	{
+#	    sample_id => $sample_id,
+#	}
+#    );
+    my $orfs = $self->get_schema->resultset('Orf')->search( 
 	{
 	    sample_id => $sample_id,
-	}
-    );
+
+	},
+	#paging for management
+#	{
+#	    rows => 10,
+#	    page => $page,
+#	}
+#	{
+#	    result_class => 'DBIx::Class::ResultClass::HashRefInflator',
+#	}
+	);
+    
     return $orfs;
+
+#    $orfs->result_class('DBIx::Class::ResultClass::HashRefInflator');
+#    return $orfs;
+#    my $cursor = $orfs->cursor;
+#    return $cursor;
 }
 
+#some DBI for speed
+sub build_dbh{
+    my( $self ) = @_;
+    my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password ) || die "Can't connect to database: " . $DBI::errstr;
+    return $dbh;
+}
+
+sub get_orfs_by_sample_dbi{
+    my( $self, $dbh, $sample_id ) = @_;
+    my $sth = $dbh->prepare( 'SELECT orf_id, orf_alt_id, read_id FROM orfs WHERE sample_id = ?') || die "Can't prepare statement: " . $dbh->errstr;
+    $sth->execute( $sample_id );
+    return $sth;
+}
+
+sub get_orf_from_alt_id_dbi{
+    my( $self, $dbh, $alt_id, $sample_id ) = @_;
+    my $sth = $dbh->prepare( 'SELECT orf_id, orf_alt_id, read_id FROM orfs WHERE orf_alt_id = ? AND sample_id = ?') || die "Can't prepare statement: " . $dbh->errstr;
+    $sth->execute( $alt_id, $sample_id );
+    return $sth;
+}
+
+
+sub disconnect_dbh{
+    my( $self, $dbh ) = @_;
+    $dbh->disconnect;
+    return $self;
+}
 
 sub get_families_with_orfs_by_project{
     my $self = shift;
@@ -776,7 +826,10 @@ sub get_orf_from_alt_id{
 	{
 	    orf_alt_id => $orf_alt_id,
 	    sample_id  => $sample_id,
-	}
+	},
+#	{
+#	    result_class => 'DBIx::Class::ResultClass::HashRefInflator',
+#	}
     );
     return $orf;
 }
@@ -899,6 +952,17 @@ sub get_family_by_fci{
 	}
     );
     return $families;
+}
+
+sub get_family_from_geneoid{
+    my $self = shift;
+    my $gene_oid = shift;
+    my $rs = $self->get_schema->resultset("Familymember")->search(
+	{
+	    gene_oid => $gene_oid,
+	}
+	);
+    return $rs;
 }
 
 #use if you are certain that your gene_oids map to a single family

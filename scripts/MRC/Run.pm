@@ -32,6 +32,7 @@ use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 use IO::Compress::Gzip qw(gzip $GzipError);
 use Bio::SearchIO;
 use DBIx::Class::ResultClass::HashRefInflator;
+use Benchmark;
 
 sub clean_project{
     my $self       = shift;
@@ -390,7 +391,7 @@ sub classify_reads{
 	    my $database_name = $self->get_blastdb_name();
 	    next unless( $result_file =~ m/$database_name/ );
 	    #because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
-	    $hit_map = $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "last", $hit_map, $query_seqs );
+	    $hit_map = $self->MRC::Run::parse_search_results( $search_results . "/" . $result_file, "last", $hit_map, $query_seqs );	    
 	}
     }
     #now insert the data into the database
@@ -399,8 +400,23 @@ sub classify_reads{
     my %orf_hits   = (); #a hash for bulk loading hits: orf_id -> famid, only works for strict clustering!
     #if we want best hit per metaread, use this block
     if( $top_hit_type eq "read" ){
-	$hit_map = $self->MRC::Run::filter_hit_map_for_top_reads( $sample_id, $is_strict, $hit_map );	
+	print "Filtering hits to identify top hit per read\n";
+	system( "date" );
+	#dbi is needed for speed on big data sets
+#	timethese( 5000, 
+#		   { 
+#		       'Method DBIx'  =>  sub{ $hit_map = $self->MRC::Run::filter_hit_map_for_top_reads( $sample_id, $is_strict, $algo, $hit_map ) },
+#		       'Method DBI'   =>  sub{ $hit_map = $self->MRC::Run::filter_hit_map_for_top_reads_dbi( $sample_id, $is_strict, $algo, $hit_map ) },
+#		       'Method DBI_s' =>  sub{ $hit_map = $self->MRC::Run::filter_hit_map_for_top_reads_dbi_single( $sample_id, $is_strict, $algo, $hit_map ) },
+#		   }
+#	    );
+
+	$hit_map = $self->MRC::Run::filter_hit_map_for_top_reads_dbi_single( $orf_split, $sample_id, $is_strict, $algo, $hit_map );
+	print "finished filtering\n";
+	system( "date" );
     }
+    #dbi for speed
+    my $dbh  = $self->MRC::DB::build_dbh();
     while( my ( $orf_alt_id, $value) = each %$hit_map ){
 	#note: since we know which reads don't have hits, we could, here produce a summary stat regarding unclassified reads...
 	#for now, we won't add these to the datbase
@@ -417,13 +433,22 @@ sub classify_reads{
 	    #blast hits are gene_oids, which map to famids via the database (might change refdb seq headers to include famid in header
 	    #which would enable faster flatfile lookup).
 	    if( $algo eq "blast" || $algo eq "last" ){
-		$famid = $self->MRC::DB::get_famid_from_geneoid( $hit );
+		my $family = $self->MRC::DB::get_family_from_geneoid( $hit );
+		$family->result_class('DBIx::Class::ResultClass::HashRefInflator');
+                #if multiple fams, taking the first that's found. 
+		my $first = $family->first;
+		$famid    = $first->{"famid"};			  
 	    }
 	    else{
 		$famid = $hit;
 	    }	
 	    #because we have an index on sample_id and orf_alt_id, we can speed this up by passing sample id
-	    my $orf_id = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id )->orf_id();
+	    #my $orf_id = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id )->orf_id(); 
+	    #use DBI for speed
+	    my $orfs       = $self->MRC::DB::get_orf_from_alt_id_dbi( $dbh, $orf_alt_id, $sample_id );
+	    my $orf        = $orfs->fetchall_arrayref();
+	    my $orf_id     = $orf->[0][0];
+	    $orfs->finish;
 	    #need to ensure that this stores the raw values, need some upper limit thresholds, so maybe we need classification_id here. simpler to store anything with evalue < 1. Still not sure I want to store this in the DB.
 	    #$self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
 	    
@@ -437,6 +462,7 @@ sub classify_reads{
 	    }
 	}
     }
+    $self->MRC::DB::disconnect_dbh( $dbh );
     #bulk load here:
     if( $self->multi_load() ){
 	print "Bulk loading classified reads into database\n";
@@ -446,40 +472,215 @@ sub classify_reads{
 }
 
 sub filter_hit_map_for_top_reads{
-    my ( $self, $sample_id, $is_strict, $hit_map ) = @_;
-    my $orfs = $self->MRC::DB::get_orfs_by_sample( $sample_id );
+    my ( $self, $sample_id, $is_strict, $algo, $hit_map ) = @_;
+#    print "Getting top read hit from $algo\n";
     my $read_map = {}; #stores best hit data for each read
-    while( my $orf = $orfs->next() ){
-	my $orf_alt_id = $orf->orf_alt_id();
-	next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
-	my $read_id = $orf->read_id();
-	if( !defined( $read_map->{$read_id} ) ){
-#	    print "adding orf $orf_alt_id\n";
-	    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
-	    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-	    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-	    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+#    print "initialized read map\n";    
+    #to speed up the db interaction, we're going to grab orf_ids from disc
+    my $path_to_split_orfs = $self->get_sample_path( $sample_id ) . "/orfs/";
+    foreach my $orf_split_file_name( @{ $self->MRC::DB::get_split_sequence_paths( $path_to_split_orfs , 1 ) } ) {
+	open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!\n";
+	my $count = 0;
+	while( <SEQS> ){
+	    chomp $_;
+	    if( $_ =~ m/\>(.*?)$/ ){	     
+		my $orf_alt_id = $1;
+		next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+		my $orf        = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id );
+		my $read_id    = $orf->{"read_id"};
+#PAGER TEST HERE
+#    my $page = 1;
+#    while( my $orfs = $self->MRC::DB::get_orfs_by_sample( $sample_id, $page ) ){
+#	print "getting page $page\n";
+#	if( $orfs->all == 0 ){
+#	    last;
+#	}
+#	$page++;
+#	for( $orfs->all ){
+#	    my $orf = $_;
+#	    my $orf_alt_id = $orf->orf_alt_id();
+#	    print $orf_alt_id . "\n";
+#    }
+		if( !defined( $read_map->{$read_id} ) ){
+#		    print "adding orf $orf_alt_id\n";
+		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
+		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		}
+		else{
+#		    print "$orf_alt_id is in our hit map...\n";
+		    #for now, we'll simply sort on evalue, since they both pass coverage threshold
+		    if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
+			( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
+			){
+			my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
+#			print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
+			$hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
+	#		print "$read_id\n";
+			$read_map->{$read_id}->{"target"}   = $orf_alt_id;
+			$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+			$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+			$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		    }
+		    else{
+#			print "Canceling $orf_alt_id:\n";
+	#		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
+	#		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
+	#		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
+			#get rid of the hit if it's not better than the current top for the read
+			$hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+		    }
+		}
+	    }
 	}
-	else{
-	    print "$orf_alt_id is in hash...\n";
-	    #for now, we'll simply sort on evalue, since they both pass coverage threshold
-	    if( $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ){
-		print "Updating $orf_alt_id\n";
+	close SEQS;
+    }
+#    $orfs->finish;
+#    $self->MRC::DB::disconnect_dbh( $dbh );
+    $read_map = {};
+    return $hit_map;
+}
+
+sub filter_hit_map_for_top_reads_dbi{
+    my ( $self, $sample_id, $is_strict, $algo, $hit_map ) = @_;
+#    print "Getting top read hit from $algo\n";
+    my $read_map = {}; #stores best hit data for each read
+#    print "initialized read map\n";    
+    #to speed up the db interaction, we're going to grab orf_ids from disc
+    my $path_to_split_orfs = $self->get_sample_path( $sample_id ) . "/orfs/";
+#    foreach my $orf_split_file_name( @{ $self->MRC::DB::get_split_sequence_paths( $path_to_split_orfs , 1 ) } ) {
+#	open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!\n";
+#	while( <SEQS> ){
+#	    chomp $_;
+#	    if( $_ =~ m/\>(.*?)$/ ){
+#		my $orf_alt_id = $1;
+#		my $orf        = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id );
+#		my $read_id    = $orf->{"read_id"};
+#PAGER TEST HERE
+#    my $page = 1;
+#    while( my $orfs = $self->MRC::DB::get_orfs_by_sample( $sample_id, $page ) ){
+#	print "getting page $page\n";
+#	if( $orfs->all == 0 ){
+#	    last;
+#	}
+#	$page++;
+#	for( $orfs->all ){
+#	    my $orf = $_;
+#	    my $orf_alt_id = $orf->orf_alt_id();
+#	    print $orf_alt_id . "\n";
+#    }
+
+#DBI TEST HERE
+    my $dbh  = $self->MRC::DB::build_dbh();
+    my $orfs = $self->MRC::DB::get_orfs_by_sample_dbi( $dbh, $sample_id );
+    my $max_rows = 10000;
+    while( my $vals = $orfs->fetchall_arrayref( {}, $max_rows ) ){
+#	print "grabbing rows\n";
+#	system( "date" );
+	foreach my $orf( @$vals ){
+#	    print Dumper $orf;
+	    my $orf_alt_id = $orf->{"orf_alt_id"};
+	    next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+	    my $read_id = $orf->{"read_id"};
+	    if( !defined( $read_map->{$read_id} ) ){
+#		print "adding orf $orf_alt_id\n";
 		$read_map->{$read_id}->{"target"}   = $orf_alt_id;
 		$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
 		$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
 		$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
 	    }
 	    else{
-		print "Canceling $orf_alt_id\n";
-		#get rid of the hit if it's not better than the current top for the read
-		$hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+#		print "$orf_alt_id is in our hit map...\n";
+		#for now, we'll simply sort on evalue, since they both pass coverage threshold
+		if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
+		    ( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
+		    ){
+		    my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
+#		    print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
+		    $hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
+#		    print "$read_id\n";
+		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
+		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		}
+		else{
+#		    print "Canceling $orf_alt_id:\n";
+		    #		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
+		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
+		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
+		    #get rid of the hit if it's not better than the current top for the read
+		    $hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+		}
 	    }
 	}
-    }
+    } 
+    $orfs->finish;
+    $self->MRC::DB::disconnect_dbh( $dbh );
     $read_map = {};
     return $hit_map;
 }
+
+sub filter_hit_map_for_top_reads_dbi_single{
+    my ( $self, $orf_split, $sample_id, $is_strict, $algo, $hit_map ) = @_;
+#    print "Getting top read hit from $algo\n";
+    my $read_map = {}; #stores best hit data for each read
+#    print "initialized read map\n";    
+    #to speed up the db interaction, we're going to grab orf_ids from disc
+    my $path_to_split_orfs = $self->get_sample_path( $sample_id ) . "/orfs/";
+    my $orf_split_file_name = $path_to_split_orfs . $orf_split;
+    my $dbh  = $self->MRC::DB::build_dbh();
+    open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!\n";
+    while( <SEQS> ){
+	chomp $_;
+	if( $_ =~ m/\>(.*?)$/ ){
+	    my $orf_alt_id = $1;
+	    next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );		
+	    my $orfs       = $self->MRC::DB::get_orf_from_alt_id_dbi( $dbh, $orf_alt_id, $sample_id );
+	    my $orf        = $orfs->fetchall_arrayref();
+	    my $read_id = $orf->[0][2];
+	    if( !defined( $read_map->{$read_id} ) ){
+#		print "adding orf $orf_alt_id\n";
+		$read_map->{$read_id}->{"target"}   = $orf_alt_id;
+		$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+	    }
+	    else{
+#		print "$orf_alt_id is in our hit map...\n";
+		#for now, we'll simply sort on evalue, since they both pass coverage threshold
+		if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
+		    ( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
+		    ){
+		    my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
+#		    print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
+		    $hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
+#		    print "$read_id\n";
+		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
+		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		}
+		else{
+#		    print "Canceling $orf_alt_id:\n";
+		    #		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
+		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
+		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
+		    #get rid of the hit if it's not better than the current top for the read
+		    $hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+		}
+	    }
+	    $orfs->finish;	
+	}
+    }
+    close SEQS;
+    $self->MRC::DB::disconnect_dbh( $dbh );
+    $read_map = {};
+    return $hit_map;
+}
+
+
 
 sub parse_search_results{
     my $self         = shift;
@@ -499,7 +700,7 @@ sub parse_search_results{
 	%seqlens   = %{ _get_sequence_lengths_from_file( $orfs_file ) };
     }
     #open the file and process each line
-    print "classifying reads from $file\n";
+#    print "classifying reads from $file\n";
     open( RES, "$file" ) || die "can't open $file for read: $!\n";    
     while(<RES>){
 	chomp $_;

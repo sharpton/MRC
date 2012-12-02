@@ -21,6 +21,10 @@ my $format         = 0; #last setting: -f optoin; 0=tab, 1=maf
 my $max_multiplicity = 1000; #last setting: -m option
 my $min_aln_score    = 40;  #last setting: -e option
 
+#temp settings...
+$max_multiplicity = 100; #last setting: -m option
+$min_aln_score    = 70;  #last setting: -e option
+
 GetOptions(
     "o=s"    => \$outfile,
 #    "d=s"    => \$in_split_db_dir,

@@ -4,7 +4,7 @@ use strict;
 use Getopt::Long;
 
 my( $inseqs, $outseqs );
-my $seq_len_min = 10; #in AA length; 
+my $seq_len_min = 0; #in AA length; 
 GetOptions(
     "i=s" => \$inseqs,
     "o=s" => \$outseqs,

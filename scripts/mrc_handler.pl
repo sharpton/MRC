@@ -16,6 +16,7 @@ use Data::Dumper;
 use Bio::SeqIO;
 use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
+use Benchmark;
 
 print "perl mrc_handler.pl @ARGV\n";
  
@@ -33,8 +34,8 @@ my $db_hostname    = "lighthouse.ucsf.edu";
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
 my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
 my $nseqs_per_samp_split = 100000; #how many seqs should each sample split file contain?
-my @fcis                 = ( 0, 1, 2 ); #what family construction ids are allowed to be processed?
-my $db_basename          = "SFams_all_v1.03_500"; #set the basename of your database here.
+my @fcis                 = ( 0, 1 ); #what family construction ids are allowed to be processed?
+my $db_basename          = "SFams_all_v0"; #set the basename of your database here.
 my $hmmdb_name           = $db_basename . "_" . $hmm_db_split_size;
 #"SFams_all_v1.03_500"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
@@ -66,10 +67,10 @@ my $check          = 0;
 my $evalue         = 0.001; #a float
 #my $coverage       = 0.8;
 my $coverage       = 0; #between 0-1
-my $score          = 20; #optionally set
+my $score          = 85; #optionally set
 my $is_strict      = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
 my $top_hit        = 1;
-my $top_hit_type   = "orf"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
+my $top_hit_type   = "read"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
 
 my $use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
 my $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
@@ -518,7 +519,6 @@ else{
 	}
     }
 }
-
 die;
 
 
