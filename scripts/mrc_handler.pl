@@ -61,10 +61,6 @@ my $scripts_path   = $ENV{'MRC_LOCAL'} . "/scripts" ; # <-- point to the locatio
 
 
 
-
-
-
-
 my $project_file   = ""; #where are the project files to be processed?
 my $family_subset_list; # path to a file that lists (one per line) which family ids you want to include. Defaults to all. Will probably come back and make this a seperate familyconstruction, e.g. /home/sharpton/projects/MRC/data/subset_perfect_famids.txt
 
@@ -74,7 +70,7 @@ my $db_hostname   = undef;
 
 
 #remote compute (e.g., SGE) vars
-my $remote         = 1;
+my $is_remote         = 1;
 my $stage          = 0;
 my $remote_hostname  = undef; #"chef.compbio.ucsf.edu";
 my $remote_user      = undef; #"sharpton";
@@ -143,8 +139,8 @@ my %skip_samps = ();
 
 # --dbuser=alexgw --dbpass=$PASS --dbhost=lighthouse.ucsf.edu
 
-GetOptions("d=s"        => \$local_ffdb
-	   ,    "i=s"   => \$project_file
+GetOptions("ffdb|d=s"        => \$local_ffdb
+	   ,    "projdir|i=s"   => \$project_file
 
 	   # Database-server related variables
 	   , "dbuser|u=s"   => \$db_username
@@ -156,19 +152,19 @@ GetOptions("d=s"        => \$local_ffdb
 	   , "ruser=s"     => \$remote_user
 	   , "rdir=s"      => \$rffdb
 
-	   ,    "h=s"   => \$hmmdb_name
-	   ,    "b=s"   => \$blastdb_name
+	   ,    "hmmdb|h=s"   => \$hmmdb_name
+	   ,    "blastdb|b=s"   => \$blastdb_name
 
 	   ,    "sub=s" => \$family_subset_list
 
 	   ,    "stage!"      => \$stage # should we "stage" the database onto the remote machine?
 	   ,    "hdb!"   => \$hmmdb_build
 	   ,    "bdb!"   => \$blastdb_build
-	   ,    "f!"     => \$force_db_build
+	   ,    "forcedb!"     => \$force_db_build
 
-	   ,    "n=i"   => \$hmm_db_split_size
-	   ,    "w=i"   => \$waittime        #   <-- in seconds
-	   ,    "r"     => \$remote
+	   ,    "hmmsplit|n=i"   => \$hmm_db_split_size
+	   ,    "wait|w=i"   => \$waittime        #   <-- in seconds
+	   ,    "remote!"     => \$is_remote
 	   ,    "pid:i"      => \$input_pid
 	   ,    "goto|g=s"   => \$goto
 	   ,    "z=i"          => \$nseqs_per_samp_split
@@ -199,7 +195,7 @@ if (!defined($db_pass)) {
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
 #try to detect if we need to stage the database or not on the remote server based on runtime options
-if ( ( $hmmdb_build || $blastdb_build ) && $remote ){
+if ( ( $hmmdb_build || $blastdb_build ) && $is_remote ){
     $stage = 1;
 }
 
@@ -229,14 +225,14 @@ if ( $use_hmmscan || $use_hmmsearch ){
 if ( $use_blast || $use_last ){
     $analysis->set_blastdb_name( $blastdb_name );
 }
-$analysis->is_remote( $remote );
+$analysis->is_remote( $is_remote );
 #set some clustering definitions here
 $analysis->is_strict_clustering( $is_strict );
 $analysis->set_evalue_threshold( $evalue );
 $analysis->set_coverage_threshold( $coverage );
 $analysis->set_score_threshold( $score );
 #if using a remote server for compute, set vars here
-if ( $remote ){
+if ( $is_remote ){
     $analysis->set_remote_server( $remote_hostname );
     $analysis->set_remote_username( $remote_user );
     $analysis->set_remote_ffdb( $rffdb );
@@ -289,7 +285,7 @@ if (-d $project_file) {
     ############
     #Load Data. Project id becomes a project var in load_project
     $analysis->MRC::Run::load_project( $project_file, $nseqs_per_samp_split );
-    if ( $remote ){
+    if ( $is_remote ){
 	$analysis->MRC::Run::load_project_remote( $analysis->get_project_id() );
 	$analysis->set_remote_hmmscan_script( $analysis->get_remote_project_path() . "run_hmmscan.sh" );
 	$analysis->set_remote_hmmsearch_script( $analysis->get_remote_project_path() . "run_hmmsearch.sh" );
@@ -308,7 +304,7 @@ else{
 #TRANSLATE READS
 #at this point, project, samples and metareads are loaded into the DB.
 #translate the metareads
-if ( $remote ){
+if ( $is_remote ){
     print printhead( "TRANSLATING READS" );
     system( "date" );
     #run transeq remotely, check on SGE job status, pull results back locally once job complete.
@@ -383,7 +379,7 @@ if ( $blastdb_build ){
 }
 
 REMOTESTAGE:
-if ( $remote && $stage ){
+if ( $is_remote && $stage ){
     print printhead( "STAGING REMOTE SEARCH DATABASE" );
     system( "date" );
     if ( defined( $hmmdb_name ) && ( $use_hmmsearch || $use_hmmscan ) ){
@@ -420,7 +416,7 @@ if ( $remote && $stage ){
 }
 
 BUILDHMMSCRIPT:
-if ( $remote ){
+if ( $is_remote ){
     if ( $use_hmmscan ){
 	print printhead( "BUILDING REMOTE HMMSCAN SCRIPT" );
 	my $h_script_path   = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/run_hmmscan.sh";
@@ -475,7 +471,7 @@ if ( $remote ){
 
 #RUN HMMSCAN
 HMMSCAN:
-if ( $remote ){
+if ( $is_remote ){
     print printhead( "RUNNING REMOTE SEARCH" );
     system( "date" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
@@ -514,7 +510,7 @@ else{
 
 #GET REMOTE RESULTS
 GETRESULTS:
-if ( $remote ){
+if ( $is_remote ){
     print printhead( "GETTING REMOTE RESULTS" );
     system( "date" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
@@ -536,7 +532,7 @@ if ( $remote ){
 
 #PARSE AND LOAD RESULTS
 CLASSIFYREADS:
-if ( $remote ){
+if ( $is_remote ){
     print printhead( "CLASSIFYING REMOTE SEARCH RESULTS" );
     system( "date" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
@@ -747,29 +743,27 @@ __DATA__
 
 mrc_handler.pl  [OPTIONS]
 
-MRC program by Tom Sharpton.
+Last updated Feb 2013.
 
-THIS PROGRAM DOES SOMETHING. YOU GIVE IT ONE THING AND THIS OTHER THING,
-AND THE OUTPUT IS THIS FINAL THING.
+MRC (Metagenomics Read Classifier) program by Tom Sharpton.
+
+Handles a bunch of database and cluster stuff.
 
 See the examples below for more information.
 
-CAVEATS:
-
-MAYBE IT TAKES 30 MINUTES TO RUN.
-
 EXAMPLES:
+
+perl mrc_handler.pl --something --something
 
 (put some examples here)
 
 OPTIONS:
 
+--ffdb=/PATH/TO/FLATFILES  (or -d /PATH/TO/FLATFILES)
+    local flat file database path
 
--d STRING
-    local flat file database
-
--i STRING
-    project file ?
+--projdir=/PATH/TO/PROJECT/DIR (or -i /PATH/TO/PROJECT/DIR)
+    project directory? Local?
 
 DATABASE ARGUMENTS:
 
@@ -791,57 +785,63 @@ REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 
 --ruser=USERNAME
     Remote username for logging into the remote computational cluster / machine.
-    Note
---rpass=PASSWORD (in plain text)
-    Your login for the remote computational cluster, in SUPER INSECURE PLAIN TEXT.
+    Note that you have to set up passphrase-less SSH for this to work. Google it!
 
-	   # Remote computational cluster server related variables
-	   , "rhost=s"     => \$remote_hostname
-	   , "ruser=s"     => \$remote_user
-	   , "rdir=s"      => \$rffdb
+--rdir=/PATH/ON/REMOTE/SERVER
+    Remote path where we will save results
 
-	   ,    "h=s"   => \$hmmdb_name
-	   ,    "b=s"   => \$blastdb_name
+--hmmdb=STRING (or -h STRING)
+   HMM database name
 
-	   ,    "sub=s" => \$family_subset_list
+--blastdb=STRING (or -b STRING)
+   BLAST database name
 
-	   ,    "stage!"      => \$stage # should we "stage" the database onto the remote machine?
-	   ,    "hdb!"   => \$hmmdb_build
-	   ,    "bdb!"   => \$blastdb_build
-	   ,    "f!"     => \$force_db_build
+--sub=STRING
+    Not sure what this is. ("FAMILY SUBSET LIST")
 
-	   ,    "n=i"   => \$hmm_db_split_size
-	   ,    "w=i"   => \$waittime        #   <-- in seconds
-	   ,    "r"     => \$remote
-	   ,    "pid:i"      => \$input_pid
-	   ,    "goto|g=s"   => \$goto
-	   ,    "z=i"          => \$nseqs_per_samp_split
+--stage
+    Causes the remote database to get copied, I think. Slow!
+
+--hdb
+    Should we build the hmm db?
+
+--bdb
+    Should we build the blast db?
+
+--forcedb
+    Force database build.
+
+-n INTEGER
+    HMM database split size.
+
+--wait=SECONDS (or -w SECONDS)
+    How long to wait for... something.
+
+--remote
+    Use a remote compute cluster.
+
+--pid=INTEGER
+    Process ID for something
 
 
+--goto=STRING
+    Go to a specific step in the computation.
 
+-z INTEGER
+    n seqs per sample split (?)
 
-	   ,    "e=f"  => \$evalue
-	   ,    "c=f"  => \$coverage
-	   ,    "verbose|v!" => \$verbose
+-e FLOAT
+    E-value
 
-  --delim = DELIMITER   (Default: tab)
-     Sets the input delimiter to DELIMITER.
+-c FLOAT
+    Coverage
 
-EXAMPLES:
-
-MYPROGRAM.pl --help
-  Displays this help
-
-MYPROGRAM.pl  --works=yes --bugs=4  -q
-  Does nothing. -q indicates "quiet" operation.
+--verbose (or -v)
+    Output verbose messages.
 
 
 KNOWN BUGS:
 
-  None known.
-
-TO DO:
-
-  Add ???.
+  None known at the moment...
 
 --------------
