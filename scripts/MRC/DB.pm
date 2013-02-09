@@ -21,6 +21,7 @@
 package MRC::DB;
 
 use strict;
+
 use Sfams::Schema;
 use Data::Dumper;
 use File::Basename;

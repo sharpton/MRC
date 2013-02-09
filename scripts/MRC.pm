@@ -18,9 +18,11 @@
 #along with this program (see LICENSE.txt).  If not, see 
 #<http://www.gnu.org/licenses/>.
 
+use strict;
+use warnings;
+
 package MRC;
 
-use strict;
 use MRC::DB;
 use MRC::Run;
 use Sfams::Schema;
