@@ -44,8 +44,7 @@ use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
 use Benchmark;
 
-
-sub dieWithUsageError($) { print($_[0] . "\n"); print STDOUT <DATA>; die($_[0] . "\n"); }
+sub dieWithUsageError($) { print("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n"); print STDOUT <DATA>; die("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n"); }
 
 sub warnPrint($) { print("[WARNING]: " . $_[0] . "\n"); }
 
@@ -70,8 +69,8 @@ my $db_hostname   = undef;
 
 
 #remote compute (e.g., SGE) vars
-my $is_remote         = 1;
-my $stage          = 0;
+my $is_remote        = 1; # By default, assume we ARE using a remote compute cluster
+my $stage            = 0; # By default, do NOT stage the database (this takes a long time)!
 my $remote_hostname  = undef; #"chef.compbio.ucsf.edu";
 my $remote_user      = undef; #"sharpton";
 my $remoteMRCdir     = "/netapp/home/sharpton/projects/MRC"; # added by Alex
@@ -118,13 +117,16 @@ my $use_last       = 1; #should we use last to compare SFam reference sequences 
 my $waittime       = 30;
 my $input_pid      = "";
 my $goto           = ""; #B=Build HMMdb
-my $verbose              = 0;
+
 my $scratch              = 0; #should we use scratch space on remote machine?
 my $multi                = 1; #should we multiload our inserts to the database?
 my $bulk_insert_count    = 1000;
 my $database_name        = "Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
 my $schema_name          = "Sfams"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
 my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
+
+my $verbose              = 0; # Print extra diagnostic info?
+my $isDryrun             = 0; # Is this just a "fake" run, not a real one?
 
 #hacky hardcoding on mh_scaffold pilot 2 to test random die bug...
 my %skip_samps = ();
@@ -173,10 +175,13 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,    "e=f"  => \$evalue
 	   ,    "c=f"  => \$coverage
 	   ,    "verbose|v!" => \$verbose
+	   
+	   ,    "dryrun|dry!" => \$isDryrun
     );
 
 
-my $rscripts       = "${remoteMRCdir}/scripts"; # this should probably be automatically set to a subdir of rffdb
+my $remoteScriptDir       = "${remoteMRCdir}/scripts"; # this should probably be automatically set to a subdir of rffdb
+
 
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
@@ -187,20 +192,17 @@ if (!defined($db_pass)) {
     $db_pass = ''; # try a blank password, if the user didn't specify anything.
 }
 
-
-
 (defined($remote_hostname)) or dieWithUsageError("--rhost (remote computational cluster primary note) must be specified. Example 'main.cluster.youruniversity.edu')!");
 (defined($remote_user)) or dieWithUsageError("--ruser (remote computational cluster username) must be specified. Example 'someguy')!");
 
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
 #try to detect if we need to stage the database or not on the remote server based on runtime options
-if ( ( $hmmdb_build || $blastdb_build ) && $is_remote ){
+if ($is_remote and ($hmmdb_build or $blastdb_build)) {
     $stage = 1;
 }
 
-print "Starting classification run, processing $project_file\n";
-system( "date" );
+print(printhead("Starting classification run, processing $project_file\n"));
 
 #Initialize the project
 my $analysis = MRC->new();
@@ -219,56 +221,50 @@ $analysis->set_ref_ffdb( $local_reference_ffdb );
 $analysis->set_fcis( \@fcis );
 #constrain analysis to a set of families of interest
 $analysis->set_family_subset( $family_subset_list, $check );
-if ( $use_hmmscan || $use_hmmsearch ){
+if ( $use_hmmscan || $use_hmmsearch ) {
     $analysis->set_hmmdb_name( $hmmdb_name );
 }
-if ( $use_blast || $use_last ){
+if ( $use_blast || $use_last ) {
     $analysis->set_blastdb_name( $blastdb_name );
 }
-$analysis->is_remote( $is_remote );
+$analysis->is_remote($is_remote);
 #set some clustering definitions here
 $analysis->is_strict_clustering( $is_strict );
 $analysis->set_evalue_threshold( $evalue );
 $analysis->set_coverage_threshold( $coverage );
 $analysis->set_score_threshold( $score );
 #if using a remote server for compute, set vars here
-if ( $is_remote ){
+if ($is_remote) {
     $analysis->set_remote_server( $remote_hostname );
     $analysis->set_remote_username( $remote_user );
     $analysis->set_remote_ffdb( $rffdb );
-    $analysis->set_remote_scripts( $rscripts );
+    $analysis->set_remote_scripts( $remoteScriptDir );
     $analysis->build_remote_ffdb( $verbose ); #checks if necessary to build and then builds
 }
 
-print( "Starting a classification run using the following settings:\n" );
-if ( $use_last ){
-    print "Algorithm: last\n";
-}
-if ( $use_blast ){
-    print "Algorithm: blast\n";
-}
-if ( $use_hmmscan ){
-    print "Algorithm: hmmscan\n";
-}
-if ( $use_hmmsearch ){
-    print "Algorithm: hmmsearch\n";
-}
-print "Evalue threshold: " . $evalue . "\n";
-print "Coverage threshold: " . $coverage . "\n";
+print("Starting a classification run using the following settings:\n");
+($use_last) && print("* Algorithm: last\n");
+($use_blast) && print("* Algorithm: blast\n");
+($use_hmmscan) && print("* Algorithm: hmmscan\n");
+($use_hmmsearch) && print("* Algorithm: hmmsearch\n");
+print("* Evalue threshold: ${evalue}\n");
+print("* Coverage threshold: ${coverage}\n");
 
 #block tries to jump to a module in handler for project that has already done some work
 if ($input_pid && $goto) {
-    $analysis->MRC::Run::back_load_project( $input_pid );
+    $analysis->MRC::Run::back_load_project($input_pid);
     #this is a little hacky...come clean this up!
     #$analysis->MRC::Run::get_part_samples( $project_file );
     $analysis->MRC::Run::back_load_samples();
-    if ( $goto eq "B" ){ warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
-    if ( $goto eq "R" ){ warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
-    if ( $goto eq "S" ){ warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
-    if ( $goto eq "H" ){ warn "Skipping to hmmscan step!\n"; goto HMMSCAN; }
-    if ( $goto eq "G" ){ warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
-    if ( $goto eq "C" ){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
-    if ( $goto eq "O" ){ warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
+    $goto = uc($goto); ## upper case it
+    if ($goto eq "B" or $goto eq "BUILD"){ warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
+    if ($goto eq "R" or $goto eq "REMOTE"){ warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
+    if ($goto eq "S" or $goto eq "SCRIPT"){ warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
+    if ($goto eq "H" or $goto eq "HMM"){ warn "Skipping to hmmscan step!\n"; goto HMMSCAN; }
+    if ($goto eq "G" or $goto eq "GET"){ warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
+    if ($goto eq "C" or $goto eq "CLASSIFY"){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
+    if ($goto eq "O" or $goto eq "OUTPUT"){ warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
+    die "If we got to here in the code, it means there was an INVALID FLAG PASSED TO THE GOTO OPTION.";
 }
 
 #LOAD PROJECT, SAMPLES, METAREADS
@@ -276,8 +272,7 @@ if ($input_pid && $goto) {
 if (-d $project_file) {
     print printhead( "LOADING PROJECT" );
     #Partitioned samples project
-    #get the samples associated with project. a project description can be left in 
-    #DESCRIPT.txt
+    #get the samples associated with project. a project description can be left in DESCRIPT.txt
     $analysis->MRC::Run::get_partitioned_samples( $project_file );
     ############
     #come back and add a check that ensures sequences associated with samples
@@ -285,7 +280,7 @@ if (-d $project_file) {
     ############
     #Load Data. Project id becomes a project var in load_project
     $analysis->MRC::Run::load_project( $project_file, $nseqs_per_samp_split );
-    if ( $is_remote ){
+    if ($is_remote){
 	$analysis->MRC::Run::load_project_remote( $analysis->get_project_id() );
 	$analysis->set_remote_hmmscan_script( $analysis->get_remote_project_path() . "run_hmmscan.sh" );
 	$analysis->set_remote_hmmsearch_script( $analysis->get_remote_project_path() . "run_hmmsearch.sh" );
@@ -297,24 +292,23 @@ if (-d $project_file) {
     }
 }
 else{
-  warn "Must provide a properly structured project directory. Cannot continue!\n";
-  die "Must provide a properly structured project directory. Cannot continue!\n";
+  die("Must provide a properly structured project directory. Cannot continue!\n");
 }
 
 #TRANSLATE READS
 #at this point, project, samples and metareads are loaded into the DB.
 #translate the metareads
-if ( $is_remote ){
+if ($is_remote){
     print printhead( "TRANSLATING READS" );
-    system( "date" );
     #run transeq remotely, check on SGE job status, pull results back locally once job complete.
     my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
     $analysis->MRC::Run::translate_reads_remote( $waittime, $remote_logs, $split_orfs );	
 }
 else{
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-	my $sample_reads = $local_ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/raw/";
-	my $orfs_file     = $local_ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/orfs/";
+	my projID = $analysis->get_project_id();
+	my $sample_reads = "${local_ffdb}/projects/$projID/${sample_id}/raw/";
+	my $orfs_file     = "${local_ffdb}/projects/$projID/${sample_id}/orfs/";
 	#could do some file splitting here to speed up the remote compute
 	$analysis->MRC::Run::translate_reads( $sample_reads, $orfs_file );	
     }
@@ -323,9 +317,9 @@ else{
 #LOAD ORFS
 #reads are translated, now load them into the DB
 print printhead( "LOADING TRANSLATED READS" );
-system( "date" );
 foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-    my $in_orf_dir = $local_ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/orfs/";
+    my projID = $analysis->get_project_id();
+    my $in_orf_dir = "$local_ffdb/projects/$projID/$sample_id/orfs/";
     my $count = 0;
     foreach my $in_orfs( @{ $analysis->MRC::DB::get_split_sequence_paths( $in_orf_dir, 1 ) } ){
 	print "Processing orfs in $in_orfs\n";
@@ -360,7 +354,6 @@ if ( $hmmdb_build ){
 	warn( "It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n" );
     }
     print printhead( "BUILDING HMM DATABASE" );
-    system( "date" );
     $analysis->MRC::Run::build_search_db( $hmmdb_name, $hmm_db_split_size, $force_db_build, "hmm" );
 }
 
@@ -373,7 +366,6 @@ if ( $blastdb_build ){
 	warn( "It seems that you want to build a blast database, but you aren't invoking blast or last. While I will continue, you should check your settings to make certain you aren't making a mistake.\n" );
     }
     print printhead( "BUILDING BLAST DATABASE" );
-    system( "date" );
     #need to build the nr module here
     $analysis->MRC::Run::build_search_db( $blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only, $nr_db );
 }
@@ -381,7 +373,6 @@ if ( $blastdb_build ){
 REMOTESTAGE:
 if ( $is_remote && $stage ){
     print printhead( "STAGING REMOTE SEARCH DATABASE" );
-    system( "date" );
     if ( defined( $hmmdb_name ) && ( $use_hmmsearch || $use_hmmscan ) ){
 	$analysis->MRC::Run::remote_transfer_search_db( $hmmdb_name, "hmm" );
 	if ( !$scratch ){
@@ -389,26 +380,28 @@ if ( $is_remote && $stage ){
 	    $analysis->MRC::Run::gunzip_remote_dbs( $hmmdb_name, "hmm" );
 	}
     }
+
+    my $projID = $analysis->get_project_id();
     if ( defined( $blastdb_name ) && ( $use_blast || $use_last ) ){
 	$analysis->MRC::Run::remote_transfer_search_db( $blastdb_name, "blast" );
 	#should do optimization here. Also, should roll over to blast+
 	$analysis->MRC::Run::gunzip_remote_dbs( $blastdb_name, "blast" );
-	if ( $use_blast ){
-	    print "Building remote formatdb script\n";
-	    my $script_path       = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/run_formatdb.sh";
-	    my $r_script_path     = $analysis->get_remote_formatdb_script();
-	    my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits( "blast" );
-	    build_remote_formatdb_script( $script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch );
-	    $analysis->MRC::Run::remote_transfer( $script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path, "f" );
+	if ($use_blast){
+	    print "Building remote formatdb script...\n";
+	    my $formatdb_script_path = "$local_ffdb/projects/$projID/run_formatdb.sh";
+	    my $r_script_path        = $analysis->get_remote_formatdb_script();
+	    my $n_blastdb_splits     = $analysis->MRC::DB::get_number_db_splits( "blast" );
+	    build_remote_formatdb_script( $formatdb_script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch );
+	    $analysis->MRC::Run::remote_transfer( $formatdb_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path, "f" );
 	    $analysis->MRC::Run::format_remote_blast_dbs( $r_script_path );
 	}
-	if ( $use_last ){
-	    print "Building remote lastdb script\n";
-	    my $script_path     = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/run_lastdb.sh";
-	    my $r_script_path   = $analysis->get_remote_lastdb_script();
+	if ($use_last){
+	    print "Building remote lastdb script...\n";
+	    my $lastdb_script     = "$local_ffdb/projects/$projID/run_lastdb.sh";
+	    my $r_script_path     = $analysis->get_remote_lastdb_script();
 	    my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits( "blast" );
-	    build_remote_lastdb_script( $script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch );
-	    $analysis->MRC::Run::remote_transfer( $script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path, "f" );
+	    build_remote_lastdb_script( $lastdb_script, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch );
+	    $analysis->MRC::Run::remote_transfer( $lastdb_script, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path, "f" );
 	    #we can use the blast code here 
 	    $analysis->MRC::Run::format_remote_blast_dbs( $r_script_path );
 	}
@@ -416,10 +409,11 @@ if ( $is_remote && $stage ){
 }
 
 BUILDHMMSCRIPT:
-if ( $is_remote ){
+if ($is_remote){
+    my $projID = $analysis->get_project_id();
     if ( $use_hmmscan ){
 	print printhead( "BUILDING REMOTE HMMSCAN SCRIPT" );
-	my $h_script_path   = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/run_hmmscan.sh";
+	my $h_script_path   = "$local_ffdb/projects/$projID/run_hmmscan.sh";
 	my $r_h_script_path = $analysis->get_remote_hmmscan_script();
 	my $n_hmm_searches  = $analysis->MRC::DB::get_number_hmmdb_scans( $hmm_db_split_size );
 	print "number of hmm searches: $n_hmm_searches\n";
@@ -430,8 +424,7 @@ if ( $is_remote ){
     }
     if ( $use_hmmsearch ){
 	print printhead( "BUILDING REMOTE HMMSEARCH SCRIPT" );
-	system( "date" );
-	my $h_script_path   = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/run_hmmsearch.sh";
+	my $h_script_path   = "$local_ffdb/projects/$projID/run_hmmsearch.sh";
 	my $r_h_script_path = $analysis->get_remote_hmmsearch_script();
 #	my $n_hmm_searches  = $analysis->MRC::DB::get_number_hmmdb_scans( $hmm_db_split_size );
 	my $n_sequences     = $analysis->MRC::DB::get_number_sequences( $nseqs_per_samp_split );
@@ -443,8 +436,7 @@ if ( $is_remote ){
     }
     if ( $use_blast ){
 	print printhead( "BUILDING REMOTE BLAST SCRIPT" );
-	system( "date" );
-	my $b_script_path     = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/run_blast.sh";
+	my $b_script_path     = "$local_ffdb/projects/$projID/run_blast.sh";
 	my $r_b_script_path   = $analysis->get_remote_blast_script();
 	my $db_length         = $analysis->MRC::DB::get_blast_db_length( $blastdb_name );
 	print "database length is $db_length\n";
@@ -455,9 +447,8 @@ if ( $is_remote ){
     }
     if ( $use_last ){
 	print printhead( "BUILDING REMOTE LAST SCRIPT" );
-	system( "date" );
 	#we use the blast script code as a template given the similarity between the methods, so there are some common var names between the block here and above
-	my $b_script_path     = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/run_last.sh";
+	my $b_script_path     = "$local_ffdb/projects/$projID/run_last.sh";
 	my $r_b_script_path   = $analysis->get_remote_last_script();
 	my $db_length         = $analysis->MRC::DB::get_blast_db_length( $blastdb_name );
 	print "database length is $db_length\n";
@@ -471,36 +462,25 @@ if ( $is_remote ){
 
 #RUN HMMSCAN
 HMMSCAN:
-if ( $is_remote ){
+if ($is_remote){
     print printhead( "RUNNING REMOTE SEARCH" );
-    system( "date" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-	if ( $use_hmmscan ){
-	    $analysis->MRC::Run::run_search_remote( $sample_id, "hmmscan", $waittime, $verbose );
-	}
-	if ( $use_blast ){
-	    $analysis->MRC::Run::run_search_remote( $sample_id, "blast", $waittime, $verbose );
-	}
-	if ( $use_hmmsearch ){
-	    $analysis->MRC::Run::run_search_remote( $sample_id, "hmmsearch", $waittime, $verbose );
-	}
-	if ( $use_last ){
-	    $analysis->MRC::Run::run_search_remote( $sample_id, "last", $waittime, $verbose );
-	}
-	system( "date" );
-    }
-    
-}
-else{
+	($use_hmmscan)   && $analysis->MRC::Run::run_search_remote( $sample_id, "hmmscan",   $waittime, $verbose);
+	($use_blast)     && $analysis->MRC::Run::run_search_remote( $sample_id, "blast",     $waittime, $verbose);
+	($use_hmmsearch) && $analysis->MRC::Run::run_search_remote( $sample_id, "hmmsearch", $waittime, $verbose);
+	($use_last)      && $analysis->MRC::Run::run_search_remote( $sample_id, "last",      $waittime, $verbose);
+	print "Progress report: finished ${sample_id} on " . `date` . "\n";
+    }  
+} else {
     print printhead( "RUNNING LOCAL SEARCH" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-	my $sample_path = $local_ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/";
+	my $sample_path = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/" . $sample_id . "/";
 	my $orfs        = "orfs.fa";
-	my $results_dir = "search_results/";
+	my $results_dir = "search_results";
 	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs( $hmmdb_name ) };
-	warn "Running hmmscan\n";
+	warn "Running hmmscan for sample ID ${sample_id}...\n";
 	foreach my $hmmdb( keys( %hmmdbs ) ){
-	    my $results = $results_dir . $sample_id . "_v_" . $hmmdb . ".hsc";
+	    my $results = "${results_dir}/${sample_id}_v_${hmmdb}.hsc";
 	    #run with tblast output format (e.g., --domtblout )
 	    $analysis->MRC::Run::run_hmmscan( $orfs, $hmmdbs{$hmmdb}, $results, 1 );
 #	    $analysis->MRC::Run::run_hmmscan( $orfs, $hmmdbs{$hmmdb}, $results );
@@ -510,31 +490,20 @@ else{
 
 #GET REMOTE RESULTS
 GETRESULTS:
-if ( $is_remote ){
-    print printhead( "GETTING REMOTE RESULTS" );
-    system( "date" );
+if ($is_remote){
+    print printhead("GETTING REMOTE RESULTS");
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-	if ( $use_hmmscan ){
-	    $analysis->MRC::Run::get_remote_search_results( $sample_id, "hmmscan" );
-	}
-	if ( $use_hmmsearch ){
-	    $analysis->MRC::Run::get_remote_search_results( $sample_id, "hmmsearch" );
-	}
-	if ( $use_blast ){
-	    $analysis->MRC::Run::get_remote_search_results( $sample_id, "blast" );
-	}
-	if ( $use_last ){
-	    $analysis->MRC::Run::get_remote_search_results( $sample_id, "last" );
-	}
-	
+	($use_hmmscan)   && $analysis->MRC::Run::get_remote_search_results( $sample_id, "hmmscan");
+	($use_blast)     && $analysis->MRC::Run::get_remote_search_results( $sample_id, "blast");
+	($use_hmmsearch) && $analysis->MRC::Run::get_remote_search_results( $sample_id, "hmmsearch");
+	($use_last)      && $analysis->MRC::Run::get_remote_search_results( $sample_id, "last");
     }
 }
 
 #PARSE AND LOAD RESULTS
 CLASSIFYREADS:
-if ( $is_remote ){
+if ($is_remote){
     print printhead( "CLASSIFYING REMOTE SEARCH RESULTS" );
-    system( "date" );
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	if ( defined( $skip_samps{ $sample_id } ) ){
 	    print( "skipping $sample_id because it has been processed\n" );
@@ -584,7 +553,8 @@ else{
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs( $hmmdb_name ) };
 	foreach my $hmmdb( keys( %hmmdbs ) ){
-	    my $hsc_results = $local_ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
+	    my $projID = $analysis->get_project_id();
+	    my $hsc_results = "$local_ffdb/projects/$projID/$sample_id/search_results/${sample_id}_v_${hmmdb}.hsc";
 	    $analysis->MRC::Run::classify_reads( $sample_id, $hsc_results, $evalue, $coverage );
 	}
     }
@@ -597,7 +567,6 @@ die "apparently we die here before calculating diversity statistics for some rea
 #calculate diversity statistics
 CALCDIVERSITY:
 print printhead( "CALCULATING DIVERSITY STATISTICS" );
-system( "date" );
 #note, we could decrease DB pings by merging some of these together (they frequently leverage same hash structure)
 #might need to include classification_id as a call here;
 if ( $use_hmmscan ){
@@ -625,21 +594,22 @@ if ( $use_blast ){
     calculate_diversity( $analysis, $class_id );
 }
 
-print "ANALYSIS COMPLETED ON " . `date` . "!\n";
+printhead("ANALYSIS COMPLETED!\n");
 
 
+### ============== MAIN CODE THAT GETS CALLED EVERY TIME: ABOVE =========================
 
+### ================================== FUNCTIONS BELOW ==================================
 
-
-sub calculate_diversity{
-    my( $analysis, $class_id ) = @_;
+sub calculate_diversity {
+    my($analysis, $class_id) = @_;
     print "project richness...\n";
     $analysis->MRC::Run::calculate_project_richness( $class_id );
     print "project relative abundance...\n";
     $analysis->MRC::Run::calculate_project_relative_abundance( $class_id );
-    print "per sample richness...\n";
+    print "per-sample richness...\n";
     $analysis->MRC::Run::calculate_sample_richness( $class_id );
-    print "per sample relative abundance..\n";
+    print "per-sample relative abundance..\n";
     $analysis->MRC::Run::calculate_sample_relative_abundance( $class_id );
     print "building classification map...\n";
     $analysis->MRC::Run::build_classification_map( $class_id );
@@ -649,9 +619,9 @@ sub calculate_diversity{
 
 
 sub build_remote_hmmscan_script{
-    my( $h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch ) = @_;
+    my($h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch) = @_;
     my @args = ( "build_remote_hmmscan_script.pl", "-z $n_searches", "-o $h_script_path", "-n $n_splits", "--name $hmmdb_basename", "-p $project_path", "-s $scratch" );
-    my $results = capture( "perl " . "@args" );
+    my $results = IPC::System::Simple::capture( "perl " . "@args" );
     if ( $EXITVAL != 0 ){
 	warn( $results );
 	exit(0);
@@ -660,10 +630,10 @@ sub build_remote_hmmscan_script{
 }
 
 sub build_remote_hmmsearch_script{
-    my( $h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch ) = @_;
+    my ($h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch) = @_;
     my @args = ( "build_remote_hmmsearch_script.pl", "-z $n_searches", "-o $h_script_path", "-n $n_splits", "--name $hmmdb_basename", "-p $project_path", "-s $scratch" );
-    print( "perl " . "@args\n" );
-    my $results = capture( "perl " . "@args" );
+    print("perl " . "@args\n" );
+    my $results = IPC::System::Simple::capture( "perl " . "@args" );
     if ( $EXITVAL != 0 ){
 	warn( $results );
 	exit(0);
@@ -674,23 +644,21 @@ sub build_remote_hmmsearch_script{
 sub build_remote_blastsearch_script{
     my ( $b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch ) = @_;
     my @args = ( "build_remote_blast_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch" );
-    print( "perl " . "@args\n" );
-    my $results = capture( "perl " . "@args" );
+    print("perl @args\n");
+    my $results = IPC::System::Simple::capture( "perl " . "@args" );
     if ( $EXITVAL != 0 ){
 	warn( $results );
 	exit(0);
     }
     return $results;
 }
-
-
 
 #need to build
 sub build_remote_lastsearch_script {
     my ( $b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch ) = @_;
     my @args = ( "build_remote_last_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch" );
-    print( "perl " . "@args\n" );
-    my $results = capture( "perl " . "@args" );
+    print("perl @args\n");
+    my $results = IPC::System::Simple::capture( "perl " . "@args" );
     if ( $EXITVAL != 0 ){
 	warn( $results );
 	exit(0);
@@ -698,12 +666,11 @@ sub build_remote_lastsearch_script {
     return $results;
 }
 
-
 sub build_remote_formatdb_script {
     my ( $script_path, $blastdb_basename, $n_splits, $project_path, $scratch ) = @_;
     my @args = ( "build_remote_formatdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch" );
     print( "perl " . "@args\n" );
-    my $results = capture( "perl " . "@args" );
+    my $results = IPC::System::Simple::capture( "perl " . "@args" );
     if ( $EXITVAL != 0 ){
 	warn( $results );
 	exit(0);
@@ -715,7 +682,7 @@ sub build_remote_lastdb_script {
     my ( $script_path, $blastdb_basename, $n_splits, $project_path, $scratch ) = @_;
     my @args = ( "build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch" );
     print( "perl " . "@args\n" );
-    my $results = capture( "perl " . "@args" );
+    my $results = IPC::System::Simple::capture( "perl " . "@args" );
     if ( $EXITVAL != 0 ){
 	warn( $results );
 	exit(0);
@@ -723,19 +690,14 @@ sub build_remote_lastdb_script {
     return $results;    
 }
 
-sub printhead{
-    my $string = shift;
-    my $length = length( $string );
-    #add four to account for extra # and whitespce on either side of string
-    my $pad_length = $length + 4;
-    my $pad  = "";
-    my $plen = 0;
-    while( $plen < $pad_length ){
-	$pad .= "#";
-	$plen++;
-    }
-    $string = "$pad\n" . "# " . $string . " #\n" . "$pad\n";
-    return $string;
+sub printhead {
+    my ($string) = @_;
+    my $dateStr = `date`;
+    chomp($string); # remove any ending-of-string newline that might be there
+    chomp($dateStr); # remote always-there newline from the `date` command
+    my $stringWithDate = $string . " ($dateStr)";
+    my $pad  = "#" x (length($stringWithDate) + 4); # add four to account for extra # and whitespce on either side of string
+    return("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n");
 }
 
 
@@ -781,11 +743,15 @@ DATABASE ARGUMENTS:
 REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 
 --rhost=SOME.INTERNET.ADDRESS.COM
-    The machine that hosts the remote MySQL database.
+    The machine that manages the remote computational cluster. Usually this is a cluster head node.
 
 --ruser=USERNAME
     Remote username for logging into the remote computational cluster / machine.
     Note that you have to set up passphrase-less SSH for this to work. Google it!
+
+--remote
+    Use a remote compute cluster.
+
 
 --rdir=/PATH/ON/REMOTE/SERVER
     Remote path where we will save results
@@ -799,8 +765,11 @@ REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 --sub=STRING
     Not sure what this is. ("FAMILY SUBSET LIST")
 
---stage
+--stage  (Default: disabled (no staging))
     Causes the remote database to get copied, I think. Slow!
+
+--dryrun or --dry (Default: disabled)
+    If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
 
 --hdb
     Should we build the hmm db?
@@ -817,24 +786,29 @@ REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 --wait=SECONDS (or -w SECONDS)
     How long to wait for... something.
 
---remote
-    Use a remote compute cluster.
 
 --pid=INTEGER
-    Process ID for something
-
+    Process ID for something (?)
 
 --goto=STRING
     Go to a specific step in the computation.
+    Valid options are:
+      * 'B' or 'BUILD'
+      * 'R' or 'REMOTE'
+      * 'S' or 'SCRIPT'
+      * 'H' or 'HMM'
+      * 'G' or 'GET'
+      * 'C' or 'CLASSIFY'
+      * 'O' or 'OUTPUT'
 
 -z INTEGER
-    n seqs per sample split (?)
+    n seqs per sample split (??)
 
 -e FLOAT
     E-value
 
 -c FLOAT
-    Coverage
+    Coverage (?)
 
 --verbose (or -v)
     Output verbose messages.
