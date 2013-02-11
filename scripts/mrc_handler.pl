@@ -51,14 +51,19 @@ sub warnPrint($) { print("[WARNING]: " . $_[0] . "\n"); }
 print STDERR ">> ARGUMENTS TO mrc_handler.pl: perl mrc_handler.pl @ARGV\n";
 
 ## "ffdb" = "flat file data base"
-my $local_ffdb           = "/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
-my $local_reference_ffdb = "/bueno_not_backed_up/sharpton/sifting_families/"; #where is the reference flatfile data (HMMs, aligns, seqs for each family)?
-#the subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir.
-#below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
+my $local_ffdb           = undef; #/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
+my $local_reference_ffdb = "/bueno_not_backed_up/sharpton/sifting_families/"; # Location of the reference flatfile data (HMMs, aligns, seqs for each family). The subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir. Below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
 
-my $scripts_path   = $ENV{'MRC_LOCAL'} . "/scripts" ; # <-- point to the location of the MRC scripts. Auto-detected from MRC_LOCAL variable.
+if (!exists($ENV{'MRC_LOCAL'})) {
+    print STDOUT ("[ERROR]: The MRC_LOCAL environment variable was NOT EXPORTED and is UNDEFINED.\n");
+    print STDOUT ("[ERROR]: MRC_LOCAL needs to be defined as the local code directory where the MRC files are located.\n");
+    print STDOUT ("[ERROR]: This is where you'll do the github checkout, if you haven't already.\n");
+    print STDOUT ("[ERROR]: I recommend setting it to a location in your home directory. Example: export MRC_LOCAL='/some/location/MRC'\n");
+    die "Environment variable MRC_LOCAL must be EXPORTED. Example: export MRC_LOCAL='/path/to/your/directory/for/MRC'\n";
+}
 
 
+my $localScriptDir   = $ENV{'MRC_LOCAL'} . "/scripts" ; # <-- point to the location of the MRC scripts. Auto-detected from MRC_LOCAL variable.
 
 my $project_file   = ""; #where are the project files to be processed?
 my $family_subset_list; # path to a file that lists (one per line) which family ids you want to include. Defaults to all. Will probably come back and make this a seperate familyconstruction, e.g. /home/sharpton/projects/MRC/data/subset_perfect_famids.txt
@@ -115,8 +120,8 @@ my $use_blast      = 0; #should we use blast to compare SFam reference sequences
 my $use_last       = 1; #should we use last to compare SFam reference sequences to reads?
 
 my $waittime       = 30;
-my $input_pid      = "";
-my $goto           = ""; #B=Build HMMdb
+my $input_pid      = undef;
+my $goto           = undef; #B=Build HMMdb
 
 my $scratch              = 0; #should we use scratch space on remote machine?
 my $multi                = 1; #should we multiload our inserts to the database?
@@ -126,14 +131,14 @@ my $schema_name          = "Sfams"; #eventually, we'll need to disjoin schema an
 my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 
 my $verbose              = 0; # Print extra diagnostic info?
-my $isDryrun             = 0; # Is this just a "fake" run, not a real one?
+my $dryRun             = 0; # Is this just a "fake" run, not a real one?
 
 #hacky hardcoding on mh_scaffold pilot 2 to test random die bug...
 my %skip_samps = ();
 
 #Need to set up command line args for running blast
 
-#	   ,    "s=s"   => \$scripts_path  # specify this with the environment variable MRC_LOCAL instead of using a parameter
+#	   ,    "s=s"   => \$localScriptDir  # specify this with the environment variable MRC_LOCAL instead of using a parameter
 
 
 # example command:
@@ -142,7 +147,8 @@ my %skip_samps = ();
 # --dbuser=alexgw --dbpass=$PASS --dbhost=lighthouse.ucsf.edu
 
 GetOptions("ffdb|d=s"        => \$local_ffdb
-	   ,    "projdir|i=s"   => \$project_file
+	   , "refdb=s"       => \$local_reference_ffdb
+	   , "projdir|i=s"   => \$project_file
 
 	   # Database-server related variables
 	   , "dbuser|u=s"   => \$db_username
@@ -154,6 +160,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "ruser=s"     => \$remote_user
 	   , "rdir=s"      => \$rffdb
 
+	   , 's' => sub { dieWithUsageError("-s is no longer a valid option. Instead, remove it from the command line and export the 'MRC_LOCAL' environment variable to point to your local MRC directory.\nExample of what you could type in bash:  export MRC_LOCAL=/your/home/location/MRC\n"); }
 	   ,    "hmmdb|h=s"   => \$hmmdb_name
 	   ,    "blastdb|b=s"   => \$blastdb_name
 
@@ -167,16 +174,15 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,    "hmmsplit|n=i"   => \$hmm_db_split_size
 	   ,    "wait|w=i"   => \$waittime        #   <-- in seconds
 	   ,    "remote!"     => \$is_remote
-	   ,    "pid:i"      => \$input_pid
+	   ,    "pid=i"      => \$input_pid
 	   ,    "goto|g=s"   => \$goto
 	   ,    "z=i"          => \$nseqs_per_samp_split
-
 
 	   ,    "e=f"  => \$evalue
 	   ,    "c=f"  => \$coverage
 	   ,    "verbose|v!" => \$verbose
 	   
-	   ,    "dryrun|dry!" => \$isDryrun
+	   ,    "dryrun|dry!" => \$dryRun
     );
 
 
@@ -185,28 +191,37 @@ my $remoteScriptDir       = "${remoteMRCdir}/scripts"; # this should probably be
 
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
-(defined($db_hostname)) or dieWithUsageError("--dbhost (remote database hostname: example 'data.youruniversity.edu') MUST be specified!");
-(defined($db_username)) or dieWithUsageError("--dbuser (remote database mysql username: example 'someguy') MUST be specified!");
-if (!defined($db_pass)) {
-    warnPrint("--dbpass (remote database mysql password for user '$db_username') usually must be specified here in super-insecure plaintext, unless your database does not require a password, which is unusual. We are trying a blank password here...");
-    $db_pass = ''; # try a blank password, if the user didn't specify anything.
-}
+# perl ./MRC/scripts/mrc_handler.pl --dbuser=alexgw --dbpass=$PASS --dbhost=lighthouse.ucsf.edu --rhost=chef.compbio.ucsf.edu --ruser=alexgw  -i ./MRC/data/randsamp_subset_perfect_2/
 
-(defined($remote_hostname)) or dieWithUsageError("--rhost (remote computational cluster primary note) must be specified. Example 'main.cluster.youruniversity.edu')!");
-(defined($remote_user)) or dieWithUsageError("--ruser (remote computational cluster username) must be specified. Example 'someguy')!");
+(defined($local_ffdb)) or dieWithUsageError("--ffdb (local flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/sharpton/MRC_ffdb/");
+(-d ($local_ffdb)) or dieWithUsageError("--ffdb (local flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Specify a directory that exists.");
+
+(defined($local_reference_ffdb)) or dieWithUsageError("--refdb (local REFERENCE flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/sharpton/sifting_families/");
+(-d ($local_reference_ffdb)) or dieWithUsageError("--refdb (local REFERENCE flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Specify a directory that exists.");
+
+(defined($db_hostname)) or dieWithUsageError("--dbhost (remote database hostname: example --dbhost='data.youruniversity.edu') MUST be specified!");
+(defined($db_username)) or dieWithUsageError("--dbuser (remote database mysql username: example --dbuser='dataperson') MUST be specified!");
+(defined($db_pass))     or dieWithUsageError("--dbpass (remote database mysql password for user --dbpass='$db_username') MUST be specified here in super-insecure plaintext,\nunless your database does not require a password, which is unusual. If it really is the case that you require NO password, you should specify --dbpass='' . ...");
+
+(defined($remote_hostname)) or dieWithUsageError("--rhost (remote computational cluster primary note) must be specified. Example --rhost='main.cluster.youruniversity.edu')!");
+(defined($remote_user))     or dieWithUsageError("--ruser (remote computational cluster username) must be specified. Example username: --ruser='someguy'!");
+
+if ((defined($goto) && $goto) && !defined($input_pid)) { dieWithUsageError("If you specify --goto=SOMETHING, you must ALSO specify the --pid to goto!"); }
 
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
 #try to detect if we need to stage the database or not on the remote server based on runtime options
 if ($is_remote and ($hmmdb_build or $blastdb_build)) {
-    $stage = 1;
+    #$stage = 1;
+    dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");
 }
 
 print(printhead("Starting classification run, processing $project_file\n"));
 
 #Initialize the project
 my $analysis = MRC->new();
-$analysis->set_scripts_dir( $scripts_path );
+$analysis->set_scripts_dir( $localScriptDir );
+
 #Get a DB connection 
 $analysis->set_dbi_connection( "DBI:mysql:$database_name:$db_hostname" );
 $analysis->set_username( $db_username );
@@ -215,24 +230,29 @@ $analysis->schema_name( $schema_name );
 $analysis->build_schema();
 $analysis->multi_load( $multi );
 $analysis->bulk_insert_count( $bulk_insert_count );
+
 #Connect to the flat file database
 $analysis->set_ffdb( $local_ffdb );
 $analysis->set_ref_ffdb( $local_reference_ffdb );
 $analysis->set_fcis( \@fcis );
+
 #constrain analysis to a set of families of interest
 $analysis->set_family_subset( $family_subset_list, $check );
-if ( $use_hmmscan || $use_hmmsearch ) {
+if ($use_hmmscan || $use_hmmsearch) {
     $analysis->set_hmmdb_name( $hmmdb_name );
 }
-if ( $use_blast || $use_last ) {
+
+if ($use_blast || $use_last) {
     $analysis->set_blastdb_name( $blastdb_name );
 }
+
 $analysis->is_remote($is_remote);
 #set some clustering definitions here
 $analysis->is_strict_clustering( $is_strict );
 $analysis->set_evalue_threshold( $evalue );
 $analysis->set_coverage_threshold( $coverage );
 $analysis->set_score_threshold( $score );
+
 #if using a remote server for compute, set vars here
 if ($is_remote) {
     $analysis->set_remote_server( $remote_hostname );
@@ -250,8 +270,13 @@ print("Starting a classification run using the following settings:\n");
 print("* Evalue threshold: ${evalue}\n");
 print("* Coverage threshold: ${coverage}\n");
 
-#block tries to jump to a module in handler for project that has already done some work
-if ($input_pid && $goto) {
+
+
+## If the user has specified something in the --goto option, then we skip some parts of the analysis and go directly
+## to the "skip to this part" part.
+## Note that this is only useful if we have a process ID! 
+## block tries to jump to a module in handler for project that has already done some work
+if (defined($input_pid) && $input_pid && defined($goto) && $goto) {
     $analysis->MRC::Run::back_load_project($input_pid);
     #this is a little hacky...come clean this up!
     #$analysis->MRC::Run::get_part_samples( $project_file );
@@ -264,8 +289,10 @@ if ($input_pid && $goto) {
     if ($goto eq "G" or $goto eq "GET"){ warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
     if ($goto eq "C" or $goto eq "CLASSIFY"){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
     if ($goto eq "O" or $goto eq "OUTPUT"){ warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
-    die "If we got to here in the code, it means there was an INVALID FLAG PASSED TO THE GOTO OPTION.";
+    
+    die "Invalid --goto option (specifically, the option was \"$goto\"). If we got to here in the code, it means there was an INVALID FLAG PASSED TO THE GOTO OPTION.";
 }
+
 
 #LOAD PROJECT, SAMPLES, METAREADS
 #Grab the samples associated with the project
@@ -290,27 +317,27 @@ if (-d $project_file) {
 	$analysis->set_remote_lastdb_script( $analysis->get_remote_project_path() . "run_lastdb.sh" );
 	$analysis->set_remote_project_log_dir( $analysis->get_remote_project_path() . "/logs/" );
     }
-}
-else{
-  die("Must provide a properly structured project directory. Cannot continue!\n");
+} else {
+    die("Must provide a properly structured project directory. Sadly, the specified directory <$project_file> did not appear to exist! Cannot continue!\n");
 }
 
 #TRANSLATE READS
 #at this point, project, samples and metareads are loaded into the DB.
 #translate the metareads
-if ($is_remote){
-    print printhead( "TRANSLATING READS" );
+if ($is_remote) {
     #run transeq remotely, check on SGE job status, pull results back locally once job complete.
+    print printhead( "TRANSLATING READS" );
     my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
-    $analysis->MRC::Run::translate_reads_remote( $waittime, $remote_logs, $split_orfs );	
-}
-else{
+    if ($dryRun) { print "[Dry run]: in a real run, we would have translated reads here.\n"; }
+    else { $analysis->MRC::Run::translate_reads_remote( $waittime, $remote_logs, $split_orfs );	}
+} else {
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-	my projID = $analysis->get_project_id();
+	my $projID = $analysis->get_project_id();
 	my $sample_reads = "${local_ffdb}/projects/$projID/${sample_id}/raw/";
 	my $orfs_file     = "${local_ffdb}/projects/$projID/${sample_id}/orfs/";
 	#could do some file splitting here to speed up the remote compute
-	$analysis->MRC::Run::translate_reads( $sample_reads, $orfs_file );	
+	if ($dryRun) { print "[Dry run]: in a real run, we would have translated reads here.\n"; }
+	else { $analysis->MRC::Run::translate_reads( $sample_reads, $orfs_file ); }
     }
 }
 
@@ -318,50 +345,59 @@ else{
 #reads are translated, now load them into the DB
 print printhead( "LOADING TRANSLATED READS" );
 foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-    my projID = $analysis->get_project_id();
+    my $projID = $analysis->get_project_id();
     my $in_orf_dir = "$local_ffdb/projects/$projID/$sample_id/orfs/";
-    my $count = 0;
+    my $orfCount = 0;
     foreach my $in_orfs( @{ $analysis->MRC::DB::get_split_sequence_paths( $in_orf_dir, 1 ) } ){
 	print "Processing orfs in $in_orfs\n";
 	my $orfs = Bio::SeqIO->new( -file => $in_orfs, -format => 'fasta' );
 	if ( $analysis->multi_load ){
-	    my $trans_algo = "transeq";
-	    if ( $split_orfs ){
-		$trans_algo = "transeq_split";
-	    }
+	    my $trans_algo = ($split_orfs) ? "transeq_split" : "transeq";
 	    $analysis->MRC::Run::load_multi_orfs( $orfs, $sample_id, $trans_algo );
 	}
 	else{
-	    while( my $orf = $orfs->next_seq() ){
+	    while(my $orf = $orfs->next_seq()) {
 		my $orf_alt_id  = $orf->display_id();
 		my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, "transeq" );
 		$analysis->MRC::Run::load_orf( $orf_alt_id, $read_alt_id, $sample_id );
-		$count++;			
-		print "Added $count orfs to the DB\n";
+		$orfCount++;
+		print "Added $orfCount orfs to the DB\n";
 	    }
 	}
     }
 }
 
-#BUILD HMMDB
+    
+### ====================================================================
 BUILDHMMDB:
-if ( ! -d $analysis->MRC::DB::get_hmmdb_path() ){
-    $hmmdb_build = 1;
-}	
+    ; # <-- this keeps emacs from indenting the code stupidly. Ugh!
+if (!$hmmdb_build) {
+    if (! (-d $analysis->MRC::DB::get_hmmdb_path())) {
+	print "The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.";
+	print "Apparently we MUST create the database if it does not already exist? Quitting now.";
+	die "The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.";
+	#$hmmdb_build = 1;
+    }
+}
 
-if ( $hmmdb_build ){
-    if ( !$use_hmmscan && !$use_hmmsearch ){
-	warn( "It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n" );
+if ($hmmdb_build){
+    if (!$use_hmmscan && !$use_hmmsearch ){
+	warn("It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n" );
     }
     print printhead( "BUILDING HMM DATABASE" );
     $analysis->MRC::Run::build_search_db( $hmmdb_name, $hmm_db_split_size, $force_db_build, "hmm" );
 }
 
-if ( ! -d $analysis->MRC::DB::get_blastdb_path() ){
-    $blastdb_build = 1;
-}	
+if (!$blastdb_build) {
+    if (! -d $analysis->MRC::DB::get_blastdb_path() ) {
+	print "The blast database path did not exist, BUT we did not specify the --bdb option to build a database.";
+	print "Apparently we MUST create the database if it does not already exist? Quitting now.";
+	die "The blast database path did not exist, BUT we did not specify the --bdb option to build a database. We should specify --bdb probably.";
+	#$blastdb_build = 1;
+    }	
+}
 
-if ( $blastdb_build ){
+if ($blastdb_build) {
     if ( !$use_blast && !$use_last){
 	warn( "It seems that you want to build a blast database, but you aren't invoking blast or last. While I will continue, you should check your settings to make certain you aren't making a mistake.\n" );
     }
@@ -370,14 +406,18 @@ if ( $blastdb_build ){
     $analysis->MRC::Run::build_search_db( $blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only, $nr_db );
 }
 
+### ====================================================================
 REMOTESTAGE:
-if ( $is_remote && $stage ){
-    print printhead( "STAGING REMOTE SEARCH DATABASE" );
+if ($is_remote && $stage){
+    print printhead("STAGING REMOTE SEARCH DATABASE");
     if ( defined( $hmmdb_name ) && ( $use_hmmsearch || $use_hmmscan ) ){
 	$analysis->MRC::Run::remote_transfer_search_db( $hmmdb_name, "hmm" );
-	if ( !$scratch ){
+	if (!$scratch){
+	    print "Not using remote scratch space, apparently... I guess there is some gunzipping going on?\n";
 	    #should do optimization here
 	    $analysis->MRC::Run::gunzip_remote_dbs( $hmmdb_name, "hmm" );
+	} else {
+	    print "Using remote scratch space, apparently...\n";
 	}
     }
 
@@ -408,8 +448,9 @@ if ( $is_remote && $stage ){
     }
 }
 
+### ====================================================================
 BUILDHMMSCRIPT:
-if ($is_remote){
+if ($is_remote) {
     my $projID = $analysis->get_project_id();
     if ( $use_hmmscan ){
 	print printhead( "BUILDING REMOTE HMMSCAN SCRIPT" );
@@ -460,6 +501,7 @@ if ($is_remote){
     }
 }
 
+### ====================================================================
 #RUN HMMSCAN
 HMMSCAN:
 if ($is_remote){
@@ -488,6 +530,7 @@ if ($is_remote){
     }
 }
 
+### ====================================================================
 #GET REMOTE RESULTS
 GETRESULTS:
 if ($is_remote){
@@ -500,6 +543,7 @@ if ($is_remote){
     }
 }
 
+### ====================================================================
 #PARSE AND LOAD RESULTS
 CLASSIFYREADS:
 if ($is_remote){
@@ -547,9 +591,9 @@ if ($is_remote){
 	    }	    
 	}
    }
-}
-#the block below is depricated...
-else{
+} else{
+    print printhead("CLASSIFYING LOCAL SEARCH RESULTS ?? This is 'deprecated' apparently and maybe hasn't been tested recently?");
+    #this block is deprecated...
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs( $hmmdb_name ) };
 	foreach my $hmmdb( keys( %hmmdbs ) ){
@@ -560,10 +604,9 @@ else{
     }
 }
 
+#die "apparently we die here before calculating diversity statistics for some reason";
 
-die "apparently we die here before calculating diversity statistics for some reason";
-
-
+### ====================================================================
 #calculate diversity statistics
 CALCDIVERSITY:
 print printhead( "CALCULATING DIVERSITY STATISTICS" );
@@ -577,6 +620,7 @@ if ( $use_hmmscan ){
 	)->classification_id();
     calculate_diversity( $analysis, $class_id );
 }
+
 if ( $use_hmmsearch ){
     print "Calculating hmmsearch diversity\n";
     my $algo = "hmmsearch";
@@ -585,6 +629,7 @@ if ( $use_hmmsearch ){
 	)->classification_id();
     calculate_diversity( $analysis, $class_id );
 }
+
 if ( $use_blast ){
     print "Calculating blast diversity\n";
     my $algo = "blast";
@@ -593,6 +638,10 @@ if ( $use_blast ){
 	)->classification_id();
     calculate_diversity( $analysis, $class_id );
 }
+### ====================================================================
+
+
+
 
 printhead("ANALYSIS COMPLETED!\n");
 
@@ -721,40 +770,45 @@ perl mrc_handler.pl --something --something
 
 OPTIONS:
 
---ffdb=/PATH/TO/FLATFILES  (or -d /PATH/TO/FLATFILES)
+--ffdb=/PATH/TO/FLATFILES  (or -d /PATH/TO/FLATFILES)     (REQUIRED argument)
     local flat file database path
 
---projdir=/PATH/TO/PROJECT/DIR (or -i /PATH/TO/PROJECT/DIR)
+
+--refdb=/PATH/TO/REFERENCE/FLATFILES     (REQUIRED argument)
+    Location of the reference flatfile data (HMMs, aligns, seqs for each family). The subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir. Below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
+
+--projdir=/PATH/TO/PROJECT/DIR (or -i /PATH/TO/PROJECT/DIR)     (REQUIRED argument)
     project directory? Local?
 
 DATABASE ARGUMENTS:
 
---dbhost=SOME.INTERNET.ADDRESS.COM
+--dbhost=YOUR.DATABASE.SERVER.COM           (REQUIRED argument)
     The machine that hosts the remote MySQL database.
 
---dbuser=USERNAME
+--dbuser=MYSQL_USERNAME                     (REQUIRED argument)
     MySQL username for logging into mysql on the remote database server.
 
---dbpass=PASSWORD (in plain text)
+--dbpass=MYSQL_PASSWORD (in plain text)     (REQUIRED argument)
     The MySQL password for <dbuser>, on the remote database server.
-
-
+    This is NOT VERY SECURE!!! Note, in particular, that it gets saved in your teminal history.
 
 REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 
---rhost=SOME.INTERNET.ADDRESS.COM
+--rhost=SOME.CLUSTER.HEAD.NODE.COM     (REQUIRED argument)
     The machine that manages the remote computational cluster. Usually this is a cluster head node.
 
---ruser=USERNAME
+--ruser=USERNAME                       (REQUIRED argument)
     Remote username for logging into the remote computational cluster / machine.
     Note that you have to set up passphrase-less SSH for this to work. Google it!
 
---remote
-    Use a remote compute cluster.
-
-
 --rdir=/PATH/ON/REMOTE/SERVER
     Remote path where we will save results
+
+--remote  (Default: ENABLED)
+    (or --noremote to disable it)
+    Use a remote compute cluster. Specify --noremote to run locally (note: local running has NOT BEEN DEBUGGED much!)
+
+
 
 --hmmdb=STRING (or -h STRING)
    HMM database name
