@@ -195,7 +195,7 @@ sub translate_reads{
     my $input    = shift;
     my $output   = shift;
     my @args     = ("$input", "$output", "-frame=6");
-    my $results  = capture( "transeq " . "@args" );
+    my $results  = IPC::System::Simple::capture( "transeq " . "@args" );
     if( $EXITVAL != 0 ){
 	warn("Error translating sequences in $input: $results\n");
 	exit(0);
@@ -217,7 +217,7 @@ sub run_hmmscan{
     else{
 	@args     = ("$hmmdb", "$inseqs", "> $output");
     }   
-    my $results  = capture( "hmmscan " . "@args" );
+    my $results  = IPC::System::Simple::capture( "hmmscan " . "@args" );
     if( $EXITVAL != 0 ){
 	warn("Error translating sequences in $inseqs: $results\n");
 	exit(0);
@@ -1163,11 +1163,11 @@ sub calculate_blast_db_length{
 	my $filepath = $db_path . $file;
 	$length += get_sequence_length_from_file( $filepath );
     }
-    return $length
+    return $length;
 }
 
 sub get_sequence_length_from_file{
-    my( $self, $file ) = @_;
+    my($self, $file) = @_;
     my $length = 0;
     if( $file =~ m/\.gz/ ){
 	open( FILE, "zmore $file |" ) || die "Can't open $file for read: $!\n"
@@ -1184,10 +1184,9 @@ sub get_sequence_length_from_file{
     return $length;
 }
 
-sub gzip_file{
+sub gzip_file {
     my $file = shift;
-    gzip $file => $file . ".gz"
-	or die "gzip failed: $GzipError\n";
+    gzip $file => $file . ".gz" or die "gzip failed: $GzipError\n";
 }
 
 #state how many spilts you want, will determine the correct number of hm
@@ -1248,18 +1247,16 @@ sub build_hmm_db_by_n_splits{
     return $self;
 }
 
-
 sub compress_hmmdb{
     my $file  = shift;
     my $force = shift;
     my @args  = ();
-    if( $force ){
+    if($force){
 	@args     = ("-f", "$file");
-    }
-    else{
+    } else{
 	@args = ("$file");
     }
-    my $results  = capture( "hmmpress " . "@args" );
+    my $results  = IPC::System::Simple::capture( "hmmpress " . "@args" );
     if( $EXITVAL != 0 ){
 	warn("Error translating sequences in $file: $results\n");
 	exit(0);
@@ -1397,7 +1394,7 @@ sub local_job_listener{
 	#stop checking if every job has a finished status
 	last if( scalar( keys( %status ) ) == scalar( @{ $jobs } ) );
 	#call ps and grab the output
-	my $results = capture( "ps" );
+	my $results = IPC::System::Simple::capture( "ps" );
 	if( $EXITVAL != 0 ){
 	    warn( "Error running ps!\n" );
 	    exit(0);
@@ -1439,7 +1436,7 @@ sub remote_transfer{
 	exit(0);
     }
     warn( "scp " . "@args" );
-    my $results = capture( "scp " . "@args" );
+    my $results = IPC::System::Simple::capture( "scp " . "@args" );
     if( $EXITVAL != 0 ){
 	warn( "Error transferring $source_path to $sink_path using $path_type: $results\n" );
 	exit(0);
@@ -1459,24 +1456,19 @@ sub get_dirname{
     return $dirname;
 }
 
-sub execute_ssh_cmd{
-    my $self       = shift;
-    my $connection = shift; #e.g., tom@www
-    my $remote_cmd = shift;
-    my $verbose    = shift;
-    my $results;
-    my @args = ( $connection, $remote_cmd );
-    if( defined( $verbose ) && $verbose ){
- 	warn( "ssh -v " . "@args" );
-	$results = capture( "ssh -v " . "@args" );
-    }
-    else{
- 	warn( "ssh " . "@args" );
-	$results = capture( "ssh " . "@args" );
-    }
-    if( $EXITVAL != 0 ){
+sub execute_ssh_cmd {
+    my ($self, $connection, $remote_cmd, $verbose) = @_;
+    my @args = ($connection, $remote_cmd);
+    
+    my $vFlag = (defined($verbose) && $verbose) ? '-v' : '';
+
+    warn( "ssh $vFlag " . "@args" );
+    my $results = IPC::System::Simple::capture( "ssh $vFlag " . "@args" );
+    
+    if ($EXITVAL != 0){
 	warn( "Error running ssh command $connection $remote_cmd: $results\n" );
-	exit(0);
+	#exit(0); # exit zero typically indicates NOT AN ERROR, but here we had an error. What gives!
+	exit($EXITVAL); ## changed by Alex to exit with an ERROR and not zero.
     }
     return $results;
 }
