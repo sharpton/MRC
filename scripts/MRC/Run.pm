@@ -34,6 +34,12 @@ use Bio::SearchIO;
 use DBIx::Class::ResultClass::HashRefInflator;
 use Benchmark;
 
+
+
+my $GLOBAL_SSH_NO_TIMEOUT_OPTIONS_STRING = '';
+my $HMMDB_DIR = "HMMdbs";
+my $BLASTDB_DIR = "BLASTdbs";
+
 sub clean_project{
     my $self       = shift;
     my $project_id = shift;
@@ -48,15 +54,14 @@ sub clean_project{
     }
     $self->MRC::DB::delete_project( $project_id );
     $self->MRC::DB::delete_ffdb_project( $project_id );
-    return $self;
+    #return $self;
 }
 
 #currently uses @suffix with basename to successfully parse off .fa. may need to change
 sub get_partitioned_samples{
     my $self = shift;
     my $path = shift;
-    my @suffixes = (".fa", ".fna");
-    my %samples =();    
+    my %samples = ();    
     #open the directory and get the sample names and paths, 
     opendir( PROJ, $path ) || die "Can't open the directory $path for read: $!\n";
     my @files = readdir( PROJ );
@@ -64,26 +69,25 @@ sub get_partitioned_samples{
     foreach my $file( @files ){
 	next if ( $file =~ m/^\./ || $file =~ m/hmmscan/ || $file =~ m/output/);
 	next if ( -d $path . "/" . $file );
-        #see if there's a description file
-	if( $file =~ m/DESCRIPT\.txt/ ){
-	    open( TXT, $path . "/" . $file ) || die "Can't open project description file $file for read: $!. Project is $path.\n";
-	    my $text = "";
-	    while(<TXT>){
-		chomp $_;
-		$text = $text . " " . $_;
-	    }		
-	    $self->set_project_desc( $text );
-	}
-	else{
+        
+	if($file =~ m/DESCRIPT\.txt/){ # <-- see if there's a description file
+	    my $text = ''; # blank
+	    open(DESC, "$path/$file") || die "Can't open project description file $file for read: $!. Project is $path.\n";
+	    while(<DESC>){
+		chomp($_);
+		$text .= " " . $_; # append the line
+	    }
+	    close(DESC);
+	    $self->set_project_desc($text);
+	} else {
 	    #get sample name here, simple parse on the period in file name
-	    my ( $sample ) = basename( $file, @suffixes );
-	    #add to %samples, point name to the location
-	    $samples{$sample}->{"path"} = $path . "/" . $file;
+    	    my $thisSample = basename( $file, (".fa", ".fna") );
+	    $samples{$thisSample}->{"path"} = "${path}/${file}";
 	}
     }
     warn( "Adding samples to analysis object\n" );
     $self->set_samples( \%samples );
-    return $self;
+    #return $self;
 }
 
 sub load_project{
@@ -103,7 +107,7 @@ sub load_project{
     $self->MRC::DB::build_project_ffdb();
     $self->MRC::DB::build_sample_ffdb( $nseqs_per_samp_split ); #this also splits the sample file
     warn( "Project $pid successfully loaded!\n" );
-    return $self;
+    #return $self;
 }
 
 sub load_samples{
@@ -138,7 +142,7 @@ sub load_samples{
     }
     $self->set_samples( \%samples ); #uncertain if this is necessary
     warn( "All samples associated with project " . $self->get_project_id() . " are loaded\n" );
-    return $self;
+    #return $self;
 }
 
 sub back_load_project{
@@ -146,17 +150,17 @@ sub back_load_project{
     my $project_id = shift;
     my $ffdb = $self->get_ffdb();
     $self->set_project_id( $project_id );
-    $self->set_project_path( $ffdb . "/projects/" . $project_id );
+    $self->set_project_path("$ffdb/projects/$project_id");
     if( $self->is_remote ){
-	$self->set_remote_hmmscan_script( $self->get_remote_project_path() . "run_hmmscan.sh" );
-	$self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "run_hmmsearch.sh" );
-        $self->set_remote_blast_script( $self->get_remote_project_path() . "run_blast.sh" );
-        $self->set_remote_last_script( $self->get_remote_project_path() . "run_last.sh" );
-        $self->set_remote_formatdb_script( $self->get_remote_project_path() . "run_formatdb.sh" );
-        $self->set_remote_lastdb_script( $self->get_remote_project_path() . "run_lastdb.sh" );
+	$self->set_remote_hmmscan_script( $self->get_remote_project_path() . "/run_hmmscan.sh" );
+	$self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "/run_hmmsearch.sh" );
+        $self->set_remote_blast_script( $self->get_remote_project_path() . "/run_blast.sh" );
+        $self->set_remote_last_script( $self->get_remote_project_path() . "/run_last.sh" );
+        $self->set_remote_formatdb_script( $self->get_remote_project_path() . "/run_formatdb.sh" );
+        $self->set_remote_lastdb_script( $self->get_remote_project_path() . "/run_lastdb.sh" );
 	$self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
     }
-    return $self;
+    #return $self;
 }
 
 #this might need extra work to get the "path" element correct foreach sample
@@ -180,13 +184,13 @@ sub back_load_samples{
     $self->set_samples( \%samples );
     #back load remote data
     if( $self->is_remote() ){
-	$self->set_remote_hmmscan_script( $self->get_remote_project_path() . "run_hmmscan.sh" );
-        $self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "run_hmmsearch.sh" );
-        $self->set_remote_blast_script( $self->get_remote_project_path() . "run_blast.sh" );
+	$self->set_remote_hmmscan_script( $self->get_remote_project_path() . "/run_hmmscan.sh" );
+        $self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "/run_hmmsearch.sh" );
+        $self->set_remote_blast_script( $self->get_remote_project_path() . "/run_blast.sh" );
         $self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
     }
     warn( "Backloading of samples complete\n" );
-    return $self;
+    #return $self;
 }
 
 #this is a compute side function. don't use db vars
@@ -222,7 +226,7 @@ sub run_hmmscan{
 	warn("Error translating sequences in $inseqs: $results\n");
 	exit(0);
     }
-    return $self;
+    #return $self;
 }
 
 #this method may be faster, but suffers from having a few hardcoded parameters.
@@ -249,7 +253,7 @@ sub load_orf{
     my $read = $reads->next();
     my $read_id = $read->read_id();
     $self->MRC::DB::insert_orf( $orf_alt_id, $read_id, $sample_id );
-    return $self;
+    #return $self;
 }
 
 sub load_multi_orfs{
@@ -288,7 +292,7 @@ sub load_multi_orfs{
     }
     $self->MRC::DB::insert_multi_orfs( $sample_id, \%orf_map );
     print "Bulk loaded $count orfs to the database.\n";
-    return $self;
+    #return $self;
 }
 
 
@@ -354,7 +358,7 @@ sub classify_reads{
     print "processing $search_results using best $top_hit_type\n";
 #    my $hmmdb_name     = $self->get_hmmdb_name();
 #    my $blastdb_name   = $self->get_blastdb_name();
-    my $query_seqs     = $self->get_sample_path( $sample_id ) . "/orfs/" . $orf_split;
+    my $query_seqs     = $self->get_sample_path($sample_id) . "/orfs/" . $orf_split;
     #this is a hash
     my $hit_map        = initialize_hit_map( $query_seqs );
     #open search results, get all results for this split
@@ -629,7 +633,7 @@ sub filter_hit_map_for_top_reads_dbi_single{
 #    print "initialized read map\n";    
     #to speed up the db interaction, we're going to grab orf_ids from disc
     my $path_to_split_orfs = $self->get_sample_path( $sample_id ) . "/orfs/";
-    my $orf_split_file_name = $path_to_split_orfs . $orf_split;
+    my $orf_split_file_name = "$path_to_split_orfs/$orf_split";
     my $dbh  = $self->MRC::DB::build_dbh();
     open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!\n";
     while( <SEQS> ){
@@ -941,7 +945,7 @@ sub classify_reads_depricated{
       }
   }
   warn "Processed $count search results from $hscresults\n";
-  return $self;
+  #return $self;
 }
 
 sub build_search_db{
@@ -952,33 +956,31 @@ sub build_search_db{
     my $type        = shift; #blast/hmm
     my $reps_only   = shift; #0/1 - should we only use representative sequences in our sequence DB
     my $nr_db       = shift; #0/1 - should we use a non-redundant version of the DB (sequence DB only)
-    if( !defined( $nr_db ) ){
-	$nr_db = 0;
-    }
+
     my $ffdb        = $self->get_ffdb();
     my $ref_ffdb    = $self->get_ref_ffdb();
 
     #where is the hmmdb going to go? each hmmdb has its own dir
-    my $db_path;
+    my $raw_db_path = undef;
     my $length      = 0;
-    if( $type eq "hmm" ){
-	$db_path = $self->MRC::DB::get_hmmdb_path();
-    }
-    elsif( $type eq "blast" ){
-	$db_path = $self->MRC::DB::get_blastdb_path();
-    }
+    if ($type eq "hmm")   { $raw_db_path = $self->MRC::DB::get_hmmdb_path(); }
+    if ($type eq "blast") { $raw_db_path = $self->MRC::DB::get_blastdb_path(); }
+
     warn "Building $type DB $db_name, placing $split_size per split\n";
+
     #Have you built this DB already?
-    if( -d $db_path && !($force) ){
-	warn "You've already built an $type database with the name $db_name at $db_path. Please delete or overwrite by using the -f option.\n";
+
+    if( -d $raw_db_path && !($force) ){
+	warn "You've already built a <$type> database with the name <$db_name> at <$raw_db_path>. Please delete or overwrite by using the --force option.\n";
 	exit(0);
     }
+
     #create the HMMdb dir that will hold our split hmmdbs
-    $self->MRC::DB::build_db_ffdb( $db_path );
+    $self->MRC::DB::build_db_ffdb( $raw_db_path );
     #update the path to make it easier to build the split hmmdbs (e.g., points to an incomplete file name)
     #save the raw path for the database_length file when using blast
-    my $raw_path = $db_path;
-    $db_path = $db_path . $db_name;
+
+    my $db_path_with_name     = "$raw_db_path/$db_name";
     #constrain analysis to a set of families of interest
     my @families   = sort( @{ $self->get_family_subset() });
     my $n_fams     = @families;
@@ -986,61 +988,62 @@ sub build_search_db{
     my @split      = (); #array of family HMMs/sequences (compressed)
     my $n_proc     = 0;
     my @fcis       = @{ $self->get_fcis() };
-    FAM: foreach my $family( @families ){
+    foreach my $family( @families ){
 	#find the HMM/sequences associated with the family (compressed)
-	my $family_db;	
-	if( $type eq "hmm" ){
-	    foreach my $fci( @fcis ){
-		my $path = $ref_ffdb . "fci_" . $fci . "/HMMs/" . $family . ".hmm.gz";
-		if( -e $path ){
-		    $family_db = $path;
-		}
+	my $family_db = undef;
+
+	if ($type eq "hmm") {
+	    foreach my $fci (@fcis) {
+		my $path = "${ref_ffdb}/fci_${fci}/HMMs/${family}.hmm.gz";
+		if( -e $path ) { $family_db = $path; } # assign the family_db to this path ONLY IF IT EXISTS!
 	    }
-	    if( !defined( $family_db ) ){
-		warn( "Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
+	    if (!defined( $family_db)) {
+		warn("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
 		exit(0);
 	    }
-	}
-	elsif( $type eq "blast" ){
+
+	} elsif( $type eq "blast" ){
 	    foreach my $fci( @fcis ){
-		#short term hack for the merged fci blast directory for 0 and 1
-		if( $fci == 0 ){
-		    $fci = 1;
+		if (0 == $fci) {
+		    $fci = 1; # <-- short term hack for the merged fci blast directory for 0 and 1
 		}
-		my $path = $ref_ffdb . "fci_" . $fci . "/seqs/" . $family . ".fa.gz";
+		
+		my $path = "$ref_ffdb/fci_${fci}/seqs/${family}.fa.gz";
 		if( -e $path ){
-		    $family_db = $path;
-		    #do we only want rep sequences from big families?
-		    if( $reps_only ){
+		    $family_db = $path; # <-- save the path, if it exists
+		    
+		    if ($reps_only) {
+			#do we only want rep sequences from big families?
 			#first see if there is a reps file for the family
-			my $reps_list_path = $ref_ffdb . "reps/fci_" . $fci . "/list/" . $family . ".mcl";
+			my $reps_list_path = "${ref_ffdb}/reps/fci_${fci}/list/${family}.mcl";
 			#if so, see if we need to build the seq file
 			if( -e $reps_list_path ){
 			    #we add the .gz extension in the gzip command inside grab_seqs_from_lookup_list
-			    my $reps_seq_path = $ref_ffdb . "reps/fci_" . $fci . "/seqs/" . $family . ".fa";
-			    if( ! -e $reps_seq_path . ".gz" ){
+			    my $reps_seq_path = "$ref_ffdb/reps/fci_${fci}/seqs/${family}.fa";
+			    if(! -e "${reps_seq_path}.gz" ){
 				print "Building reps sequence file for $family\n";
 				_grab_seqs_from_lookup_list( $reps_list_path, $family_db, $reps_seq_path );
-				if( ! -e $reps_seq_path . ".gz" ){
+				if(! -e "${reps_seq_path}.gz" ) {
+				    ## if it STILL doesn't exist
 				    warn( "Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.\n" );
 				    exit(0);
 				}
 			    }
-			    #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
-			    $family_db = $reps_seq_path . ".gz";
+			    $family_db = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
 			}
 		    }
 		    #because of the fci hack, if we made it here, we don't want to rerun the above
 #		    last;
 		}
 	    }
-	    if( !defined( $family_db ) ){
+	    if(!defined($family_db) ){
 		warn( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
 		exit(0);
 	    }
 #	    $family_db =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
-	    $length   += $self->MRC::Run::get_sequence_length_from_file( $family_db );
-	}       
+	    $length += $self->MRC::Run::get_sequence_length_from_file( $family_db );
+	}
+	
 	push( @split, $family_db );
 	$count++;
 	#if we've hit our split size, process the split
@@ -1050,10 +1053,10 @@ sub build_search_db{
 	    my $split_db_path;
 	    if( $type eq "hmm" ){
 		$nr_db = 0; #Makes no sense to build a NR HMM DB
-		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".hmm", \@split, $nr_db );
+		$split_db_path = cat_db_split( $db_path_with_name, $n_proc, $ffdb, ".hmm", \@split, $nr_db );
 	    }
 	    elsif( $type eq "blast" ){
-		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".fa", \@split, $nr_db );
+		$split_db_path = cat_db_split( $db_path_with_name, $n_proc, $ffdb, ".fa", \@split, $nr_db );
 	    }
 	    #we do want DBs to be gzipped 
 	    gzip_file( $split_db_path );
@@ -1063,36 +1066,31 @@ sub build_search_db{
 	    $count = 0;
 	}
     }
+
     if( $type eq "blast" ){
-	open( LEN, ">" . $raw_path . "/database_length.txt" ) || die "Can't open " . $raw_path . "/database_length.txt for write: $!\n";
+	open( LEN, "> ${raw_db_path}/database_length.txt" ) || die "Can't open ${raw_db_path}/database_length.txt for write: $!\n";
 	print LEN $length;
 	close LEN;
     }
-    warn "$type DB successfully built and compressed.\n";
-    return $self;
+
+    print STDERR "Build Search DB: $type DB was successfully built and compressed.\n";
+    #return $self;
 }
 
 sub cat_db_split{
-    my $db_path      = shift;
-    my $n_proc       = shift;
-    my $ffdb         = shift;
-    my $suffix       = shift;
-    my $ra_families  = shift;
-    my $nr_db        = shift;
-    my @families     = @{ $ra_families };
-
-    my $split_db_path = $db_path . "_" . $n_proc . $suffix;
+    my ($db_path, $n_proc, $ffdb, $suffix, $ra_families_array_ptr, $nr_db) = @_;
+    my @families     = @{$ra_families_array_ptr}; # ra_families is a POINTER TO AN ARRAY
+    my $split_db_path = "${db_path}_${n_proc}${suffix}";
     my $fh;
-    open( $fh, ">>$split_db_path" ) || die "Can't open $split_db_path for write: $!\n";
+    open( $fh, ">> $split_db_path" ) || die "Can't open $split_db_path for write: $!\n";
     foreach my $family( @families ){
 	#do we want a nonredundant version of the DB? 
-	if( $nr_db ){
+	if (defined($nr_db) && $nr_db) {
 	    #make a temp file for the nr 
 	    my $tmp = _build_nr_seq_db( $family );
-	    cat( $tmp, $fh );
-	    unlink( $tmp );
-	}
-	else{
+	    File::Cat::cat( $tmp, $fh ); # From the docs: "Copies data from EXPR to FILEHANDLE, or returns false if an error occurred. EXPR can be either an open readable filehandle or a filename to use as input."
+	    unlink($tmp); # delete the $tmp file
+	} else{
 	    gunzip $family => $fh;
 	}
     }
@@ -1128,7 +1126,8 @@ sub _grab_seqs_from_lookup_list{
     my $seq_id_list = shift; #list of sequence ids to retain
     my $seq_file    = shift; #compressed sequence file
     my $out_seqs    = shift; #compressed retained sequences
-    my $lookup      = {};
+
+    my $lookup      = {}; # apparently this is a hash pointer? or list or something?
     print "Selecting reps from $seq_file, using $seq_id_list. Results in $out_seqs\n";
     #build lookup hash
     open( LOOK, $seq_id_list ) || die "Can't open $seq_id_list for read: $!\n";
@@ -1139,7 +1138,7 @@ sub _grab_seqs_from_lookup_list{
     close LOOK;
     my $seqs_in  = Bio::SeqIO->new( -file => "zcat $seq_file |", -format => 'fasta' );
     my $seqs_out = Bio::SeqIO->new( -file => ">$out_seqs", -format => 'fasta' );
-    while( my $seq = $seqs_in->next_seq() ){
+    while(my $seq = $seqs_in->next_seq()){
 	my $id = $seq->display_id();
 	if( defined( $lookup->{$id} ) ){
 	    $seqs_out->write_seq( $seq );
@@ -1154,7 +1153,7 @@ sub calculate_blast_db_length{
     my( $self ) = @_;
     my $length  = 0;
     my $db_name = $self->get_blastdb_name();
-    my $db_path = $self->get_ffdb() . "/BLASTdbs/" . $db_name . "/";
+    my $db_path = $self->get_ffdb() . "/$BLASTDB_DIR/" . $db_name . "/";
     opendir( DIR, $db_path ) || die "Can't opendir $db_path for read: $!\n";
     my @files = readdir( DIR );
     closedir DIR;
@@ -1168,17 +1167,13 @@ sub calculate_blast_db_length{
 
 sub get_sequence_length_from_file{
     my($self, $file) = @_;
+    my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
+    open(FILE, "$READSTRING") || die "Can't open $file for reading: $!\n";
     my $length = 0;
-    if( $file =~ m/\.gz/ ){
-	open( FILE, "zmore $file |" ) || die "Can't open $file for read: $!\n"
-    }
-    else{
-	open( FILE, "$file" ) || die "Can't open $file for read: $!\n";
-    }
     while(<FILE>){
+	next if ($_ =~ m/\>/ ); # skip lines that start with a '>'
 	chomp $_;
-	next if( $_ =~ m/\>/ );
-	$length += length( $_ );
+	$length += length($_);
     }
     close FILE;
     return $length;
@@ -1186,7 +1181,7 @@ sub get_sequence_length_from_file{
 
 sub gzip_file {
     my $file = shift;
-    gzip $file => $file . ".gz" or die "gzip failed: $GzipError\n";
+    IO::Compress::Gzip::gzip $file => $file . ".gz" or die "gzip failed: $GzipError\n";
 }
 
 #state how many spilts you want, will determine the correct number of hm
@@ -1197,11 +1192,11 @@ sub build_hmm_db_by_n_splits{
     my $force    = shift; #0/1 - force overwrite of old HMMdbs during compression.
     my $ffdb     = $self->get_ffdb();
     #where is the hmmdb going to go? each hmmdb has its own dir
-    my $hmmdb_path = $ffdb . "HMMdbs/" . $hmmdb . "/";
+    my $hmmdb_path = $ffdb . "$HMMDB_DIR/" . $hmmdb . "/";
     warn "Building HMMdb $hmmdb, splitting into $n_splits parts.\n";
     #Have you built this HMMdb already?
-    if( -d $hmmdb_path && !($force) ){
-	warn "You've already built an HMMdb with the name $hmmdb at $hmmdb_path. Please delete or overwrite by using the -f option.\n";
+    if( -d $hmmdb_path && !$force ){
+	warn "You've already built an HMMdb with the name $hmmdb at $hmmdb_path. Please delete or overwrite by using the --force option.\n";
 	die;
     }
     #create the HMMdb dir that will hold our split hmmdbs
@@ -1215,7 +1210,7 @@ sub build_hmm_db_by_n_splits{
     my $count      = 0;
     my @split      = (); #array of family HMMs (compressed)
     my $n_proc     = 0;
-    my $ref_ffdb   = $self->get_ref_ffdb();
+    my $ref_ffdb   = $self->get_ref_ffdb() . "/";
     my @fcis       = @{ $self->get_fcis() };
     foreach my $family( @families ){
 	#find the HMM associated with the family (compressed)
@@ -1231,33 +1226,24 @@ sub build_hmm_db_by_n_splits{
 	    exit(0);
 	}
 	push( @split, $family_hmm );
-	$count++;
 	#if we've hit our split size, process the split
-	if( $count >= $split_size || $family == $families[-1] ){
+	if (scalar(@split) >= $split_size || $family == $families[-1] ){ #build the HMMdb
 	    $n_proc++;
-	    #build the HMMdb
-	    my $split_db_path = cat_db_split( $hmmdb_path, $n_proc, $ffdb, ".hmm", \@split );
-	    #compress the HMMdb, a wrapper for hmmpress
-	    compress_hmmdb( $split_db_path, $force );
-	    @split = ();
-	    $count = 0;
+	    my $nrdb_local_always_false = 0; # apparently this is alaways false for this call
+	    my $split_db_path = cat_db_split( $hmmdb_path, $n_proc, $ffdb, ".hmm", \@split, $nrdb_local_always_false);
+	    compress_hmmdb( $split_db_path, $force ); #compress the HMMdb, a wrapper for hmmpress
+	    @split = (); # clear it out...
 	}
     }
     warn "HMMdb successfully built and compressed.\n";
-    return $self;
+    #return $self;
 }
 
 sub compress_hmmdb{
-    my $file  = shift;
-    my $force = shift;
-    my @args  = ();
-    if($force){
-	@args     = ("-f", "$file");
-    } else{
-	@args = ("$file");
-    }
+    my ($file, $force) = @_;
+    my @args = ($force) ? ("-f", "$file") : ("$file"); # if we have FORCE on, then add "-f" to the options for hmmpress
     my $results  = IPC::System::Simple::capture( "hmmpress " . "@args" );
-    if( $EXITVAL != 0 ){
+    if($EXITVAL != 0) {
 	warn("Error translating sequences in $file: $results\n");
 	exit(0);
     }
@@ -1266,13 +1252,11 @@ sub compress_hmmdb{
 
 #copy a project's ffdb over to the remote server
 sub load_project_remote{
-    my $self = shift;
-    my $pid  = $self->get_project_id();
-    my $ffdb = $self->get_ffdb();
-    my $project_dir = $ffdb . "/projects/" . $pid;
-    my $remote_dir  = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/projects/" . $pid;
-    warn( "Adding $project_dir to remote ffdb: $remote_dir\n" );
-    my $results = $self->MRC::Run::remote_transfer( $project_dir, $remote_dir, "directory" );
+    my ($self) = @_;
+    my $project_dir_local = $self->get_ffdb() . "/projects/" . $self->get_project_id();
+    my $remote_dir  = $self->get_remote_username() . "@" . $self->get_remote_server() . ":" . $self->get_remote_ffdb() . "/projects/" . $self->get_project_id();
+    warn("Pushing $project_dir_local to the remote (" . $self->get_remote_server() . ") server's ffdb location in <$remote_dir>\n");
+    my $results = $self->MRC::Run::remote_transfer($project_dir_local, $remote_dir, "directory");
     return $results;
 }
 
@@ -1293,13 +1277,13 @@ sub translate_reads_remote{
     $self->MRC::Run::remote_transfer( $remote_handler, $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts, 'f' );
     $self->MRC::Run::remote_transfer( $remote_script,  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts, 'f' );
     foreach my $sample_id( @sample_ids ){
-	my $remote_input_dir  = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/raw/";
-	my $remote_output_dir =  $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-	my $remote_orfs = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-	my $local_orfs  = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
+	my $remote_input_dir  = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/raw/";
+	my $remote_output_dir =  $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
+	my $remote_orfs = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
+	my $local_orfs  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
 	if( $split_orfs ){
-	    my $local_unsplit_orfs = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
-	    my $remote_unsplit_orfs = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
+	    my $local_unsplit_orfs = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
+	    my $remote_unsplit_orfs = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
 	    my $remote_cmd   = "\'perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waittime . 
 		" -l " . $logsdir . " -s " . $self->get_remote_scripts() . " -u " . $remote_unsplit_orfs . " > ~/tmp.out\'";	
 	    print( "translating reads, splitting orfs on stop codon\n" );       
@@ -1319,7 +1303,7 @@ sub translate_reads_remote{
 	print( "transfer of orfs successful\n");	
     }
     warn( "All reads were translated on the remote server and locally acquired\n" );
-    return $self;
+    #return $self;
 }
 
 #if you'd rather routinely ping the remote server to check for job completion. not default
@@ -1330,8 +1314,8 @@ sub translate_reads_remote_ping{
     my %jobs = ();
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     foreach my $sample_id( @sample_ids ){
-	my $remote_input  = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/raw.fa";
-	my $remote_output =  $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
+	my $remote_input  = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/raw.fa";
+	my $remote_output =  $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
 	my $remote_cmd = "\'qsub " . $self->get_remote_scripts() . "run_transeq.sh " . $remote_input . " " . $remote_output . "\'";
 	my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
 	if( $results =~ m/^Your job (\d+) / ){
@@ -1351,8 +1335,8 @@ sub translate_reads_remote_ping{
     warn( "Pulling translated reads from remote server\n" );
     foreach my $job( keys( %jobs ) ){
 	my $sample_id = $jobs{$job};
-	my $remote_orfs = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
-	my $local_orfs  = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
+	my $remote_orfs = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
+	my $local_orfs  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
 	my $results = $self->MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'file' );
     }
 }
@@ -1390,7 +1374,7 @@ sub local_job_listener{
     my $waittime = shift;
     my $numwaits = 0;
     my %status   = ();
-    while(1){
+    while(1) {
 	#stop checking if every job has a finished status
 	last if( scalar( keys( %status ) ) == scalar( @{ $jobs } ) );
 	#call ps and grab the output
@@ -1416,32 +1400,28 @@ sub local_job_listener{
 
 sub remote_transfer{
     my $self = shift;
-    my $source_path = shift; #a file or dir path (not connection string)
-    my $sink_path   = shift; #a file or dir path
+    my $source_path = shift; #a file or dir path (not a connection string!)
+    my $sink_path   = shift; # a file or dir path
     my $path_type   = shift; #'file' or 'directory' or 'contents'
     my @args = ();
     if( $path_type eq 'file' || $path_type eq "f" ){ 
 	@args = ( $source_path, $sink_path );
-    }
-    elsif( $path_type eq 'directory' || $path_type eq "d" ){
+    } elsif( $path_type eq 'directory' || $path_type eq "d" ){
 	@args = ( "-r", $source_path, $sink_path );
-    }
-    #on some machines, if the directories are the same on remote and local, a recursive scp will create a subdir with identical dir name. Use the contents setting to 
-    #copy all of the contents of a file over, without transferring the actual sourcedir as well
-    elsif( $path_type eq 'contents' || $path_type eq "c" ){
+    } elsif( $path_type eq 'contents' || $path_type eq "c" ){
+	#on some machines, if the directories are the same on remote and local, a recursive scp will create a subdir with identical dir name. Use the contents setting to 
+	#copy all of the contents of a file over, without transferring the actual sourcedir as well
 	@args = ( $source_path . "/*", $sink_path );
+    } else {
+	die "Programming error: You did not correctly specify your parameters in remote_transfer when moving $source_path to $sink_path! Path type is $path_type. Terminating with an error!\n";
     }
-    else{
-	warn( "You did not correctly specify your parameters in remote_transfer when moving $source_path to $sink_path! Path type is $path_type. Exiting.\n" );
-	exit(0);
-    }
-    warn( "scp " . "@args" );
-    my $results = IPC::System::Simple::capture( "scp " . "@args" );
-    if( $EXITVAL != 0 ){
+    warn("scp @args");
+    my $results = IPC::System::Simple::capture("scp @args");
+    if (0 != $EXITVAL) {
 	warn( "Error transferring $source_path to $sink_path using $path_type: $results\n" );
 	exit(0);
     }
-    return $results;  
+    return $results;
 }
 
 #File::Base name has a dirname function, but it includes the full path. This only returns the current directory name from a path
@@ -1459,57 +1439,42 @@ sub get_dirname{
 sub execute_ssh_cmd {
     my ($self, $connection, $remote_cmd, $verbose) = @_;
     my @args = ($connection, $remote_cmd);
-    
     my $vFlag = (defined($verbose) && $verbose) ? '-v' : '';
-
-    warn( "ssh $vFlag " . "@args" );
-    my $results = IPC::System::Simple::capture( "ssh $vFlag " . "@args" );
-    
+    my $sshCmd = "ssh $GLOBAL_SSH_NO_TIMEOUT_OPTIONS_STRING $vFlag @args";
+    warn($sshCmd); # "warn" also prints the line number and filename! So it's much better than just 'print STDERR'.
+    my $results = IPC::System::Simple::capture($sshCmd);
     if ($EXITVAL != 0){
 	warn( "Error running ssh command $connection $remote_cmd: $results\n" );
-	#exit(0); # exit zero typically indicates NOT AN ERROR, but here we had an error. What gives!
-	exit($EXITVAL); ## changed by Alex to exit with an ERROR and not zero.
+	exit(0); # exit zero typically indicates NOT AN ERROR, but here we had an error. What gives!
+	#exit($EXITVAL); ## temporarily changed by Alex to exit with an ERROR and not zero.
     }
     return $results;
 }
 
 sub remote_transfer_search_db{
-    my $self = shift;
-    my $db_name = shift;
-    my $type    = shift; #blast/hmm
-    my $ffdb = $self->get_ffdb();
-    my $db_dir;
-    if( $type eq "hmm" ){
-	$db_dir = $ffdb . "/HMMdbs/" . $db_name;
-    }
-    elsif( $type eq "blast" ){
-	$db_dir = $ffdb . "/BLASTdbs/" . $db_name;
-    }
-    my $remote_dir;
-    if( $type eq "hmm" ){
-       $remote_dir = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/HMMdbs/" . $db_name;
-    }
-    elsif( $type eq "blast" ){
-       $remote_dir = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/BLASTdbs/" . $db_name;
-    }
+    my ($self, $db_name, $type) = @_;
+    my $DATABASE_PARENT_DIR = undef;
+    if ($type eq "hmm") { $DATABASE_PARENT_DIR = $HMMDB_DIR; }
+    if ($type eq "blast") { $DATABASE_PARENT_DIR = $BLASTDB_DIR; }
+    (defined($DATABASE_PARENT_DIR)) or die "Programming error: the 'type' in remote_transfer_search_db must be either \"hmm\" or \"blast\". Instead, it was: \"$type\". Fix this in the code!\n";
+    my $db_dir     = $self->get_ffdb() . "/" . "${DATABASE_PARENT_DIR}/${db_name}";
+    my $remote_dir = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/" . $DATABASE_PARENT_DIR . "/" . $db_name;
     my $results = $self->MRC::Run::remote_transfer( $db_dir, $remote_dir, "directory" );
     return $results;
 }
 
 sub remote_transfer_batch{
-    my $self = shift;
-    my $hmmdb_name = shift;
-    my $ffdb = $self->get_ffdb();
-    my $hmmdb_dir = $ffdb . "/HMMbatches/" . $hmmdb_name;
-    my $remote_dir  = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/HMMbatches/" . $hmmdb_name;
-    my $results = $self->MRC::Run::remote_transfer( $hmmdb_dir, $remote_dir, "file" );
+    my ($self, $hmmdb_name) = @_;
+    my $hmmdb_dir   = $self->get_ffdb() . "/HMMbatches/$hmmdb_name";
+    my $remote_dir  = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/HMMbatches/$hmmdb_name";
+    my $results = $self->MRC::Run::remote_transfer($hmmdb_dir, $remote_dir, "file");
     return $results;
 }
 
 sub gunzip_file_remote{
     my ( $self, $remote_file ) = @_;
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    my $remote_cmd = "gunzip -f " . $remote_file;
+    my $remote_cmd = "gunzip -f $remote_file";
     my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
     return $results;
 }
@@ -1519,10 +1484,10 @@ sub gunzip_remote_dbs{
     my $ffdb        = $self->get_ffdb();
     my $db_dir;
     if( $type eq "hmm"){
-	$db_dir = $ffdb . "/HMMdbs/" . $db_name;
+	$db_dir = $ffdb . "/$HMMDB_DIR/" . $db_name;
     }
     elsif( $type eq "blast" ){
-	$db_dir = $ffdb . "/BLASTdbs/" . $db_name;
+	$db_dir = $ffdb . "/$BLASTDB_DIR/" . $db_name;
     }
     opendir( DIR, $db_dir ) || die "Can't opendir $db_dir for read: $!\n";
     my @files = readdir( DIR );
@@ -1531,97 +1496,83 @@ sub gunzip_remote_dbs{
 	next unless( $file =~ m/\.gz/ );
 	my $remote_db_file;
 	if( $type eq "hmm" ){
-	    $remote_db_file = $self->get_remote_ffdb . "/HMMdbs/" . $db_name . "/" . $file;
+	    $remote_db_file = $self->get_remote_ffdb . "/$HMMDB_DIR/" . $db_name . "/" . $file;
 	}
 	elsif( $type eq "blast" ){
-	    $remote_db_file = $self->get_remote_ffdb . "/BLASTdbs/" . $db_name . "/" . $file;
+	    $remote_db_file = $self->get_remote_ffdb . "/$BLASTDB_DIR/" . $db_name . "/" . $file;
 	}
 	$self->MRC::Run::gunzip_file_remote( $remote_db_file );
     }
-    return $self;
+    #return $self;
 }
 
 sub format_remote_blast_dbs{
     my( $self, $r_script_path ) = @_;
     my $ffdb       = $self->get_ffdb();
-    my $r_db_dir   = $self->get_remote_ffdb . "/BLASTdbs/" . $self->get_blastdb_name() . "/";
+    my $r_db_dir   = $self->get_remote_ffdb . "/$BLASTDB_DIR/" . $self->get_blastdb_name() . "/";
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     my $remote_cmd = "qsub -sync y $r_script_path $r_db_dir";
     my $results    = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-    return $self;
+    #return $self;
 }
 
 sub run_search_remote{
     my ( $self, $sample_id, $type, $waittime, $verbose ) = @_;
     my ( $r_script_path, $search_handler_log, $db_name, $remote_db_dir,
 	 $remote_search_res_dir, $remote_query_dir, $remote_cmd );
+
+
+    $remote_query_dir      = $self->get_remote_sample_path($sample_id) . "/orfs/"; # This is the same for ALL entries!
+
     if( $type eq "blast" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/blast_handler";
 	$r_script_path         = $self->get_remote_blast_script();
 	$db_name               = $self->get_blastdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb . "/BLASTdbs/" . $db_name . "/";
-	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/blast/";
-	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";	
+	$remote_db_dir         = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name/";
+	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/blast/";
     }
     if( $type eq "last" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/last_handler";
 	$r_script_path         = $self->get_remote_last_script();
 	$db_name               = $self->get_blastdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb . "/BLASTdbs/" . $db_name . "/";
-	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/last/";
-	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";	
+	$remote_db_dir         = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name/";
+	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/last/";
     }
     if( $type eq "hmmsearch" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmsearch_handler";
 	$r_script_path         = $self->get_remote_hmmsearch_script();
 	$db_name               = $self->get_hmmdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb . "/HMMdbs/" . $db_name . "/";
-	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmsearch/";
-	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";	
+	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name/";
+	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmsearch/";
     }
     if( $type eq "hmmscan" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmscan_handler";
 	$r_script_path         = $self->get_remote_hmmscan_script();
 	$db_name               = $self->get_hmmdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb . "/HMMdbs/" . $db_name . "/";
-	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmscan/";
-	$remote_query_dir      = $self->get_remote_sample_path( $sample_id ) . "/orfs/";
+	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name/";
+	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmscan/";
     }
+    
     $remote_cmd   = "\'perl " . $self->get_remote_scripts() . "/run_remote_search_handler.pl -h $remote_db_dir " . 
 	"-o $remote_search_res_dir -i $remote_query_dir -n $db_name -s $r_script_path -w $waittime > " . 
 	$search_handler_log . ".out 2> " . $search_handler_log . ".err\'";
-    print "$remote_cmd\n";
-    my $connection            = $self->get_remote_username . "@" . $self->get_remote_server;
+    my $connection            = $self->get_remote_username() . "@" . $self->get_remote_server();
     my $results               = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd, $verbose );
     return $results;
 }
 
 sub get_remote_search_results{
     my( $self, $sample_id, $type ) = @_;
-    my( $remote_search_res_dir, $local_search_res_dir );
-    if( $type eq "blast" ){
-	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/blast/";
-	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/blast/";
-    }
-    elsif( $type eq "last" ){
-	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/last/";
-	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/last/";
-    }
-    elsif( $type eq "hmmsearch" ){
-	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmsearch/";
-	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/hmmsearch/";
-    }
-    elsif( $type eq "hmmscan" ){
-	$remote_search_res_dir = $self->get_remote_sample_path( $sample_id ) .  "/search_results/hmmscan/";
-	$local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/hmmscan/";
-    }
+    ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed into get_remote_search_results! The invalid type was: \"$type\".";
+    my $remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/$type/";
+    my $local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/$type/";
     #recall, every sequence split has its own output dir to cut back on the number of files per directory
-    my $in_orf_dir = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-    foreach my $in_orfs( @{ $self->MRC::DB::get_split_sequence_paths( $in_orf_dir, 0 ) } ){	
+    my $in_orf_dir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/"; # <-- Always the same input directory (orfs) no matter what the $type is.
+    foreach my $in_orfs( @{ $self->MRC::DB::get_split_sequence_paths( $in_orf_dir, 0 ) } ) {
 	my $split_orf_search_results = $remote_search_res_dir . $in_orfs;
-	$self->MRC::Run::remote_transfer(  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $split_orf_search_results, $local_search_res_dir, 'd' );
+	$self->MRC::Run::remote_transfer(  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $split_orf_search_results, $local_search_res_dir, 'directory' );
     }
-    return $self;
+    #return $self; # unclear to me why this is returned...
 }
 
 #Note that this may not yet be a perfect replacement for the ping version below. The problem with this approach is that it keeps an ssh connection alive
@@ -1688,7 +1639,7 @@ sub remove_remote_file{
 
 sub remove_hmmsearch_remote_results{
     my ( $self, $search_outfile ) = @_;
-    my $remote_file = $self->get_remote_ffdb . "/hmmsearch/" . $search_outfile;
+    my $remote_file = $self->get_remote_ffdb() . "/hmmsearch/" . $search_outfile;
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     my $remote_cmd = "rm " . $remote_file;
     my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
@@ -1706,10 +1657,10 @@ sub run_hmmscan_remote_ping{
     my %hmmdbs =  %{ $self->MRC::DB::get_hmmdbs( $hmmdb_name, 1 ) };
     #search each sample against each hmmdb split
     foreach my $sample_id( @sample_ids ){
-	my $remote_input  = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
+	my $remote_input  = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
 	foreach my $hmmdb( keys( %hmmdbs ) ){
 	    my $remote_hmmdb_path = $hmmdbs{$hmmdb};
-	    my $remote_output =  $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
+	    my $remote_output =  $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
 	    my $remote_cmd = "\'qsub " . $self->get_remote_scripts() . "run_hmmscan.sh -o " . $remote_output . " " . $remote_hmmdb_path . " " . $remote_input . "\'";
 	    my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
 	    if( $results =~ m/^Your job (\d+) / ){
@@ -1736,7 +1687,7 @@ sub run_hmmscan_remote_ping{
 		next unless exists( $jobs{$job}{$sample_id}{$hmmdb} );
 		warn( join("\t", $job, $sample_id, $hmmdb, "\n" ) );
 		my $remote_results = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $jobs{$job}{$sample_id}{$hmmdb};
-		my $local_results  = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
+		my $local_results  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
 		my $results = $self->MRC::Run::remote_transfer( $remote_results, $local_results, 'file' );
 	    }
 	}
@@ -1801,7 +1752,7 @@ sub build_PCA_data_frame{
 	print OUT "\n";
     }
     close OUT;
-    return $self;
+    #return $self;
 }
 
 sub calculate_project_richness{
@@ -1825,7 +1776,7 @@ sub calculate_project_richness{
 	print OUT "$famid\n";
     }
     close OUT;
-    return $self;
+    #return $self;
 }
 
 sub calculate_sample_richness{
@@ -1849,7 +1800,7 @@ sub calculate_sample_richness{
 	}	
     }
     close OUT;
-    return $self;
+    #return $self;
 }
 
 #divides total number of reads per OPF by all classified reads
@@ -1878,7 +1829,7 @@ sub calculate_project_relative_abundance{
     }
     close OUT;
     print "outfile created!\n";
-    return $self;
+    #return $self;
 }
 
 #for each sample, divides total number of reads per OPF by all classified reads
@@ -1905,13 +1856,12 @@ sub calculate_sample_relative_abundance{
 	}	
     }
     close OUT;
-    return $self;
+    #return $self;
 }
 
 #maps project_id -> sample_id -> read_id -> orf_id -> famid
 sub build_classification_map{
-    my $self     = shift;
-    my $class_id = shift;
+    my ($self, $class_id) = @_;
     #create the outfile
     my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/classification_map_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!\n";    
@@ -1927,7 +1877,7 @@ sub build_classification_map{
 	}	
     }
     close OUT;
-    return $self;
+    #return $self;
 }
 
 1;
