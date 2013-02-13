@@ -52,10 +52,8 @@ use Benchmark;
 use constant USE_COLORS_CONSTANT => 1; ## 1 = true, 0 = false
 use Term::ANSIColor;
 
-sub dieWithUsageError($) { print("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n"); print STDOUT <DATA>; die("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n"); exit(1); }
-sub warnPrint($) { print("[WARNING]: " . $_[0] . "\n"); }
-
-
+sub dieWithUsageError($) { print("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n"); print STDOUT <DATA>; die(safeColor("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n", "yellow on_red")); exit(1); }
+sub warnPrint($) { warn(safeColor("[WARNING]: " . $_[0] . "\n", "yellow on_black")); }
 
 print STDERR ">> ARGUMENTS TO mrc_handler.pl: perl mrc_handler.pl @ARGV\n";
 
@@ -73,13 +71,12 @@ if (!exists($ENV{'MRC_LOCAL'})) {
 
 my $localScriptDir   = $ENV{'MRC_LOCAL'} . "/scripts" ; # <-- point to the location of the MRC scripts. Auto-detected from MRC_LOCAL variable.
 
-my $project_file   = ""; #where are the project files to be processed?
+my $project_dir   = ""; #where are the project files to be processed?
 my $family_subset_list; # path to a file that lists (one per line) which family ids you want to include. Defaults to all. Will probably come back and make this a seperate familyconstruction, e.g. /home/sharpton/projects/MRC/data/subset_perfect_famids.txt
 
 my $db_username   = undef;
 my $db_pass       = undef;
 my $db_hostname   = undef;
-
 
 #remote compute (e.g., SGE) vars
 my $is_remote        = 1; # By default, assume we ARE using a remote compute cluster
@@ -133,7 +130,7 @@ my $schema_name          = "Sfams"; #eventually, we'll need to disjoin schema an
 my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 
 my $verbose              = 0; # Print extra diagnostic info?
-my $dryRun               = 0; # Is this just a "fake" run, not a real one?
+my $dryRun               = 0; # <-- (Default: disabled) If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
 
 #hacky hardcoding on mh_scaffold pilot 2 to test random die bug...
 my %skip_samps = ();
@@ -143,7 +140,7 @@ my $sWasSpecified = undef;
 
 GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "refdb=s"       => \$local_reference_ffdb
-	   , "projdir|i=s"   => \$project_file
+	   , "projdir|i=s"   => \$project_dir
 
 	   # Database-server related variables
 	   , "dbuser|u=s"   => \$db_username
@@ -189,6 +186,7 @@ if (!defined($blastdb_name)) { $blastdb_name = $db_basename . '_' . ($reps_only?
 
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
+(!$dryRun) or dieWithUsageError("Sorry, --dryrun is actually not supported, as it's a huge mess right now! My apologies.");
 (!defined($sWasSpecified) && !$sWasSpecified) or dieWithUsageError("-s is no longer a valid option. Instead, remove it from the command line and export the 'MRC_LOCAL' environment variable to point to your local MRC directory.\nExample of what you could type in bash instead of the -s option:  export MRC_LOCAL=/your/home/location/MRC\n");
 (defined($local_ffdb)) or dieWithUsageError("--ffdb (local flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/sharpton/MRC_ffdb");
 (-d $local_ffdb)       or dieWithUsageError("--ffdb (local flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Note that Perl does NOT UNDERSTAND the tilde (~) expansion for home directories, so please specify the full path in that case. You must Specify a directory that exists.");
@@ -211,6 +209,7 @@ if ($is_remote and ($hmmdb_build or $blastdb_build)) {
     dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");
 }
 
+(-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n");
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
 
@@ -224,7 +223,7 @@ if (!(-s $likely_location_of_ssh_public_key)) {
 
 ### =========== Done with pre-processing steps ================
 
-printHeader("Starting classification run, processing $project_file\n");
+printHeader("Starting classification run, processing $project_dir\n");
 
 my $analysis = MRC->new();  #Initialize the project
 
@@ -248,39 +247,50 @@ if ($use_hmmscan || $use_hmmsearch) {
 if ($use_blast || $use_last) {
     $analysis->set_blastdb_name($blastdb_name);
 }
-
-
 #set some clustering definitions here
 $analysis->is_strict_clustering($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score);
 
 #if using a remote server for compute, set vars here
 
 $analysis->is_remote($is_remote);
+
+
 if ($is_remote) {
     $analysis->set_remote_server($remote_hostname);
     $analysis->set_remote_username($remote_user);
     $analysis->set_remote_ffdb($rffdb);
     $analysis->set_remote_scripts($remoteScriptDir);
-    $analysis->build_remote_ffdb($verbose); #checks if necessary to build and then builds
+    if (!$dryRun) {
+	$analysis->build_remote_ffdb($verbose); #checks if necessary to build and then builds
+    } else {
+	dryNotify("Not setting the remote credentials.");
+    }
 }
 
 print("Starting a classification run using the following settings:\n");
-($use_last) && print("* Algorithm: last\n");
-($use_blast) && print("* Algorithm: blast\n");
-($use_hmmscan) && print("* Algorithm: hmmscan\n");
-($use_hmmsearch) && print("* Algorithm: hmmsearch\n");
-print("* Evalue threshold: ${evalue}\n");
-print("* Coverage threshold: ${coverage}\n");
+($use_last)      && print("   * Algorithm: last\n");
+($use_blast)     && print("   * Algorithm: blast\n");
+($use_hmmscan)   && print("   * Algorithm: hmmscan\n");
+($use_hmmsearch) && print("   * Algorithm: hmmsearch\n");
+($stage)         && print("   * Staging: Stage the remote database\n");
+($is_remote)     && print("   * Use the remote server <$remote_hostname>\n");
+print("   * Evalue threshold: ${evalue}\n");
+print("   * Coverage threshold: ${coverage}\n");
 
 ## If the user has specified something in the --goto option, then we skip some parts of the analysis and go directly
 ## to the "skip to this part" part.
 ## Note that this is only useful if we have a process ID! 
 ## block tries to jump to a module in handler for project that has already done some work
-if (defined($input_pid) && $input_pid && defined($goto) && $goto) {
-    $analysis->MRC::Run::back_load_project($input_pid);
-    #this is a little hacky...come clean this up!
-    #$analysis->MRC::Run::get_part_samples($project_file);
-    $analysis->MRC::Run::back_load_samples();
+if (defined($goto) && $goto) {
+    (defined($input_pid) && $input_pid) or die "You CANNOT specify --goto without also specifying an input PID (--pid=NUMBER).\n";
+    if (!$dryRun) {
+	$analysis->MRC::Run::back_load_project($input_pid);
+	#$analysis->MRC::Run::get_part_samples($project_dir);
+	$analysis->MRC::Run::back_load_samples();
+    } else {
+	dryNotify("Skipped loading samples.");
+    }
+
     $goto = uc($goto); ## upper case it
     if ($goto eq "B" or $goto eq "BUILD"){ warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
     if ($goto eq "R" or $goto eq "REMOTE"){ warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
@@ -289,60 +299,77 @@ if (defined($input_pid) && $input_pid && defined($goto) && $goto) {
     if ($goto eq "G" or $goto eq "GET"){ warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
     if ($goto eq "C" or $goto eq "CLASSIFY"){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
     if ($goto eq "O" or $goto eq "OUTPUT"){ warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
-    
-    die "Invalid --goto option (specifically, the option was \"$goto\"). If we got to here in the code, it means there was an INVALID FLAG PASSED TO THE GOTO OPTION.";
+    die "QUITTING DUE TO INVALID --goto OPTION: (specifically, the option was \"$goto\"). If we got to here in the code, it means there was an INVALID FLAG PASSED TO THE GOTO OPTION.";
 }
 
-
+## ================================================================================
+## ================================================================================
 #LOAD PROJECT, SAMPLES, METAREADS
 #Grab the samples associated with the project
-if (-d $project_file) {
-    printHeader("LOADING PROJECT");
-    #Partitioned samples project
-    #get the samples associated with project. a project description can be left in DESCRIPT.txt
-    $analysis->MRC::Run::get_partitioned_samples($project_file);
-    ############
-    #come back and add a check that ensures sequences associated with samples
-    #are of the proper format. We should check data before loading.
-    ############
-    #Load Data. Project id becomes a project var in load_project
-    $analysis->MRC::Run::load_project($project_file, $nseqs_per_samp_split);
-    if ($is_remote){
+printHeader("LOADING PROJECT");
+#Partitioned samples project
+#get the samples associated with project. a project description can be left in DESCRIPT.txt
+
+if (!$dryRun) { $analysis->MRC::Run::get_partitioned_samples($project_dir); }
+else { dryNotify("Skipped getting the partitioned samples for $project_dir."); }
+
+############
+#come back and add a check that ensures sequences associated with samples
+#are of the proper format. We should check data before loading.
+############
+#Load Data. Project id becomes a project var in load_project
+
+if (!$dryRun) {
+    $analysis->MRC::Run::load_project($project_dir, $nseqs_per_samp_split);
+} else {
+    $analysis->set_project_id(-99); # Dummy project ID
+    dryNotify("Skipping the local load of the project.");
+}
+
+if ($is_remote){
+    if (!$dryRun) {
 	$analysis->MRC::Run::load_project_remote($analysis->get_project_id());
-	$analysis->set_remote_hmmscan_script($analysis->get_remote_project_path() . "run_hmmscan.sh");
-	$analysis->set_remote_hmmsearch_script($analysis->get_remote_project_path() . "run_hmmsearch.sh");
-	$analysis->set_remote_blast_script($analysis->get_remote_project_path() . "run_blast.sh");
-	$analysis->set_remote_last_script($analysis->get_remote_project_path() . "run_last.sh");
-	$analysis->set_remote_formatdb_script($analysis->get_remote_project_path() . "run_formatdb.sh");
-	$analysis->set_remote_lastdb_script($analysis->get_remote_project_path() . "run_lastdb.sh");
-	$analysis->set_remote_project_log_dir($analysis->get_remote_project_path() . "/logs/");
+    } else {
+	dryNotify("Skipping the REMOTE loading of the project.");
     }
-} else {
-    die("Must provide a properly structured project directory. Sadly, the specified directory <$project_file> did not appear to exist! Cannot continue!\n");
+    $analysis->set_remote_hmmscan_script($analysis->get_remote_project_path() . "run_hmmscan.sh");
+    $analysis->set_remote_hmmsearch_script($analysis->get_remote_project_path() . "run_hmmsearch.sh");
+    $analysis->set_remote_blast_script($analysis->get_remote_project_path() . "run_blast.sh");
+    $analysis->set_remote_last_script($analysis->get_remote_project_path() . "run_last.sh");
+    $analysis->set_remote_formatdb_script($analysis->get_remote_project_path() . "run_formatdb.sh");
+    $analysis->set_remote_lastdb_script($analysis->get_remote_project_path() . "run_lastdb.sh");
+    $analysis->set_remote_project_log_dir($analysis->get_remote_project_path() . "/logs/");
 }
 
+## ================================================================================
+## ================================================================================
 #TRANSLATE READS
-#at this point, project, samples and metareads are loaded into the DB.
-#translate the metareads
-if ($is_remote) {
-    #run transeq remotely, check on SGE job status, pull results back locally once job complete.
-    printHeader("TRANSLATING READS");
-    my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
-    if (!$dryRun) { $analysis->MRC::Run::translate_reads_remote($waittime, $remote_logs, $split_orfs);	}
-    else { dryNotify("[Dry run]: in a real run, we would have translated reads here."); }
-} else {
-    my $projID = $analysis->get_project_id();
-    foreach my $sampleID (@{$analysis->get_sample_ids()}){
-	my $sample_reads = "${local_ffdb}/projects/$projID/${sampleID}/raw/";
-	my $orfs_file    = "${local_ffdb}/projects/$projID/${sampleID}/orfs/";
-	#could do some file splitting here to speed up the remote compute
-	if (!$dryRun) { $analysis->MRC::Run::translate_reads($sample_reads, $orfs_file); }
-	else { dryNotify("[Dry run]: in a real run, we would have translated reads here.\n"); }
+# At this point, project, samples and metareads have been loaded into the DB. Now translate the metareads!
+printHeader("TRANSLATING READS");
+
+if ($dryRun) {
+    if ($is_remote) {
+	#run transeq remotely, check on SGE job status, pull results back locally once job complete.
+	my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
+	if (!$dryRun) { $analysis->MRC::Run::translate_reads_remote($waittime, $remote_logs, $split_orfs);	}
+	else { dryNotify("[Dry run]: in a real run, we would have translated reads here."); }
+    } else {
+	my $projID = $analysis->get_project_id();
+	foreach my $sampleID (@{$analysis->get_sample_ids()}){
+	    my $sample_reads = "${local_ffdb}/projects/$projID/${sampleID}/raw/";
+	    my $orfs_file    = "${local_ffdb}/projects/$projID/${sampleID}/orfs/";
+	    # We could potentially do some file splitting here to speed up the remote compute...
+	    if (!$dryRun) { $analysis->MRC::Run::translate_reads($sample_reads, $orfs_file); }
+	    else { dryNotify("[Dry run]: in a real run, we would have translated reads here.\n"); }
+	}
     }
+} else {
+    dryNotify("Skipping translation of reads.");
 }
 
-#LOAD ORFS
-#reads are translated, now load them into the DB
+## ================================================================================
+## ================================================================================
+#LOAD ORFS: reads have been translated, now load them into the DB
 printHeader("LOADING TRANSLATED READS");
 foreach my $sample_id(@{ $analysis->get_sample_ids() }){
     my $projID = $analysis->get_project_id();
@@ -367,22 +394,22 @@ foreach my $sample_id(@{ $analysis->get_sample_ids() }){
     }
 }
 
-    
-### ====================================================================
+## ================================================================================
+## ================================================================================
 BUILDHMMDB:
     ; # <-- this keeps emacs from indenting the code stupidly. Ugh!
 if (!$hmmdb_build) {
-    if (! (-d $analysis->MRC::DB::get_hmmdb_path())) {
-	print "The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.";
-	print "Apparently we MUST create the database if it does not already exist? Quitting now.";
-	die "The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.";
+    if (!(-d $analysis->MRC::DB::get_hmmdb_path())) {
+	warnPrint("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.\n");
+	warnPrint("Apparently we MUST create the database if it does not already exist? Quitting now.\n");
+	die "The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.\n";
 	#$hmmdb_build = 1;
     }
 }
 
 if ($hmmdb_build){
-    if (!$use_hmmscan && !$use_hmmsearch){
-	warn("It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n");
+    if (!$use_hmmscan && !$use_hmmsearch) {
+	warnPrint("WARNING: It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n");
     }
     printHeader("BUILDING HMM DATABASE");
     $analysis->MRC::Run::build_search_db($hmmdb_name, $hmm_db_split_size, $force_db_build, "hmm");
@@ -752,13 +779,19 @@ sub printHeader {
     chomp($dateStr); # remote always-there newline from the `date` command
     my $stringWithDate = $string . " ($dateStr)";
     my $pad  = "#" x (length($stringWithDate) + 4); # add four to account for extra # and whitespce on either side of string
-    print STDERR safeColor("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n", "yellow on_red");
+    print STDERR safeColor("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n", "cyan on_blue");
 }
 
 sub dryNotify {
     my ($msg) = @_;
     $msg = (defined($msg)) ? $msg : "This was only a dry run, so we skipped executing a command.";
-    print STDERR safeColor("[DRY RUN]: $msg\n", "cyan on_blue");
+    print STDERR safeColor("[DRY RUN]: $msg\n", "black on_yellow");
+}
+
+sub notify {
+    my ($msg) = @_;
+    warn safeColor("[DRY RUN]: $msg\n", "cyan on_blue");
+
 }
 
 __DATA__
@@ -832,9 +865,6 @@ REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 
 --stage  (Default: disabled (no staging))
     Causes the remote database to get copied, I think. Slow!
-
---dryrun or --dry (Default: disabled)
-    If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
 
 --hdb
     Should we build the hmm db?

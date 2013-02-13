@@ -415,14 +415,12 @@ sub get_schema{
 #NOTE: Check that the MRC::DB::insert_project() function is named/called correctly above
 
 sub set_project_id{
-    my $self = shift;
-    my $pid  = shift;
-    if( !(defined $pid ) ){
+    my ($self, $pid) = @_;
+    if (!defined($pid)) {
       warn "No project id specified in set_project_id. Cannot continue!\n";
-      die;
+      die "No project id specified in set_project_id. Cannot continue!\n";
     }
     $self->{"project_id"} = $pid;
-    return $self->{"project_id"};
 }
 
 =head2 get_project_id
@@ -754,8 +752,10 @@ sub get_remote_ffdb{
 =cut 
 
 sub get_remote_project_path{
-   my ( $self ) = @_;
-   my $path = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/";
+   my ($self) = @_;
+   (defined($self->get_remote_ffdb())) or warn "get_remote_project_path: Remote ffdb path was NOT defined at this point, but we requested it anyway!\n";
+   (defined($self->get_project_id())) or warn "get_remote_project_path: Project ID was NOT defined at this point, but we requested it anyway!.\n";
+   my $path = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/";
    return $path;
 }
 
@@ -772,7 +772,7 @@ sub get_remote_project_path{
 
 sub get_remote_sample_path{
     my ( $self, $sample_id ) = @_;
-    my $path = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/";
+    my $path = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/";
     return $path;
 }
 
