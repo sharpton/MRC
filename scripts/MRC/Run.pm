@@ -62,12 +62,12 @@ sub remote_transfer($$$) {
 	#copy all of the contents of a file over, without transferring the actual sourcedir as well
 	@args = ($src_path . "/*", $dest_path);
     } else {
-	MRC::dieDramatically("Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!");
+	die("Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!");
     }
 
     MRC::notifyAboutScp("remote_transfer ($path_type): scp @args");
     my $results = IPC::System::Simple::capture("scp @args");
-    if (0 != $EXITVAL) { dieDramatically("Error transferring $src_path to $dest_path using $path_type: $results"); }
+    (0 == $EXITVAL) or die("Error transferring $src_path to $dest_path using $path_type: $results");
     return $results;
 }
 
@@ -88,7 +88,7 @@ sub execute_ssh_cmd($$;$) {
     my $sshCmd = "ssh $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING $verboseFlag @args";
     MRC::notifyAboutRemoteCmd($sshCmd);
     my $results = IPC::System::Simple::capture($sshCmd);
-    if ($EXITVAL != 0) { MRC::dieDramatically( "Error running this ssh command: $sshCmd: $results\n" ); }
+    (0 == $EXITVAL) or die( "Error running this ssh command: $sshCmd: $results\n" );
     return $results; ## <-- this gets used! Don't remove it.
 }
 
@@ -164,7 +164,7 @@ sub load_samples{
     my %samples = %{ $self->get_samples() };
     my $numSamples = scalar( keys(%samples) );
     my $plural = ($numSamples == 1) ? '' : 's'; # pluralize 'samples'
-    MRC::notifyWithLine("Run.pm: load_samples: Processing $numSamples sample${plural} associated with project PID #" . $self->get_project_id() . " ");
+    MRC::notify("Run.pm: load_samples: Processing $numSamples sample${plural} associated with project PID #" . $self->get_project_id() . " ");
     foreach my $samp( keys( %samples ) ){
 	my $pid = $self->get_project_id();
 	my $insert;
@@ -207,8 +207,8 @@ sub load_samples{
 	$samples{$samp}->{"id"} = $insert->sample_id();
 	my $sid                 = $insert->sample_id(); # just a short name for the sample ID above
 	my $numReads            = 0;
-
-	if ($self->multi_load()) { # not sure what this means... "multi_load?"
+	
+	if ($self->is_multiload()) {
 	    my @read_names = (); # empty list to start...
 	    while (my $read = $seqs->next_seq()) {
 		my $read_name = $read->display_id();
@@ -227,7 +227,7 @@ sub load_samples{
 	MRC::notify("Loaded $numReads reads for sample $sid into the database.");
     }
     $self->set_samples( \%samples ); #uncertain if this is necessary
-    MRC::notifyWithLine("Successfully loaded $numSamples sample$plural associated with the project PID #" . $self->get_project_id() . " ");
+    MRC::notify("Successfully loaded $numSamples sample$plural associated with the project PID #" . $self->get_project_id() . " ");
 }
 
 sub back_load_project(){
@@ -281,27 +281,22 @@ sub back_load_samples{
 sub translate_reads{
     my ($self, $input, $output) = @_;
     my @args     = ("$input", "$output", "-frame=6");
-
     # so... $input and $output should be what, directories or something?
-
     warn "Should add a sanity check here to make sure $input and $output both exist I guess.";
 
     my $results  = IPC::System::Simple::capture("transeq " . "@args" );
-    ($EXITVAL == 0) or MRC::dieDramatically("Error translating sequences in $input: $results");
+    (0 == $EXITVAL) or die("Error translating sequences in $input: $results");
     return $results;
 }
 
 # Run hmmscan
 sub run_hmmscan{
     my ($self, $inseqs, $hmmdb, $output, $tblout) = @_; # tblout means: "save $output as a tblast style table 1=yes, 0=no"
-    my @args = ();
-    if($tblout){
-	@args = ( "--domE 0.001", "--domtblout $output", "$hmmdb", "$inseqs" );
-    } else{
-	@args = ("$hmmdb", "$inseqs", "> $output");
-    }
+    my @args = ($tblout) # ternary operator
+	? ( "--domE 0.001", "--domtblout $output", "$hmmdb", "$inseqs" ) # YES, $tblout
+	: ("$hmmdb", "$inseqs", "> $output"); # NO, no $tblout
     my $results  = IPC::System::Simple::capture( "hmmscan " . "@args" );
-    ($EXITVAL == 0) or MRC::dieDramatically("Error translating sequences in $inseqs: $results");
+    (0 == $EXITVAL) or die("Error translating sequences in $inseqs: $results");
 }
 
 #this method may be faster, but suffers from having a few hardcoded parameters.
@@ -328,7 +323,6 @@ sub load_orf{
 
 sub load_multi_orfs{
     my ($self, $orfsBioSeqObject, $sample_id, $algo) = @_;   # $orfsBioSeqObject is a Bio::Seq object
-
     my %orf_map    = (); #orf_alt_id to read_id
     my %read_map   = (); #read_alt_id to read_id
     my $count      = 0;
@@ -347,7 +341,7 @@ sub load_multi_orfs{
 		    sample_id   => $sample_id,
 		}
 		);
-	    if ($reads->count() > 1) { MRC::dieDramatically("Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!"); }
+	    if ($reads->count() > 1) { die("Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!"); }
 	    my $read = $reads->next();
 	    $read_id = $read->read_id();
 	    $read_map{ $read_alt_id } = $read_id;
@@ -355,32 +349,32 @@ sub load_multi_orfs{
 	$orf_map{ $orf_alt_id } = $read_id;
     }
     $self->MRC::DB::insert_multi_orfs( $sample_id, \%orf_map );
-    MRC::notifyWithLine("Bulk loaded $count orfs to the database.");
+    MRC::notify("Bulk loaded $count orfs to the database.");
 }
 
 
-#the efficiency of this method could be improved!
-sub load_orf_old{
-    my $self        = shift;
-    my $orf_alt_id  = shift;
-    my $read_alt_id = shift;
-    my $sampref     = shift;
-    my %samples     = %{ $sampref };
-    my $reads = $self->get_schema->resultset("Metaread")->search(
-	{
-	    read_alt_id => $read_alt_id,
-	}
-    );
-    while( my $read = $reads->next() ){
-	my $sample_id = $read->sample_id();
-	if( exists( $samples{$sample_id} ) ){
-	    my $read_id = $read->read_id();
-	    $self->insert_orf( $orf_alt_id, $read_id, $sample_id );
-	    #A project cannot have identical reads in it (same DNA string ok, but must have unique alt_ids)
-	    last;
-	}
-    }
-}
+# #the efficiency of this method could be improved!
+# sub load_orf_old{
+#     my $self        = shift;
+#     my $orf_alt_id  = shift;
+#     my $read_alt_id = shift;
+#     my $sampref     = shift;
+#     my %samples     = %{ $sampref };
+#     my $reads = $self->get_schema->resultset("Metaread")->search(
+# 	{
+# 	    read_alt_id => $read_alt_id,
+# 	}
+#     );
+#     while( my $read = $reads->next() ){
+# 	my $sample_id = $read->sample_id();
+# 	if( exists( $samples{$sample_id} ) ){
+# 	    my $read_id = $read->read_id();
+# 	    $self->insert_orf( $orf_alt_id, $read_id, $sample_id );
+# 	    #A project cannot have identical reads in it (same DNA string ok, but must have unique alt_ids)
+# 	    last;
+# 	}
+#     }
+# }
 
 sub parse_orf_id{
     my $orfid  = shift;
@@ -520,7 +514,7 @@ sub classify_reads{
 	    #need to ensure that this stores the raw values, need some upper limit thresholds, so maybe we need classification_id here. simpler to store anything with evalue < 1. Still not sure I want to store this in the DB.
 	    #$self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
 	    
-	    if( $self->multi_load() ){ 	    #let's try bulk loading to speed things up....
+	    if( $self->is_multiload() ){ 	    #let's try bulk loading to speed things up....
 		$orf_hits{$orf_id} = $famid; #currently only works for strict clustering!
 	    } else {
 		#otherwise, the slow way...
@@ -530,7 +524,7 @@ sub classify_reads{
     }
     $self->MRC::DB::disconnect_dbh( $dbh );
     #bulk load here:
-    if( $self->multi_load() ){
+    if( $self->is_multiload() ){
 	print "Bulk loading classified reads into database\n";
 	$self->MRC::DB::create_multi_familymemberss( $class_id, \%orf_hits);
     }
@@ -1308,10 +1302,7 @@ sub compress_hmmdb{
     my ($file, $force) = @_;
     my @args = ($force) ? ("-f", "$file") : ("$file"); # if we have FORCE on, then add "-f" to the options for hmmpress
     my $results  = IPC::System::Simple::capture( "hmmpress " . "@args" );
-    if($EXITVAL != 0) {
-	warn("Error translating sequences in $file: $results\n");
-	exit(0);
-    }
+    (0 == $EXITVAL) or die("Error translating sequences in $file: $results ");
     return $results;
 }
 
@@ -1345,7 +1336,7 @@ sub translate_reads_remote{
 	my $remote_input_dir    = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/raw";
 	my $remote_output_dir   = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs";
 
-	MRC::notifyWithLine("Translating reads...");
+	MRC::notify("Translating reads...");
 	if ($split_orfs) {
 	    # Split the ORFs!
 	    my $local_unsplit_dir  =        $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # This is where the files will be tranferred BACK to. Should NOT end in a slash!
@@ -1353,17 +1344,17 @@ sub translate_reads_remote{
 	    my $tempStdoutLocationOnRemoteMachine = "$remote_unsplit_dir/tmp.out"; # used to be "~/tmp.out"
 	    my $remote_cmd = "\'perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . " -u $remote_unsplit_dir" . " > ${tempStdoutLocationOnRemoteMachine} \'";
 	    execute_ssh_cmd( $connection, $remote_cmd );
-	    MRC::notifyWithLine("Translation complete, Transferring split and raw translated orfs\n");
+	    MRC::notify("Translation complete, Transferring split and raw translated orfs\n");
 	    MRC::Run::remote_transfer_directory("${connection}:$remote_unsplit_dir", $local_unsplit_dir); #the unsplit orfs
 	} else{ 
 	    my $remote_cmd_no_unsplit = "\'perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . "\'";
 	    execute_ssh_cmd($connection, $remote_cmd_no_unsplit);
 	}
-	MRC::notifyWithLine("Translation complete, Transferring ORFs\n");
+	MRC::notify("Translation complete, Transferring ORFs\n");
 	my $localOrfDir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/${sample_id}/orfs";
 	MRC::Run::remote_transfer_directory("$connection:$remote_output_dir", $localOrfDir); # This happens in both cases, whether or not the orfs are split!
     }
-    MRC::notifyWithLine("All reads were translated on the remote server and locally acquired.");
+    MRC::notify("All reads were translated on the remote server and locally acquired.");
 }
 
 #if you'd rather routinely ping the remote server to check for job completion. not default
@@ -1385,15 +1376,14 @@ sub translate_reads_remote_ping{
 	    my $job_id = $1;
 	    $jobs{$job_id} = $sample_id;
 	} else{
-	    MRC::warnPrint("Remote server did not return a properly formatted job id! The previous SSH command got the results <$results> instead!");
-	    exit(0); # not sure why we EXIT. Seems like this should be a "die"? Isn't it basically the same here anyway?
+	    die("Remote server did not return a properly formatted job id! The previous SSH command got the results <$results> instead!");
 	}
     }
     #check the jobs until they are all complete
     my @job_ids = keys(%jobs);
     my $time = $self->MRC::Run::remote_job_listener( \@job_ids, $waitTimeInSeconds );
     MRC::notify( "Reads were translated in approximately $time seconds on remote server");
-    MRC::notifyWithLine("Pulling translated reads from remote server"); # <-- consider that a completed job doesn't mean a *successful* run!
+    MRC::notify("Pulling translated reads from remote server"); # <-- consider that a completed job doesn't mean a *successful* run!
     foreach my $job( keys( %jobs ) ){
 	my $sample_id = $jobs{$job};
 	my $results = MRC::Run::remote_transfer_file("$connection:$remote_ffdb/projects/$pid/$sample_id/orfs.fa", "$local_ffdb/projects/$pid/$sample_id/orfs.fa"); # retrieve the file from remote->local
@@ -1428,7 +1418,7 @@ sub local_job_listener{
     while(1) {
 	last if( scalar( keys( %status ) ) == scalar( @{ $jobsArrayRef } ) ); #stop checking if every job has a finished status
 	my $results = IPC::System::Simple::capture( "ps" ); #call ps and grab the output
-	($EXITVAL == 0) or MRC::dieDramatically( "Error running ps!\n" );
+	($EXITVAL == 0) or die( "Error running ps! " );
 	#see if any of the jobs are complete. pass on those we've already finished
 	foreach my $jobid(@{ $jobsArrayRef} ){
 	    next if(exists( $status{$jobid}) ); # Skip... for some reason
@@ -1636,19 +1626,19 @@ sub run_hmmscan_remote_ping{
 		my $job_id = $1;
 		$jobs{$job_id}{$sample_id}{$hmmdb} = $remote_output;
 	    } else {
-		MRC::dieDramatically("Remote server did not return a properly formatted job id when running $remote_cmd using connection $connection. Got $results instead!. Exiting.");
+		die("Remote server did not return a properly formatted job id when running $remote_cmd using connection $connection. Got $results instead!. Exiting.");
 	    }
 
-	    MRC::notifyWithLine("Sleeping for 10 seconds here to avoid flooding the remote server...");
+	    MRC::notify("Sleeping for 10 seconds here to avoid flooding the remote server...");
 	    sleep(10); # sleep for ten seconds -- add a sleep so that we don't flood the remote server
 	}
     }
     #check the jobs until they are all complete
     my @job_ids = keys( %jobs );
     my $time = $self->MRC::Run::remote_job_listener(\@job_ids, $waitTimeInSeconds);
-    MRC::notifyWithLine("Hmmscan was conducted: translation finished (hopefully it was successful) on " . $self->get_remote_server() . " in approximately $time seconds.");
+    MRC::notify("Hmmscan was conducted: translation finished (hopefully it was successful) on " . $self->get_remote_server() . " in approximately $time seconds.");
     #consider that a completed job doesn't mean a successful run!
-    MRC::notifyWithLine("Pulling hmmscan reads from remote server\n");
+    MRC::notify("Pulling hmmscan reads from remote server\n");
     foreach my $job( keys( %jobs ) ){
 	foreach my $sample_id( @sample_ids ){
 	    foreach my $hmmdb( keys( %hmmdbs ) ){

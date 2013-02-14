@@ -185,7 +185,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
    );
 
 
-#MRC::warnPrint($dryRun);
+#warn($dryRun);
 
 #/scrapp2/alexgw/MRC/MRC_ffdb/
 
@@ -219,16 +219,6 @@ if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
 
 (-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n");
 
-if (!$hmmdb_build && !(-d $analysis->MRC::DB::get_hmmdb_path())) {
-    MRC::warnPrint("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.");
-    MRC::dieDramatically("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.");
-}
-
-if (!$blastdb_build && !(-d $analysis->MRC::DB::get_blastdb_path())) {
-    MRC::warnPrint("The blast database path did not exist, BUT we did not specify the --bdb option to build a database.");
-    MRC::dieDramatically("The blast database path did not exist, BUT we did not specify the --bdb option to build a database. We should specify --bdb probably.");
-}
-
 
 
 ### =========== END OF SANITY CHECKING OF INPUT ARGUMENTS ==========
@@ -236,28 +226,28 @@ if (!$blastdb_build && !(-d $analysis->MRC::DB::get_blastdb_path())) {
 
 if (!defined($dbname)) {
     $dbname = "Sfams_hmp";
-    MRC::warnPrint("Note: --dbname=NAME was not specified on the command line, so we are using the default database name, which is \"$dbname\".");
+    warn("Note: --dbname=NAME was not specified on the command line, so we are using the default database name, which is \"$dbname\".");
 }
 
 if (!defined($schema_name)) {
     $schema_name = "Sfams::Schema";
-    MRC::warnPrint("Note: --dbschema=SCHEMA was not specified on the command line, so we are using the default schema name, which is \"$schema_name\".");
+    warn("Note: --dbschema=SCHEMA was not specified on the command line, so we are using the default schema name, which is \"$schema_name\".");
 }
 
 # Automatically set the blast database name, if the user didn't specify something already.
 if (!defined($blastdb_name)) {
     $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
-    MRC::warnPrint("Note: blastdb_name was not specified on the command line (--blastdb=NAME). Using the default value, which is <$blastdb_name>.");
+    warn("Note: blastdb_name was not specified on the command line (--blastdb=NAME). Using the default value, which is <$blastdb_name>.");
 } 
 
 if (!defined($db_prefix_basename)) {
     $db_prefix_basename = "SFams_all_v0";
-    MRC::warnPrint("Note: db_prefix_basename (database basename/prefix) was not specified on the command line (--dbprefix=PREFIX). Using the default value, which is <$db_prefix_basename>.");
+    warn("Note: db_prefix_basename (database basename/prefix) was not specified on the command line (--dbprefix=PREFIX). Using the default value, which is <$db_prefix_basename>.");
 }
 
 if (!defined($hmmdb_name)) {
     $hmmdb_name = "${db_prefix_basename}_${hmm_db_split_size}";
-    MRC::warnPrint("Note: hmmdb_name was not specified on the command line (--hmmdb=NAME). Using the default value, which is <$hmmdb_name>.");
+    warn("Note: hmmdb_name was not specified on the command line (--hmmdb=NAME). Using the default value, which is <$hmmdb_name>.");
 }
 
 my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
@@ -280,27 +270,29 @@ printHeader("Starting classification run, processing $project_dir\n");
 my $analysis = MRC->new();  #Initialize the project
 
 $analysis->set_scripts_dir($localScriptDir);
-
-#Get a DB connection
 $analysis->set_dbi_connection("DBI:mysql:$dbname:$db_hostname", $dbname, $db_hostname); $analysis->set_username($db_username); $analysis->set_password($db_pass); $analysis->set_schema_name($schema_name);
 $analysis->build_schema();
-$analysis->multi_load($multi);
-$analysis->bulk_insert_count($bulk_insert_count);
+$analysis->set_multiload($multi);
+$analysis->set_bulk_insert_count($bulk_insert_count);
+$analysis->set_ffdb($local_ffdb); $analysis->set_ref_ffdb($local_reference_ffdb); $analysis->set_fcis(\@fcis); #Connect to the flat file database
+$analysis->set_family_subset($family_subset_list, $check); #constrain analysis to a set of families of interest
+$analysis->set_hmmdb_name($hmmdb_name); # always set it; why not, right?
+$analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right?
+$analysis->is_strict_clustering($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score); 
 
-#Connect to the flat file database
-$analysis->set_ffdb($local_ffdb); $analysis->set_ref_ffdb($local_reference_ffdb); $analysis->set_fcis(\@fcis);
 
-#constrain analysis to a set of families of interest
-$analysis->set_family_subset($family_subset_list, $check);
-#if ($use_hmmscan || $use_hmmsearch ) {
-    $analysis->set_hmmdb_name($hmmdb_name); # always set it; why not, right?
-#}
 
-#if ($use_blast || $use_last) {
-    $analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right?
-#}
-#set some clustering definitions here
-$analysis->is_strict_clustering($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score);
+### =========== NOW THAT THE MRC OBJECT "Analysis" HAS BEEN CREATED, DO SOME SANITY CHECKING ON THE FINAL PARAMETERS =============================
+if (!$hmmdb_build && !(-d $analysis->MRC::DB::get_hmmdb_path())) {
+    warn("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.");
+    die("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.");
+}
+
+if (!$blastdb_build && !(-d $analysis->MRC::DB::get_blastdb_path())) {
+    warn("The blast database path did not exist, BUT we did not specify the --bdb option to build a database.");
+    die("The blast database path did not exist, BUT we did not specify the --bdb option to build a database. We should specify --bdb probably.");
+
+### =========== END OF SANITY CHECKING FOR "Analaysis" ===========================================================================================
 
 #if using a remote server for compute, set vars here
 
@@ -319,6 +311,12 @@ if ($is_remote) {
 	MRC::dryNotify("Not setting the remote credentials.");
     }
 }
+
+
+}
+
+
+
 
 print("Starting a classification run using the following settings:\n");
 ($use_last)      && print("   * Algorithm: last\n");
@@ -431,7 +429,7 @@ foreach my $sample_id(@{ $analysis->get_sample_ids() }){
     foreach my $in_orfs(@{ $analysis->MRC::DB::get_split_sequence_paths($in_orf_dir, 1) }){
 	print "Processing orfs in $in_orfs\n";
 	my $orfs = Bio::SeqIO->new(-file => $in_orfs, -format => 'fasta');
-	if ($analysis->multi_load){
+	if ($analysis->is_multiload()){
 	    my $trans_algo = ($split_orfs) ? "transeq_split" : "transeq";
 	    if (!$dryRun) { $analysis->MRC::Run::load_multi_orfs($orfs, $sample_id, $trans_algo); }
 	    else { MRC::dryNotify(); }
@@ -454,7 +452,7 @@ BUILDHMMDB:
 
 if ($hmmdb_build){
     if (!$use_hmmscan && !$use_hmmsearch) {
-	MRC::warnPrint("WARNING: It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.");
+	warn("WARNING: It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.");
     }
     printHeader("BUILDING HMM DATABASE");
     $analysis->MRC::Run::build_search_db($hmmdb_name, $hmm_db_split_size, $force_db_build, "hmm");
@@ -462,7 +460,7 @@ if ($hmmdb_build){
 
 if ($blastdb_build) {
     if (!$use_blast && !$use_last) {
-	MRC::warnPrint("It seems that you want to build a blast database, but you aren't invoking blast or last. While I will continue, you should check your settings to make certain you aren't making a mistake.");
+	warn("It seems that you want to build a blast database, but you aren't invoking blast or last. While I will continue, you should check your settings to make certain you aren't making a mistake.");
     }
     printHeader("BUILDING BLAST DATABASE");
     #need to build the nr module here

@@ -161,7 +161,6 @@ sub delete_reads_by_sample_id{
 	}
     );
     $reads->delete();
-    return $self;
 }
 
 sub delete_sample{
@@ -173,16 +172,14 @@ sub delete_sample{
 	}
 	);
     $sample->delete();
-    return $self;
 }
 
 sub delete_ffdb_project{
     my $self       = shift;
     my $project_id = shift;
     my $ffdb = $self->get_ffdb();
-    my $project_ffdb = $ffdb . "projects/" . $project_id;
-    File::Path::rmtree( $project_ffdb );
-    return $self;
+    my $project_ffdb = "$ffdb/projects/$project_id";
+    File::Path::rmtree($project_ffdb);
 }
 
 sub create_sample{
@@ -221,7 +218,6 @@ sub create_multi_metareads{
     my @read_names    = @{ $ra_read_names };
     my $sql_insert    = 'INSERT INTO metareads ( sample_id, read_alt_id ) values ';
     my $placeholders  = '(?,?)';
-    my $bulk_insert_count = $self->bulk_insert_count();
     my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
     my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
 	dbh          => $dbh,
@@ -234,8 +230,7 @@ sub create_multi_metareads{
     }
     $bulk->flush();
     if( defined $dbh->errstr ){
-	warn(  $dbh->errstr );
-	exit;
+	die(  $dbh->errstr . " ");
     }
     return $self;
 }
@@ -247,7 +242,6 @@ sub create_multi_familymemberss{
     my %orf_hits     = %{ $rh_orf_hits };
     my $sql_insert   = 'INSERT INTO familymembers ( famid, classification_id, orf_id ) values ';
     my $placeholders = '(?,?,?)';
-    my $bulk_insert_count = $self->bulk_insert_count();
     my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
     my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
 	dbh          => $dbh,
@@ -261,8 +255,7 @@ sub create_multi_familymemberss{
     }
     $bulk->flush();
     if( defined $dbh->errstr ){
-	warn(  $dbh->errstr );
-	exit;
+	die(  $dbh->errstr . " ");
     }
     return $self;
 }
@@ -279,7 +272,6 @@ sub insert_orf{
 	    orf_alt_id => $orf_alt_id,
 	}
     );
-    return $orf;
 }
 
 sub insert_multi_orfs{
@@ -290,7 +282,6 @@ sub insert_multi_orfs{
     my %orf_map       = %{ $rh_orf_map };
     my $sql_insert    = 'INSERT INTO orfs ( sample_id, read_id, orf_alt_id ) values ';
     my $placeholders  = '(?,?,?)';
-    my $bulk_insert_count = $self->bulk_insert_count();
     my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
     my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
 	dbh          => $dbh,
@@ -305,10 +296,8 @@ sub insert_multi_orfs{
     }
     $bulk->flush();
     if (defined($dbh->errstr)) {
-	warn($dbh->errstr);
-	exit;
+	die($dbh->errstr . " ");
     }    
-    return $self;
 }
 
 sub get_gene_by_id{
@@ -317,46 +306,45 @@ sub get_gene_by_id{
     return $gene;
 }
 
-sub build_db_ffdb {
-    # This appears not to actually BUILD anything, it just makes a directory.
+sub build_db_ffdb {    # This appears not to actually BUILD anything, it just makes a directory.
     my ($self, $path) = @_;
     if (-d $path){
-	MRC::notifyWithLine("For whatever reason, we are removing the entire directory in <$path>, in build_db_ffdb.");
-	File::Path::rmtree( $path ); # || die "Can't remove $path in build_db_ffdb: Error was: $! ";
+	MRC::notify("For whatever reason, we are removing the entire directory in <$path>, in build_db_ffdb.");
+	File::Path::rmtree( $path );
     }
-    File::Path::make_path( $path ); # || die "Can't create directory <$path> in build_db_ffdb: Error was: $! ";
+    File::Path::make_path( $path );
 }
 
 sub get_hmmdb_path{
     my ($self) = @_;
-    (defined($self->get_ffdb())) or die("get_hmmdb_path: ffdb was not defined!");
-    (defined($self->get_hmmdb_name())) or die("get_hmmdb_path: get_hmmdb_name was not defined!");
-    my $hmmdb_path = $self->get_ffdb() . "HMMdbs/" . $self->get_hmmdb_name();
-    return $hmmdb_path;
+    (defined($self->get_ffdb())) or die("ffdb was not defined!");
+    (defined($self->get_hmmdb_name())) or die("hmmdb name was not defined!");
+    return($self->get_ffdb() . "/HMMdbs/" . $self->get_hmmdb_name());
 }
 
 sub get_blastdb_path{
     my $self = shift;
-    my $blastdb_path = $self->get_ffdb() . "BLASTdbs/" . $self->get_blastdb_name();
-    return $blastdb_path;
+    (defined($self->get_ffdb())) or die("ffdb was not defined!");
+    (defined($self->get_blastdb_name())) or die("blastdb name was not defined!");
+    return($self->get_ffdb() . "/BLASTdbs/" . $self->get_blastdb_name());
 }
 
 sub get_number_db_splits{
     my ( $self, $type ) = @_;
     my $n_splits = 0;
     my $db_path;
-    if( $type eq "hmm" ){
-	$db_path = $self->MRC::DB::get_hmmdb_path();
-    }
-    elsif( $type eq "blast" ){
-	$db_path = $self->MRC::DB::get_blastdb_path();
-    }
+    if( $type eq "hmm" ) {       $db_path = $self->MRC::DB::get_hmmdb_path();
+    } elsif( $type eq "blast" ){ $db_path = $self->MRC::DB::get_blastdb_path();
+    } else { die "invalid $type"; }
+
     opendir( DIR, $db_path ) || die "Can't opendir " . $db_path . " for read: $! ";
     my @files = readdir( DIR );
     closedir( DIR );
+
+    # Note that "@files" also includes the "fake" files '.' and '..'
     foreach my $file( @files ){
 	#don't want to count both the uncompressed and the compressed, so look for the .gz ending on file name
-	next unless( $file =~ m/\.gz$/ );
+	next unless($file =~ m/\.gz$/); # ONLY look for files that end in '.gz'
 	$n_splits++;
     }
     #total number of sequences/models across the entire database (to correctly scale evalue)
@@ -368,7 +356,7 @@ sub get_number_hmmdb_scans{
     my ( $self, $n_seqs_per_db_split ) = @_;
     my $n_splits = 0;
     opendir( DIR, $self->MRC::DB::get_hmmdb_path ) || die "Can't opendir " . $self->get_hmmdb_path . " for read: $! ";
-    my @files = readdir( DIR );
+    my @files = readdir( DIR );  # <-- Note that "@files" also includes the "fake" files '.' and '..'
     closedir( DIR );
     foreach my $file( @files ){
 	#don't want to count both the uncompressed and the compressed, so look for the .gz ending on file name
@@ -387,36 +375,33 @@ sub get_number_sequences{
     my $n_splits = 0;
     my $last_split_counts = 0;
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
-	my $orfs_path = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-	opendir( DIR, $orfs_path ) || die "Can't opendir " . $orfs_path . " for read: $! ";
-	my @files = readdir( DIR );
+	my $orfDir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs";
+	opendir( DIR, $orfDir ) || die "Can't opendir " . $orfDir . " for read: $! ";
+	my @files = readdir( DIR );  # <-- Note that "@files" also includes the "fake" files '.' and '..'
 	closedir( DIR );	
-	my $max_split; #points to last split's file name
-	my $max_splitnum = 0; #split counter
+	my $max_split_filename; #points to last split's file name
+	my $max_splitnum = 0; # no idea why this starts at zero
 	foreach my $file( @files ){
-	    next unless( $file =~ m/split_(\d+)\.fa/ );
-	    #need to find the last split's file name
-	    my $splitnum      = $1;
-	    if( $splitnum > $max_splitnum ){
-		$max_split    = $file;
-		$max_splitnum = $splitnum;
+	    next unless($file =~ m/split_(\d+)\.fa/); # only count things that match a very specific file pattern
+	    my $splitnum      = $1; 	    #need to find the last split's file name
+	    if($splitnum > $max_splitnum){
+		$max_split_filename    = $file;
+		$max_splitnum = $splitnum; # this is a weird way to do it but I guess it works!
 	    }
 	    $n_splits++;
 	}
-	open( MAX, $orfs_path . $max_split ) || die "Can't read max split $max_split for read in get_number_sequences: $! ";
-	my $count = 0;
-	while(<MAX>){
-	    if( $_ =~ m/\>/ ){
-		$count++;
-	    }
+	open(MAX, "$orfDir/$max_split_filename") || die "Can't read max split file ${max_split_filename} for reading in get_number_sequences: $! ";
+	my $caretCount = 0;
+	while(<MAX>) {
+	    if($_ =~ m/\>/) { $caretCount++; } # count number of lines with a > on them. Apparently not just ones that START with a >! Possibly should change this to require STARTING with a >, but maybe it doesn't actually matter.
 	}
 	close MAX;
-	$last_split_counts = $last_split_counts + $count;
+	$last_split_counts = $last_split_counts + $caretCount;
     }
     #want orfs, so multiply by 6 if using "transeq". Last split needs to be counted for accuracy (may not have full split size).
     #the last split issue happens for each sample, so it is a sum of the number of seqs in each sample's last split. 
     my $n_samples = @{ $self->get_sample_ids() };
-    my $n_seqs =  ( ( ( $n_splits - ( 1 * $n_samples ) ) * $n_sequences_per_split )  * 6 ) + $last_split_counts;
+    my $n_seqs = ( ( ( $n_splits - ( 1 * $n_samples ) ) * $n_sequences_per_split )  * 6 ) + $last_split_counts; # what is up here
     return $n_seqs;
 }
 
@@ -425,11 +410,11 @@ sub get_blast_db_length{
     my($self, $db_name) = @_;
     my $length  = 0;
     my $db_path = $self->MRC::DB::get_blastdb_path();
-    if( -e "$db_path/database_length.txt" ){
-	open( IN, "$db_path/database_length.txt" ) or die "Can't open $db_path/database_length.txt for reading: $! ";
+    my $db_length_filename = "$db_path/database_length.txt";
+    if( -e $db_length_filename ){
+	open( IN, $db_length_filename ) or die "Can't open ${db_length_filename} for reading: $! ";
 	while(<IN>) {
-	    chomp $_;
-	    warn "why is this an assignment, it doesn't count up at all... does this even work? seems like a bug. maybe the file is guaranteed to ONLY have one line? I guess that would make sense.";
+	    chomp $_; ## mysterious
 	    $length = $_;
 	}
 	close IN;
@@ -444,9 +429,8 @@ sub build_project_ffdb {
     my $ffdb = $self->{"ffdb"};
     my $pid  = $self->{"project_id"};
     my $proj_dir = "$ffdb/projects/$pid";
-    File::Path::make_path( $proj_dir ); # make_path ALREADY dies on "severe" errors. See http://search.cpan.org/~dland/File-Path-2.09/Path.pm#ERROR_HANDLING
+    File::Path::make_path($proj_dir); # make_path ALREADY dies on "severe" errors. See http://search.cpan.org/~dland/File-Path-2.09/Path.pm#ERROR_HANDLING
     #or die "Can't create new directory <$proj_dir> in build_project_ffdb: $! ";
-    return $self;
 }
 
 sub build_sample_ffdb{
@@ -466,7 +450,7 @@ sub build_sample_ffdb{
 
     my @paths = ( $outDir, $logDir, $hmmscanlogs, $hmmsearchlogs, $blastlogs, $lastlogs, $formatdblogs, $lastdblogs, $transeqlogs );
     foreach my $path (@paths) {
-	File::Path::make_path($path); # || die "Can't create directory $path in build_sample_ffdb: $!  ";
+	File::Path::make_path($path);
     }
 
     foreach my $sample (keys( %{ $self->get_samples() } )) {
@@ -484,13 +468,12 @@ sub build_sample_ffdb{
 
 	foreach my $dirToMake ($sampDir, $search_res, $hmmscan_results, $hmmsearch_results, $blast_results, $last_results, $raw_sample_dir, $orf_sample_dir, $unsplit_orfs) {
 	    File::Path::make_path($dirToMake); # make_path ALREADY dies on "severe" errors. See http://search.cpan.org/~dland/File-Path-2.09/Path.pm#ERROR_HANDLING
-	    # or die "System error: Can't create directory $dirToMake! $! "; # We don't really care whether the directory already exists, just make it again anyway!
 	}
 
 	if (-d $raw_sample_dir) {
-	    warn "The directory \"$raw_sample_dir\" already exists...";
+	    warn("The directory \"$raw_sample_dir\" already exists...");
 	    if ($self->{"clobber"}) { warn("But you specified the CLOBBER option, so we will brutally overwrite it anyway!"); }
-	    else { die "Since the data already exists in $raw_sample_dir. Will not overwrite! Unless you specify the flag --clobber to brutally clobber those directories anyway. NOT RECOMMENDED unless you know what you're doing."; }
+	    else { die("Since the data already exists in $raw_sample_dir. Will not overwrite! Unless you specify the flag --clobber to brutally clobber those directories anyway. NOT RECOMMENDED unless you know what you're doing."); }
 	}
 	
 	File::Path::make_path($raw_sample_dir);
@@ -498,7 +481,6 @@ sub build_sample_ffdb{
 	my $namebase = $sample . "_raw_split_";
 	$self->MRC::DB::split_sequence_file($self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $namebase, $nseqs_per_samp_split);
     }
-    return $self;
 }
 
 sub split_sequence_file{
@@ -549,27 +531,26 @@ sub get_split_sequence_paths{
 }
 
 sub get_hmmdbs{
-    my $is_remote  = 0;
-
+    my $is_remote  = 0; # what is up with this. This is a default value I guess?
     my $self       = shift;
     my $hmmdb_name = shift;
     $is_remote = shift;
 
+
     my $ffdb = $self->get_ffdb();
-    my $hmmdb_path = $ffdb . "/HMMdbs/" . $hmmdb_name . "/";
+    my $hmmdb_path = "$ffdb/HMMdbs/$hmmdb_name";
     opendir( HMMS, $hmmdb_path ) || die "Can't opendir $hmmdb_path for read: $! ";
-    my @files = readdir( HMMS );
+    my @files = readdir(HMMS);
     closedir( HMMS );
     my %hmmdbs = ();
     foreach my $file ( @files ){
-	next if( $file =~ m/^\./ );
+	next if( $file =~ m/^\./ ); # skip the fake "." and ".." files
 	next if( $file =~ m/\.h3[i|m|p|f]/ );
 	#if grabbing from remote server, use the fact that HMMdb is a mirror to get proper remote path
-	if( $is_remote ){
-	    $hmmdbs{$file} = $self->get_remote_ffdb . "/HMMdbs/" . $hmmdb_name . "/" . $file;
-	}
-	else{
-	    $hmmdbs{$file} = $hmmdb_path . $file;
+	if($is_remote) {
+	    $hmmdbs{$file} = $self->get_remote_ffdb() . "/HMMdbs/$hmmdb_name/$file";
+	} else {
+	    $hmmdbs{$file} = "$hmmdb_path/$file";
 	}
     }
     MRC::notify("Grabbed " . scalar(keys(%hmmdbs)) . " HMM dbs from $hmmdb_path");
@@ -577,8 +558,7 @@ sub get_hmmdbs{
 }
 
 sub get_sample_by_sample_id{
-    my $self = shift;
-    my $sample_id = shift;
+    my ($self, $sample_id) = @_;
     my $sample = $self->get_schema->resultset('Sample')->find(
 	{
 	  sample_id => $sample_id  
@@ -588,8 +568,7 @@ sub get_sample_by_sample_id{
 }
 
 sub get_orf_by_orf_id{
-    my $self = shift;
-    my $orf_id = shift;
+    my ($self, $orf_id) = @_;
     my $orf = $self->get_schema->resultset('Orf')->find(
 	{
 	    orf_id => $orf_id,
@@ -599,8 +578,7 @@ sub get_orf_by_orf_id{
 }
 
 sub get_number_reads_in_sample{
-    my $self   = shift;
-    my $sample = shift;
+    my ($self, $sample) = @_;
     my $reads  = $self->MRC::DB::get_reads_by_sample_id( $sample );
     return $reads->count();
 }
@@ -631,7 +609,7 @@ sub get_read_alt_id_by_read_id{
 sub get_orfs_by_read_id{ 
     my $self = shift;
     my $read_id = shift;
-    my $orfs = $self->get_schema->resultset('Orf')->search(
+    my $orfs = $self->get_schema->resultset("Orf")->search(
 	{
 	    read_id => $read_id,
 	}
@@ -642,12 +620,7 @@ sub get_orfs_by_read_id{
 
 sub get_orfs_by_sample{
     my ( $self, $sample_id, $page ) = @_;
-#    my $orfs = $self->get_schema->resultset("Orf")->search(
-#	{
-#	    sample_id => $sample_id,
-#	}
-#    );
-    my $orfs = $self->get_schema->resultset('Orf')->search( 
+    my $orfs = $self->get_schema->resultset("Orf")->search( 
 	{
 	    sample_id => $sample_id,
 
@@ -939,9 +912,8 @@ sub get_famid_from_geneoid{
 	}
     );
     if( $families->count() > 1 ){
-	if( !( @fcis ) ){
-	    	warn( "Got multiple families for gene_oid $gene_oid. Must use fci to determine which family to select!\n" );
-		exit( 0 );
+	if(!(@fcis)) {
+	    die("Got multiple families for gene_oid $gene_oid. Must use fci to determine which family to select!");
 	}
     }
     my @selected = ();
@@ -963,12 +935,10 @@ sub get_famid_from_geneoid{
 	}
     }
     if( scalar( @selected ) > 1 ){
-	warn( "Even with fci selection there are multiple family ids for gene_oid $gene_oid: " . join( " ", @selected, "\n" ) );
-	exit(0);
+	die("Even with fci selection there are multiple family ids for gene_oid $gene_oid: " . join(" ", @selected, "\n"));
     }
-    else{
-	return $selected[0];
-    }
+    
+    return $selected[0];
 }
 
 sub get_famid_from_fam_alt_id{
@@ -1194,6 +1164,8 @@ sub insert_gene{
 }
 
 sub insert_genome_from_hash{
+    warn "Note: this function never gets called and may be a bit cobweb-y";
+
     my $self           = shift;
     my $ra_genome_data = shift;
     my $force          = shift; #forces an update of a column for which a taxon_oid exists. BE CAREFUL WITH THIS!
@@ -1294,11 +1266,13 @@ sub insert_genome_from_hash{
     if( !$is_unique ){
 	if( $force ){
 	    my $updated = $self->get_schema->resultset("Genome")->update_or_create( $row, { key =>'primary' } );
-	    warn("The taxon_oid $taxon_oid is NOT UNIQUE to the database. Updated row since force is ON!\n!" );
+	    warn("The taxon_oid $taxon_oid is NOT UNIQUE to the database. Updated row since force is ON!");
 	    return $updated;
 	}
-	warn( "The taxon_oid $taxon_oid is NOT UNIQUE to the database. Passing on this entry!\n" );
-	return $self;
+	warn( "The taxon_oid $taxon_oid is NOT UNIQUE to the database. Passing on this entry!");
+	
+	warn "why do we return self here anyway";
+	return $self; # why would this return "$self" anyway?
     }
     #insert the data to the database;
     my $inserted = $self->get_schema->resultset("Genome")->create( $row );

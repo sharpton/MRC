@@ -47,16 +47,6 @@ if (!tryToLoadModule("Term::ANSIColor")) {
     $USE_COLORS_CONSTANT = 0; # Failed to load the ANSI color terminal, so don't use colors!
 }
 
-
-sub dieDramatically($) {
-    my ($msg) = @_;
-    chomp($msg);
-    warn(safeColor("[WARNING]: $msg", "yellow on_red"));
-    die($msg);
-}
-
-sub warnPrint($) { my ($msg) = @_; chomp($msg); warn(safeColor("[WARNING]: $msg", "yellow on_black")); } # regarding "warn": if it ends with a newline it WON'T print the line number
-
 sub safeColor($;$) { # one required and one optional argument
     ## Prints colored text, but only if USER_COLORS_CONSTANT is set.
     ## Allows you to totally disable colored printing by just changing USE_COLORS_CONSTANT to 0 at the top of this file
@@ -71,25 +61,22 @@ sub dryNotify(;$) { # one optional argument
     print STDERR safeColor("[DRY RUN]: $msg\n", "black on_yellow");
 }
 
-sub notifyWithLine($) { my ($msg) = @_; chomp($msg); warn(safeColor("[NOTE]: $msg", "cyan on_blue")); } # regarding "warn": if it ends with a newline it WON'T print the line number
-
 sub notifyAboutScp($) {
     my ($msg) = @_;
     chomp($msg);
-    print STDERR (safeColor("[SCP]: $msg", "green on_black") . "\n"); ## different colors from normal notification message
+    my $parentFunction = defined((caller(2))[3]) ? (caller(2))[3] : '';
+    print STDERR (safeColor("[SCP]: $parentFunction: $msg", "green on_black") . "\n"); ## different colors from normal notification message
     # no point in printing the line number for an SCP command, as they all are executed from Run.pm anyway
 }
 
 sub notifyAboutRemoteCmd($) {
     my ($msg) = @_;
     chomp($msg);
-    print STDERR (safeColor("[REMOTE CMD]: $msg", "black on_green") . "\n"); 
+    my $parentFunction = defined((caller(2))[3]) ? (caller(2))[3] : '';
+    print STDERR (safeColor("[REMOTE CMD]: $parentFunction: $msg", "black on_green") . "\n"); 
     ## different colors from normal notification message
     # no point in printing the line number for a remote command, as they all are executed from Run.pm anyway
 }
-
-
-
 
 sub notify($) { # one required argument
     my ($msg) = @_;
@@ -284,22 +271,26 @@ sub get_db_name()        { my $self = shift; return $self->{"db_name"}; }
 sub get_db_hostname()    { my $self = shift; return $self->{"db_hostname"}; }
 sub get_dbi_connection() { my $self = shift; return $self->{"dbi"}; }
 
-sub multi_load{
-    my $self  = shift;
-    my $multi = shift;
-    if( defined( $multi ) ){
-	$self->{"multiload"} = $multi;
-    }
-    return $self->{"multiload"};
+
+sub set_multiload {
+    my ($self, $multi) = @_;
+    if ($multi != 0 && $multi != 1) { die "The multi variable must be either 0 or 1!"; }
+    $self->{"multiload"} = $multi;
+}
+sub is_multiload() { # supposed to be a true/false value
+    my ($self) = @_;
+    return($self->{"multiload"});
 }
 
-sub bulk_insert_count{
+
+sub get_bulk_insert_count{
     my $self = shift;
-    my $count = shift;
-    if( defined( $count ) ){
-	$self->{"bulk_insert_count"} = $count;
-    }
     return $self->{"bulk_insert_count"};
+}
+
+sub set_bulk_insert_count{
+    my ($self, $count) = @_;
+    $self->{"bulk_insert_count"} = $count;
 }
 
 =head2 set_project_path
