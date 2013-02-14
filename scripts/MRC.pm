@@ -47,10 +47,15 @@ if (!tryToLoadModule("Term::ANSIColor")) {
     $USE_COLORS_CONSTANT = 0; # Failed to load the ANSI color terminal, so don't use colors!
 }
 
-sub warnPrint($) { chomp($_[0]); warn(safeColor("[WARNING]: " . $_[0] . "", "yellow on_black")); } # regarding "warn": if it ends with a newline it WON'T print the line number
 
+sub dieDramatically($) {
+    my ($msg) = @_;
+    chomp($msg);
+    warn(safeColor("[WARNING]: $msg", "yellow on_red"));
+    die($msg);
+}
 
-
+sub warnPrint($) { my ($msg) = @_; chomp($msg); warn(safeColor("[WARNING]: $msg", "yellow on_black")); } # regarding "warn": if it ends with a newline it WON'T print the line number
 
 sub safeColor($;$) { # one required and one optional argument
     ## Prints colored text, but only if USER_COLORS_CONSTANT is set.
@@ -62,13 +67,15 @@ sub safeColor($;$) { # one required and one optional argument
 sub dryNotify(;$) { # one optional argument
     my ($msg) = @_;
     $msg = (defined($msg)) ? $msg : "This was only a dry run, so we skipped executing a command.";
+    chomp($msg);
     print STDERR safeColor("[DRY RUN]: $msg\n", "black on_yellow");
 }
 
-sub notifyWithLine($) { chomp($_[0]); warn(safeColor("[NOTE]: " . $_[0] . "", "cyan on_blue")); } # regarding "warn": if it ends with a newline it WON'T print the line number
+sub notifyWithLine($) { my ($msg) = @_; chomp($msg); warn(safeColor("[NOTE]: $msg", "cyan on_blue")); } # regarding "warn": if it ends with a newline it WON'T print the line number
 
 sub notify($) { # one required argument
     my ($msg) = @_;
+    chomp($msg);
     warn(safeColor("[NOTE]: $msg\n", "cyan on_blue"));
 }
 
@@ -853,29 +860,21 @@ sub get_remote_connection{
 
  Title   : build_remote_ffdb
  Usage   : $analysis->build_remote_ffdb();
- Function: Build the ffdb on the remote host. Includes setting up projects/, HMMdbs/ dirs if they don't exist. Must have set
+ Function: Makes some directories on the remote host. Build the ffdb on the remote host. Includes setting up projects/, HMMdbs/ dirs if they don't exist. Must have set
            the location of the remote ffdb and have a complete connection string to the remote host.
  Example : $analysis->build_remote_ffdb();
- Returns : self
- Args    : A binary value to print verbose output (binary), optional
+ Args    : (optional) $verbose: true/false (whether or not to print verbose output)
 
 =cut 
 
-sub build_remote_ffdb{
-    my $self    = shift;
-    my $verbose = shift;
-    my $rffdb   = $self->{"rffdb"};
+sub build_remote_ffdb {
+    my ($self, $verbose) = @_;
+    my $rffdb      = $self->{"rffdb"};
     my $connection = $self->get_remote_connection();
-    #the -p flag won't produce errors or overwrite if existing, so simply always run this.
-    my $command = "mkdir -p " . $rffdb;	
-    $self->MRC::Run::execute_ssh_cmd( $connection, $command, $verbose );   
-    $command = "mkdir -p " . $rffdb . "/projects/";
-    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
-    $command = "mkdir -p " . $rffdb . "/HMMdbs/";
-    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
-    $command = "mkdir -p " . $rffdb . "/BLASTdbs/";
-    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
-    return $self;
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb"          , $verbose); # <-- 'mkdir' with the '-p' flag won't produce errors or overwrite if existing, so simply always run this.
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/projects/", $verbose);
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/HMMdbs/"  , $verbose);   
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/BLASTdbs/", $verbose);
 }
 
 =head set_remote_hmmscan_script

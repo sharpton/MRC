@@ -5,20 +5,21 @@ use Getopt::Long;
 use IPC::System::Simple qw(capture $EXITVAL);
 
 my( $indir, $outdir, $waittime, $unsplit_orfs_dir, $logsdir );
-my $remote_scripts_path = "/netapp/home/sharpton/projects/MRC/scripts/";
+my $remote_scripts_path = undef; # = "/netapp/home/sharpton/projects/MRC/scripts/";
 my $array = 1;
 
 GetOptions(
     "i=s" => \$indir,
     "o=s" => \$outdir,
     "w=i" => \$waittime,
-    "s:s" => \$remote_scripts_path,
-    "u:s" => \$unsplit_orfs_dir, #if defined, we will split translated reads on stop. put unsplit data here.
+    "s=s" => \$remote_scripts_path,
+    "u=s" => \$unsplit_orfs_dir, #if defined, we will split translated reads on stop. put unsplit data here.
     "l=s" => \$logsdir,
 );
 
 my $split_orfs = 0;
 my $split_outdir;
+
 if( defined( $unsplit_orfs_dir ) ){
     $split_orfs = 1;
 }
@@ -30,31 +31,31 @@ if( $split_orfs ){
 
 print "working on remote server...\n";
 
-opendir( IN, $indir ) || die "Can't opendir $indir for read: $!\n";
-my @infiles = readdir( IN );
+opendir( IN, $indir ) || die "Can't opendir $indir for read: $!";
+my @infiles = readdir(IN);
 closedir( IN );
-#create a jobid storage log
-my %jobs = ();
-#grab the files that we want to translate
-my ( $inbasename, $outbasename );
+
+my %jobs = ();  #create a jobid storage log (hash)
+
+my ($inbasename, $outbasename); #grab the files that we want to translate
+
 my $array_length = 0;
 foreach my $file( @infiles ){
     next if( $file =~ m/^\./ );
-    if( $array ){
-	#need to know how many array jobs to launch
-	$array_length++;
+    if ($array){ #need to know how many array jobs to launch
+	$array_length++; 
 	#only need to process the single file, because the array jobs do the rest of the work.
-	if( !(defined( $inbasename ) ) ){
+	if(!(defined($inbasename) ) ){
 	    #let's set some vars, but we won't process until we've looped over the entire directory
-	    my $basename;
+	    my $modified_basename;
 	    if( $file =~ m/(.*)split\_*/ ){
-		$basename = $1 . "split_";
+		$modified_basename = $1 . "split_";
 	    }
 	    else{
-		warn "Can't grab $basename from $file\n";
+		warn "Can't grab $modified_basename from $file";
 	    }
-	    $inbasename = $basename;
-	    $outbasename = $basename;
+	    $inbasename = $modified_basename;
+	    $outbasename = $modified_basename;
 	    $outbasename =~ s/\_raw\_/\_orf\_/;
 	}
     }
@@ -78,16 +79,14 @@ foreach my $file( @infiles ){
 	if( $results =~ m/^Your job (\d+) / ) {
 	    my $job_id = $1;
 	    $jobs{$job_id} = $file;
-	}
-	else{
-	    warn( "Remote server did not return a properly formatted job id when running transeq on (remote) localhost. Got $results instead!. Exiting.\n" );
-	    exit(0);
+	} else{
+	    die("Remote server did not return a properly formatted job id when running transeq on (remote) localhost. Got $results instead!. Exiting.");
 	}
     }
 }
 
 #now we run the array job, if $array is set
-if( $array ){
+if ($array){
     my $results;
     if( $split_orfs ){
 	$results = run_transeq_array( $indir, $inbasename, $outdir, $outbasename, $array_length, $remote_scripts_path, $logsdir, $split_outdir );
@@ -102,8 +101,7 @@ if( $array ){
 	$jobs{$job_id}++;
     }
     else{
-	warn( "Remote server did not return a properly formatted job id when running transeq on (remote) localhost. Got $results instead!. Exiting.\n" );
-	exit(0);
+	die( "Remote server did not return a properly formatted job id when running transeq on (remote) localhost. Got $results instead!. Exiting.");
     }
 }
 
@@ -114,74 +112,54 @@ my $time = remote_job_listener( \@job_ids, $waittime );
 ###############
 # SUBROUTINES #
 ###############
-sub run_transeq_array{
-    my( $indir, $inbasename, $outdir, $outbasename, $array_length, $remote_scripts_path, $logsdir, $split_outdir ) = @_;
-    my $script = $remote_scripts_path . "/run_transeq_array.sh";
-    my @args = ();
-    if( defined( $split_outdir ) ){
-    	@args = ( "-t 1-" . $array_length, $script, $indir, $inbasename, $outdir, $outbasename, $remote_scripts_path, $logsdir, $split_outdir);
-    }
-    else{
-	@args = ( "-t 1-" . $array_length, $script, $indir, $inbasename, $outdir, $outbasename, $remote_scripts_path, $logsdir );
-    }
-    print( "qsub ", "@args\n" );
-    my $results = capture( "qsub " . "@args" );
-    if( $EXITVAL != 0 ){
-        warn( "Error running transeq array on remote server: $results\n" );
-        exit(0);
-    }
+sub run_transeq_array {
+    my( $indir, $inbasename, $outdir, $outbasename, $array_length, $remote_scripts_path, $logsdir, $split_outdir) = @_;
+    my $script = "$remote_scripts_path/run_transeq_array.sh";
+    my @args = ( "-t 1-" . $array_length, $script, $indir, $inbasename, $outdir, $outbasename, $remote_scripts_path, $logsdir);
+    if (defined($split_output)) { push(@args, $split_output); } ## add $split_output to the argument list, if it was specified
+    warn("From Alex: there may be a problem with qsub or possibly this -t 1-0 input. Maybe array_length is not ever supposed to be zero? Unclear!");
+    warn("run_transeq_handler.pl: (run_transeq_array): About to execute this command: qsub @args");
+    my $results = IPC::System::Simple::capture("qsub " . "@args");
+    if( $EXITVAL != 0 ) { die("Error in run_transeq_array (running transeq array) on remote server: $results "); }
     return $results;
 }
 
 
-sub run_transeq{
+sub run_transeq {
     my ( $input, $output, $remote_scripts_path, $logsdir, $split_output ) = @_;
-    my $script = $remote_scripts_path . "/run_transeq.sh";
-    my @args   = ();
-    if( defined( $split_output ) ){
-	@args = ( $script, $input, $output, $logsdir, $split_output);
-    }
-    else{
-	@args = ( $script, $input, $output, $logsdir );
-    }
-    print( "qsub ", "@args\n" );
-    my $results = capture( "qsub " . "@args" );
-    if( $EXITVAL != 0 ){
-        warn( "Error running transeq on remote server: $results\n" );
-        exit(0);
-    }
+    my $script = "$remote_scripts_path/run_transeq.sh";
+    my @args = ($script, $input, $output, $logsdir);
+    if (defined($split_output)) { push(@args, $split_output); } ## add it to the argument list, if it was specified
+    warn("run_transeq_handler.pl: (run_transeq): About to execute this command: qsub @args");
+    my $results = IPC::System::Simple::capture("qsub " . "@args");
+    if($EXITVAL != 0) { die( "Error running transeq (run_transeq) on remote server: $results "); }
     return $results;
 }
 
 sub remote_job_listener{
     my $jobs     = shift;
     my $waittime = shift;
-    my $numwaits = 0;
     my %status   = ();
-     while(1){
-        #stop checking if every job has a finished status
-        last if( scalar( keys( %status ) ) == scalar( @{ $jobs } ) );
-        #call qstat and grab the output
-        my $results = execute_qstat();
-        #see if any of the jobs are complete. pass on those we've already finished
-        foreach my $jobid( @{ $jobs } ){
+    my $startTimeInSeconds = time();
+    while(1){
+        last if( scalar( keys( %status ) ) == scalar( @{ $jobs } ) ); #stop checking if every job has a finished status
+        my $results = execute_qstat(); #call qstat and grab the output
+        foreach my $jobid( @{ $jobs } ){ #see if any of the jobs are complete. pass on those we've already finished
             next if( exists( $status{$jobid} ) );
-            if( $results !~ m/$jobid/ ){
-                $status{$jobid}++;
+            if($results !~ m/$jobid/) {
+                $status{$jobid}++; # I am not sure if this is robust against jobs having the same SUB-string in them. Like "199" versus "1999"
             }
         }
-        sleep( $waittime );
-        $numwaits++
+        sleep($waittime);
     }
-    my $time = $numwaits * $waittime;
-    return $time;
+    return (time() - $startTimeInSeconds); # return amount of wall-clock time this took
 }
 
-sub execute_qstat{
-    my $cmd = shift;
-    my $results = capture( "qstat" );
-    if( $EXITVAL != 0 ){
-	warn( "Error running execute_cmd: $results\n" );
+sub execute_qstat {
+    my ($cmd) = @_;
+    my $results = IPC::System::Simple::capture("qstat");
+    if ($EXITVAL != 0) {
+	warn( "Error running execute_cmd: $results" );
     }
     return $results;
 }

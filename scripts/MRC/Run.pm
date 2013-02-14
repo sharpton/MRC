@@ -57,19 +57,16 @@ sub remote_transfer($$$) {
     } elsif( $path_type eq 'directory' || $path_type eq "d" ){
 	@args = ( "-r", $src_path, $dest_path );
     } elsif( $path_type eq 'contents' || $path_type eq "c" ){
-	warn "This should probably never be called!\n";
+	warn "This should probably never be called!";
 	#on some machines, if the directories are the same on remote and local, a recursive scp will create a subdir with identical dir name. Use the contents setting to 
 	#copy all of the contents of a file over, without transferring the actual sourcedir as well
 	@args = ( $src_path . "/*", $dest_path );
     } else {
-	die "Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!\n";
+	MRC::dieDramatically("Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!");
     }
     warn("remote_transfer: scp @args ");
     my $results = IPC::System::Simple::capture("scp @args");
-    if (0 != $EXITVAL) {
-	warn("Error transferring $src_path to $dest_path using $path_type: $results\n" );
-	exit(0);
-    }
+    if (0 != $EXITVAL) { dieDramatically("Error transferring $src_path to $dest_path using $path_type: $results"); }
     return $results;
 }
 
@@ -83,18 +80,21 @@ sub remote_transfer_file($$) {
     return(remote_transfer($src_path, $dest_path, 'file'));
 }
 
-
-
-
-
-
-
+sub execute_ssh_cmd($$;$) {
+    my ($connection, $remote_cmd, $verbose) = @_;
+    my @args = ($connection, $remote_cmd);
+    my $verboseFlag = (defined($verbose) && $verbose) ? '-v' : '';
+    my $sshCmd = "ssh $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING $verboseFlag @args";
+    MRC::notifyWithLine($sshCmd);
+    my $results = IPC::System::Simple::capture($sshCmd);
+    if ($EXITVAL != 0) { MRC::dieDramatically( "Error running this ssh command: $sshCmd: $results\n" ); }
+    return $results; ## <-- this gets used! Don't remove it.
+}
 
 sub clean_project{
-    my $self       = shift;
-    my $project_id = shift;
-    my $samples    = $self->MRC::DB::get_samples_by_project_id( $project_id );
-    while( my $sample = $samples->next() ){
+    my ($self, $project_id) = @_;
+    my $samples = $self->MRC::DB::get_samples_by_project_id( $project_id ); # apparently $samples is a scalar datatype that we can iterate over
+    while(my $sample = $samples->next()){ # go through all the samples, I guess!
 	my $sample_id = $sample->sample_id();
 	$self->MRC::DB::delete_search_result_by_sample_id( $sample_id );
 	$self->MRC::DB::delete_family_member_by_sample_id( $sample_id );
@@ -104,7 +104,6 @@ sub clean_project{
     }
     $self->MRC::DB::delete_project( $project_id );
     $self->MRC::DB::delete_ffdb_project( $project_id );
-    #return $self;
 }
 
 #currently uses @suffix with basename to successfully parse off .fa. may need to change
@@ -164,7 +163,7 @@ sub load_samples{
     my %samples = %{ $self->get_samples() };
     my $numSamples = scalar( keys(%samples) );
     my $plural = ($numSamples == 1) ? '' : 's'; # pluralize 'samples'
-    warn("Run.pm: load_samples: Processing $numSamples sample${plural} associated with project PID #" . $self->get_project_id() . "\n" );
+    MRC::notifyWithLine("Run.pm: load_samples: Processing $numSamples sample${plural} associated with project PID #" . $self->get_project_id() . " ");
     foreach my $samp( keys( %samples ) ){
 	my $pid = $self->get_project_id();
 	my $insert;
@@ -224,14 +223,13 @@ sub load_samples{
 	    }
 	}
 
-	warn("Loaded $numReads reads for sample $sid into the database.");
+	MRC::notify("Loaded $numReads reads for sample $sid into the database.");
     }
     $self->set_samples( \%samples ); #uncertain if this is necessary
-    warn("All $numSamples sample$plural associated with project " . $self->get_project_id() . " were loaded.");
-    #return $self;
+    MRC::notifyWithLine("Successfully loaded $numSamples sample$plural associated with the project PID #" . $self->get_project_id() . " ");
 }
 
-sub back_load_project{
+sub back_load_project(){
     my $self = shift;
     my $project_id = shift;
     my $ffdb = $self->get_ffdb();
@@ -246,7 +244,6 @@ sub back_load_project{
         $self->set_remote_lastdb_script( $self->get_remote_project_path() . "/run_lastdb.sh" );
 	$self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
     }
-    #return $self;
 }
 
 #this might need extra work to get the "path" element correct foreach sample
@@ -279,40 +276,26 @@ sub back_load_samples{
     #return $self;
 }
 
-#this is a compute side function. don't use db vars
+# Note this message: "this is a compute side function. don't use db vars"
 sub translate_reads{
-    my $self     = shift;
-    my $input    = shift;
-    my $output   = shift;
+    my ($self, $input, $output) = @_;
     my @args     = ("$input", "$output", "-frame=6");
-    my $results  = IPC::System::Simple::capture( "transeq " . "@args" );
-    if( $EXITVAL != 0 ){
-	warn("Error translating sequences in $input: $results");
-	exit(0);
-    }
+    my $results  = IPC::System::Simple::capture("transeq " . "@args" );
+    ($EXITVAL != 0) or MRC::dieDramatically("Error translating sequences in $input: $results");
     return $results;
 }
 
+# Run hmmscan
 sub run_hmmscan{
-    my $self   = shift;
-    my $inseqs = shift;
-    my $hmmdb  = shift;
-    my $output = shift;
-    my $tblout = shift; #save $output as a tblast style table 1=yes, 0=no
-    #Run hmmscan
+    my ($self, $inseqs, $hmmdb, $output, $tblout) = @_; # tblout means: "save $output as a tblast style table 1=yes, 0=no"
     my @args = ();
-    if( $tblout ){
+    if($tblout){
 	@args = ( "--domE 0.001", "--domtblout $output", "$hmmdb", "$inseqs" );
+    } else{
+	@args = ("$hmmdb", "$inseqs", "> $output");
     }
-    else{
-	@args     = ("$hmmdb", "$inseqs", "> $output");
-    }   
     my $results  = IPC::System::Simple::capture( "hmmscan " . "@args" );
-    if( $EXITVAL != 0 ){
-	warn("Error translating sequences in $inseqs: $results");
-	exit(0);
-    }
-    #return $self;
+    ($EXITVAL != 0) or MRC::dieDramatically("Error translating sequences in $inseqs: $results");
 }
 
 #this method may be faster, but suffers from having a few hardcoded parameters.
@@ -334,46 +317,39 @@ sub load_orf{
     }
     my $read = $reads->next();
     my $read_id = $read->read_id();
-    $self->MRC::DB::insert_orf( $orf_alt_id, $read_id, $sample_id );
-    #return $self;
+    $self->MRC::DB::insert_orf($orf_alt_id, $read_id, $sample_id);
 }
 
 sub load_multi_orfs{
-    my $self       = shift;
-    my $orfs       = shift; #a Bio::Seq object
-    my $sample_id  = shift;
-    my $algo       = shift;
+    my ($self, $orfsBioSeqObject, $sample_id, $algo) = @_;   # $orfsBioSeqObject is a Bio::Seq object
+
     my %orf_map    = (); #orf_alt_id to read_id
     my %read_map   = (); #read_alt_id to read_id
     my $count      = 0;
-    while( my $orf = $orfs->next_seq() ){
+    while (my $orf = $orfsBioSeqObject->next_seq() ){
 	$count++;
 	my $orf_alt_id  = $orf->display_id();
 	my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, $algo );
 	#get the read id, but only if we haven't see this read before
-	my $read_id;
-	if( defined( $read_map{ $read_alt_id } ) ){
+	my $read_id = undef;
+	if(defined( $read_map{ $read_alt_id } ) ){
 	    $read_id = $read_map{ $read_alt_id };
-	}
-	else{
-	        my $reads = $self->get_schema->resultset("Metaread")->search(
-		    {
-			read_alt_id => $read_alt_id,
-			sample_id   => $sample_id,
-		    }
-		    );
-		if( $reads->count() > 1 ){
-		    die "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!";
+	} else{
+	    my $reads = $self->get_schema->resultset("Metaread")->search(
+		{
+		    read_alt_id => $read_alt_id,
+		    sample_id   => $sample_id,
 		}
-		my $read = $reads->next();
-		$read_id = $read->read_id();
-		$read_map{ $read_alt_id } = $read_id;
+		);
+	    if ($reads->count() > 1) { MRC::dieDramatically("Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!"); }
+	    my $read = $reads->next();
+	    $read_id = $read->read_id();
+	    $read_map{ $read_alt_id } = $read_id;
 	}
 	$orf_map{ $orf_alt_id } = $read_id;
     }
     $self->MRC::DB::insert_multi_orfs( $sample_id, \%orf_map );
-    print "Bulk loaded $count orfs to the database.\n";
-    #return $self;
+    MRC::notifyWithLine("Bulk loaded $count orfs to the database.");
 }
 
 
@@ -1347,81 +1323,75 @@ sub load_project_remote{
 #the qsub -sync y option keeps the connection open. lower chance of a connection failure due to a ping flood, but if connection between
 #local and remote tends to drop, this may not be foolproof
 sub translate_reads_remote{
-    my $self       = shift;
-    my $waitTimeInSeconds   = shift;
-    my $logsdir    = shift;
-    my $split_orfs = shift; #split orfs on stop? 1/0    
-    my @sample_ids = @{ $self->get_sample_ids() };
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    my @job_ids = ();
+    my ($self, $waitTimeInSeconds, $logsdir, $split_orfs) = @_;
+    # "split_orfs" argument means "split orfs on stop?" Should be 1 or 0.
+
     #push translation scripts to remote server
-    my $rscripts        = $self->get_remote_scripts();
-    my $remote_handler  = $self->get_scripts_dir . "/remote/run_transeq_handler.pl";
-    my $remote_script   = $self->get_scripts_dir . "/remote/run_transeq_array.sh";
-    MRC::Run::remote_transfer_file( $remote_handler, $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts);
-    MRC::Run::remote_transfer_file( $remote_script,  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts);
-    foreach my $sample_id( @sample_ids ){
-	my $remote_input_dir  = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/raw/";
-	my $remote_output_dir =  $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-	my $remote_orfs = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-	my $local_orfs  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-	if( $split_orfs ){
-	    my $local_unsplit_orfs = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
-	    my $remote_unsplit_orfs = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
-	    my $remote_cmd   = "\'perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waitTimeInSeconds . 
-		" -l " . $logsdir . " -s " . $self->get_remote_scripts() . " -u " . $remote_unsplit_orfs . " > ~/tmp.out\'";	
-	    print( "translating reads, splitting orfs on stop codon\n" );       
-	    $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-	    print( "translation complete, Transferring split and raw translated orfs\n" );
-	    MRC::Run::remote_transfer( $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_unsplit_orfs, $local_unsplit_orfs, 'c' ); #the unsplit orfs
-	    MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' ); #the split orfs
+    my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
+    my $remote_script_dir = $self->get_remote_scripts();
+
+    my $remote_handler  = $self->get_scripts_dir() . "/remote/run_transeq_handler.pl";
+    my $remote_script   = $self->get_scripts_dir() . "/remote/run_transeq_array.sh"; # what is going on here
+    my $transeqPerlRemote = "$remote_script_dir/run_transeq_handler.pl";
+
+    MRC::Run::remote_transfer_file( $remote_handler, $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_script_dir);
+    MRC::Run::remote_transfer_file( $remote_script,  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_script_dir);
+    foreach my $sample_id( @{$self->get_sample_ids()} ) {
+	my $remote_input_dir    = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/raw";
+	my $remote_output_dir   = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs";
+
+	MRC::notifyWithLine("Translating reads...");
+	if ($split_orfs) {
+	    # Split the ORFs!
+	    my $local_unsplit_dir  =        $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # This is where the files will be tranferred BACK to. Should NOT end in a slash!
+	    my $remote_unsplit_dir = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # Should NOT end in a slash!
+	    my $tempStdoutLocationOnRemoteMachine = "$remote_unsplit_dir/tmp.out"; # used to be "~/tmp.out"
+	    my $remote_cmd = "\'perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . " -u $remote_unsplit_dir" . " > ${tempStdoutLocationOnRemoteMachine} \'";
+	    execute_ssh_cmd( $connection, $remote_cmd );
+	    MRC::notifyWithLine("Translation complete, Transferring split and raw translated orfs\n");
+	    MRC::Run::remote_transfer_directory("${connection}:$remote_unsplit_dir", $local_unsplit_dir); #the unsplit orfs
+	} else{ 
+	    my $remote_cmd_no_unsplit = "\'perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . "\'";
+	    execute_ssh_cmd($connection, $remote_cmd_no_unsplit);
 	}
-	else{ #no splitting of the orfs
-	    my $remote_cmd = "\'perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waitTimeInSeconds . 
-		" -l " . $logsdir . " -s " . $self->get_remote_scripts() . "\'";	
-	    print( "translating reads\n" );       
-	    $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-	    print( "translation complete. Transferring orfs\n" );
-	    MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' );
-	}
-	print( "transfer of orfs successful\n");	
+	MRC::notifyWithLine("Translation complete, Transferring ORFs\n");
+	my $localOrfDir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/${sample_id}/orfs";
+	MRC::Run::remote_transfer_directory("$connection:$remote_output_dir", $localOrfDir); # This happens in both cases, whether or not the orfs are split!
     }
-    warn( "All reads were translated on the remote server and locally acquired\n" );
-    #return $self;
+    MRC::notifyWithLine("All reads were translated on the remote server and locally acquired.");
 }
 
 #if you'd rather routinely ping the remote server to check for job completion. not default
 sub translate_reads_remote_ping{
-    my $self = shift;
-    my $waitTimeInSeconds = shift; #in seconds, amount of time between queue checks
-    my @sample_ids =  @{ $self->get_sample_ids() };
+    my ($self, $waitTimeInSeconds) = @_; # waitTimeInSeconds is the amount of time between queue checks
+
+    my $connection  = $self->get_remote_username() . "@" . $self->get_remote_server();
+    my $pid         = $self->get_project_id();
+    my $remote_ffdb = $self->get_remote_ffdb();
+    my $local_ffdb  = $self->get_ffdb();
+
     my %jobs = ();
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    foreach my $sample_id( @sample_ids ){
-	my $remote_input  = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/raw.fa";
-	my $remote_output =  $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
-	my $remote_cmd = "\'qsub " . $self->get_remote_scripts() . "run_transeq.sh " . $remote_input . " " . $remote_output . "\'";
-	my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-	if( $results =~ m/^Your job (\d+) / ){
+    foreach my $sample_id( @{$self->get_sample_ids()} ){
+	my $remote_input  = "$remote_ffdb/projects/$pid/$sample_id/raw.fa";
+	my $remote_output = "$remote_ffdb/projects/$pid/$sample_id/orfs.fa";
+	my $transeqShRemoteLocation = $self->get_remote_scripts() . "/run_transeq.sh";
+	my $results = execute_ssh_cmd( $connection, "\'qsub $transeqShRemoteLocation $remote_input $remote_output\'");
+	if ($results =~ m/^Your job (\d+) / ){
 	    my $job_id = $1;
 	    $jobs{$job_id} = $sample_id;
-	}
-	else{
-	    warn( "Remote server did not return a properly formatted job id when running $remote_cmd using connection $connection. Got $results instead!. Exiting.\n" );
-	    exit(0);
+	} else{
+	    MRC::warnPrint("Remote server did not return a properly formatted job id! The previous SSH command got the results <$results> instead!");
+	    exit(0); # not sure why we EXIT. Seems like this should be a "die"? Isn't it basically the same here anyway?
 	}
     }
     #check the jobs until they are all complete
-    my @job_ids = keys( %jobs );
+    my @job_ids = keys(%jobs);
     my $time = $self->MRC::Run::remote_job_listener( \@job_ids, $waitTimeInSeconds );
-    warn( "Reads were translated in approximately $time seconds on remote server\n");
-    #consider that a completed job doesn't mean a successful run!
-    warn( "Pulling translated reads from remote server\n" );
+    MRC::notify( "Reads were translated in approximately $time seconds on remote server");
+    MRC::notifyWithLine("Pulling translated reads from remote server"); # <-- consider that a completed job doesn't mean a successful run!
     foreach my $job( keys( %jobs ) ){
 	my $sample_id = $jobs{$job};
-	my $remote_orfs = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
-	my $local_orfs  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
-	my $results = MRC::Run::remote_transfer_file( $remote_orfs, $local_orfs);
+	my $results = MRC::Run::remote_transfer_file("$connection:$remote_ffdb/projects/$pid/$sample_id/orfs.fa", "$local_ffdb/projects/$pid/$sample_id/orfs.fa");
     }
 }
 
@@ -1436,7 +1406,7 @@ sub remote_job_listener{
     while(1){
 	last if( scalar( keys( %status ) ) == scalar( @{ $jobs } ) ); #stop checking if every job has a finished status
 	#call qstat and grab the output
-	my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
+	my $results = execute_ssh_cmd( $connection, $remote_cmd );
 	#see if any of the jobs are complete. pass on those we've already finished
 	foreach my $jobid( @{ $jobs } ){
 	    next if( exists( $status{$jobid} ) );
@@ -1472,34 +1442,6 @@ sub local_job_listener{
     return (time() - $startTimeInSeconds); # return amount of wall-clock time this took
 }
 
-
-
-
-# This is never used
-#File::Base name has a dirname function, but it includes the full path. This only returns the current directory name from a path
-# sub get_dirname {
-#     my ($self, $path) = @_;
-#     $path =~ s/[\/]+$//;  # remove any (possibly multiple) trailing slashes
-#     my @data = split("\/", $path);
-#     my $lastDirectoryName = $data[-1];  #split on slashes, then grab the *last* directory in the array (the "-1"th)
-#     return $lastDirectoryName;
-# }
-
-sub execute_ssh_cmd {
-    my ($self, $connection, $remote_cmd, $verbose) = @_;
-    my @args = ($connection, $remote_cmd);
-    my $vFlag = (defined($verbose) && $verbose) ? '-v' : '';
-    my $sshCmd = "ssh $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING $vFlag @args";
-    warn($sshCmd); # "warn" also prints the line number and filename! So it's much better than just 'print STDERR'.
-    my $results = IPC::System::Simple::capture($sshCmd);
-    if ($EXITVAL != 0){
-	warn( "Error running ssh command $connection $remote_cmd: $results\n" );
-	exit(0); # exit zero typically indicates NOT AN ERROR, but here we had an error. What gives!
-	#exit($EXITVAL); ## temporarily changed by Alex to exit with an ERROR and not zero.
-    }
-    return $results;
-}
-
 sub remote_transfer_search_db{
     my ($self, $db_name, $type) = @_;
     my $DATABASE_PARENT_DIR = undef;
@@ -1524,21 +1466,19 @@ sub gunzip_file_remote{
     my ( $self, $remote_file ) = @_;
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     my $remote_cmd = "gunzip -f $remote_file";
-    my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
+    my $results = execute_ssh_cmd( $connection, $remote_cmd );
     return $results;
 }
 
 sub gunzip_remote_dbs{
     my( $self, $db_name, $type ) = @_;    
-    my $ffdb        = $self->get_ffdb();
-    my $db_dir;
-    if( $type eq "hmm"){
-	$db_dir = $ffdb . "/$HMMDB_DIR/" . $db_name;
-    }
-    elsif( $type eq "blast" ){
-	$db_dir = $ffdb . "/$BLASTDB_DIR/" . $db_name;
-    }
-    opendir( DIR, $db_dir ) || die "Can't opendir $db_dir for read: $!\n";
+    my $ffdb   = $self->get_ffdb();
+    my $db_dir = undef;
+    if ($type eq "hmm")      { $db_dir = "$ffdb/$HMMDB_DIR/$db_name"; }
+    elsif ($type eq "blast") { $db_dir = "$ffdb/$BLASTDB_DIR/$db_name"; }
+    else                     { die "invalid / unrecognized type."; }
+
+    opendir( DIR, $db_dir ) || die "Can't opendir $db_dir for read: $!";
     my @files = readdir( DIR );
     closedir DIR;
     foreach my $file( @files ){
@@ -1556,69 +1496,65 @@ sub gunzip_remote_dbs{
 }
 
 sub format_remote_blast_dbs{
-    my( $self, $r_script_path ) = @_;
+    my( $self, $remote_script_path ) = @_;
     my $ffdb       = $self->get_ffdb();
-    my $r_db_dir   = $self->get_remote_ffdb . "/$BLASTDB_DIR/" . $self->get_blastdb_name() . "/";
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    my $remote_cmd = "qsub -sync y $r_script_path $r_db_dir";
-    my $results    = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-    #return $self;
+    my $remote_database_dir   = $self->get_remote_ffdb() . "/$BLASTDB_DIR/" . $self->get_blastdb_name();
+    my $results    = execute_ssh_cmd($self->get_remote_username . "@" . $self->get_remote_server,   "qsub -sync y $remote_script_path $remote_database_dir");
 }
 
 sub run_search_remote{
     my ($self, $sample_id, $type, $waitTimeInSeconds, $verbose) = @_;
-    my ( $r_script_path, $search_handler_log, $db_name, $remote_db_dir, $remote_search_res_dir, $remote_query_dir, $remote_cmd );
+    my ( $remote_script_path, $search_handler_log, $db_name, $remote_db_dir, $remote_search_res_dir);
 
-    $remote_query_dir      = $self->get_remote_sample_path($sample_id) . "/orfs/"; # This is the same for ALL entries!
+    my $remote_query_dir      = $self->get_remote_sample_path($sample_id) . "/orfs/"; # This is the same for ALL entries!
+    
     if( $type eq "blast" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/blast_handler";
-	$r_script_path         = $self->get_remote_blast_script();
+	$remote_script_path    = $self->get_remote_blast_script();
 	$db_name               = $self->get_blastdb_name();
 	$remote_db_dir         = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name/";
 	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/blast/";
     }
     if( $type eq "last" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/last_handler";
-	$r_script_path         = $self->get_remote_last_script();
+	$remote_script_path    = $self->get_remote_last_script();
 	$db_name               = $self->get_blastdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name/";
-	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/last/";
+	$remote_db_dir         = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name";
+	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/last";
     }
     if( $type eq "hmmsearch" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmsearch_handler";
-	$r_script_path         = $self->get_remote_hmmsearch_script();
+	$remote_script_path    = $self->get_remote_hmmsearch_script();
 	$db_name               = $self->get_hmmdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name/";
-	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmsearch/";
+	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name";
+	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmsearch";
     }
     if( $type eq "hmmscan" ){
 	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmscan_handler";
-	$r_script_path         = $self->get_remote_hmmscan_script();
+	$remote_script_path    = $self->get_remote_hmmscan_script();
 	$db_name               = $self->get_hmmdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name/";
-	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmscan/";
+	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name";
+	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmscan";
     }
     
-    $remote_cmd   = "\'perl " . $self->get_remote_scripts() . "/run_remote_search_handler.pl -h $remote_db_dir " . 
-	"-o $remote_search_res_dir -i $remote_query_dir -n $db_name -s $r_script_path -w $waitTimeInSeconds > " . 
-	$search_handler_log . ".out 2> " . $search_handler_log . ".err\'";
-    my $connection            = $self->get_remote_username() . "@" . $self->get_remote_server();
-    my $results               = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd, $verbose );
+    my $perlScriptRemoteLoc = $self->get_remote_scripts() . "/run_remote_search_handler.pl";
+    my $remote_cmd  = "\'perl $perlScriptRemoteLoc -h $remote_db_dir -o $remote_search_res_dir -i $remote_query_dir -n $db_name -s $remote_script_path -w $waitTimeInSeconds > ${search_handler_log}.out 2> $search_handler_log.err \'";
+    my $connection  = $self->get_remote_username() . "@" . $self->get_remote_server();
+    my $results     = execute_ssh_cmd( $connection, $remote_cmd, $verbose );
     return $results;
 }
 
 sub get_remote_search_results {
     my($self, $sample_id, $type) = @_;
     ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed into get_remote_search_results! The invalid type was: \"$type\".";
-    my $remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/$type/";
-    my $local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/$type/";
+    my $remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/$type";
+    my $local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/search_results/$type";
     # Note that every sequence split has its *own* output dir, in order to cut back on the number of files per directory.
-    my $in_orf_dir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/"; # <-- Always the same input directory (orfs) no matter what the $type is.
+    my $in_orf_dir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs"; # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs( @{ $self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0) } ) {
 	my $remoteStr = $self->get_remote_username() . '@' . $self->get_remote_server() . ':' . "$remote_search_res_dir/$in_orfs";
 	MRC::Run::remote_transfer_directory($remoteStr, $local_search_res_dir);
     }
-    #return $self; # unclear to me why this is returned...
 }
 
 # Below: Note that this may not yet be a perfect replacement for the ping version below. The problem with this approach is that it keeps an ssh connection alive
@@ -1642,7 +1578,7 @@ sub get_remote_search_results {
 # 	    $remote_cmd = "\'qsub -sync y " . $self->get_remote_scripts() . "run_hmmscan.sh " .  $in_seqs_dir . " " . $inseq_file . " " . $hmmdb . " " . $output . " " . $outstem . " " . $type . "\'";
 # 	}
 #     }
-#     my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
+#     my $results = execute_ssh_cmd( $connection, $remote_cmd );
 #     return $results;
 # }
 
@@ -1654,29 +1590,29 @@ sub run_blast_remote{
 
     my $SINGLE_QUOTE = "\'";
     my $sync_parameter = (!defined($closed) || !$closed) ? ' -sync y ' : ''; # if "closed" is false or unspecified, then add "-sync y" to the parameter list
-    my $remote_cmd = $SINGLE_QUOTE . "qsub $sync_parameter $remoteScriptDir run_blast.sh $inseq $db $output " . $SINGLE_QUOTE;
-    return($self->MRC::Run::execute_ssh_cmd($connection, $remote_cmd));
+    my $remote_cmd = $SINGLE_QUOTE . "qsub $sync_parameter $remoteScriptDir/run_blast.sh  $inseq  $db  $output " . $SINGLE_QUOTE;
+    return(execute_ssh_cmd($connection, $remote_cmd));
 }
 
 sub transfer_hmmsearch_remote_results{
     my ($self, $hmmdb_name) = @_;
     my $ffdb = $self->get_ffdb();
     my $local_file = "$ffdb/hmmsearch/$hmmdb_name";
-    my $remote_file  = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/hmmsearch/" . $hmmdb_name;
+    my $remote_file  = $self->get_remote_username() . "@" . $self->get_remote_server() . ":" . $self->get_remote_ffdb() . "/hmmsearch/" . $hmmdb_name;
     return(MRC::Run::remote_transfer_file( $remote_file, $local_file));
 }
 
 sub remove_remote_file{
     my($self, $file) = @_;
     my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
-    return($self->MRC::Run::execute_ssh_cmd( $connection, "/bin/rm $file"));
+    return(execute_ssh_cmd( $connection, "/bin/rm $file"));
 }
 
 sub remove_hmmsearch_remote_results{
     my ($self, $search_outfile) = @_;
     my $remote_file = $self->get_remote_ffdb() . "/hmmsearch/$search_outfile";
     my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
-    return($self->MRC::Run::execute_ssh_cmd( $connection, "/bin/rm $remote_file"));
+    return(execute_ssh_cmd( $connection, "/bin/rm $remote_file"));
 }
 
 sub run_hmmscan_remote_ping{
@@ -1693,15 +1629,18 @@ sub run_hmmscan_remote_ping{
 	foreach my $hmmdb( keys( %hmmdbs ) ){
 	    my $remote_hmmdb_path = $hmmdbs{$hmmdb};
 	    my $remote_output = "${thisSampleDir}/search_results/${sample_id}_v_${hmmdb}.hsc";
-	    my $remote_cmd = "\'qsub " . $self->get_remote_scripts() . "run_hmmscan.sh -o " . $remote_output . " " . $remote_hmmdb_path . " " . $remote_input . "\'";
-	    my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-	    if( $results =~ m/^Your job (\d+) / ){
+
+	    my $runHmmScanShRemoteLocation =  $self->get_remote_scripts() . "/run_hmmscan.sh";
+	    my $remote_cmd = "\'qsub $runHmmScanShRemoteLocation -o $remote_output $remote_hmmdb_path $remote_input \'";
+	    my $results = execute_ssh_cmd( $connection, $remote_cmd );
+	    if ($results =~ m/^Your job (\d+) /) {
 		my $job_id = $1;
 		$jobs{$job_id}{$sample_id}{$hmmdb} = $remote_output;
-	    } else{
-		MRC::warnPrint("Remote server did not return a properly formatted job id when running $remote_cmd using connection $connection. Got $results instead!. Exiting.");
-		exit(0);
+	    } else {
+		MRC::dieDramatically("Remote server did not return a properly formatted job id when running $remote_cmd using connection $connection. Got $results instead!. Exiting.");
 	    }
+
+	    MRC::notifyWithLine("Sleeping for 10 seconds here to avoid flooding the remote server...");
 	    sleep(10); # sleep for ten seconds -- add a sleep so that we don't flood the remote server
 	}
     }
@@ -1715,7 +1654,7 @@ sub run_hmmscan_remote_ping{
 	foreach my $sample_id( @sample_ids ){
 	    foreach my $hmmdb( keys( %hmmdbs ) ){
 		next unless exists( $jobs{$job}{$sample_id}{$hmmdb} );
-		warn( join("\t", $job, $sample_id, $hmmdb, "\n" ) );
+		warn( join("\t", $job, $sample_id, $hmmdb) );
 		my $remote_results = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $jobs{$job}{$sample_id}{$hmmdb};
 		my $local_results  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/${sample_id}/search_results/${sample_id}_v_${hmmdb}.hsc";
 		my $results = MRC::Run::remote_transfer_file( $remote_results, $local_results);
@@ -1746,9 +1685,8 @@ sub get_family_size_by_id{
 sub build_PCA_data_frame{
     my $self     = shift;
     my $class_id = shift;
-    #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/PCA_data_frame_" . $class_id . ".tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!\n";    
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/PCA_data_frame_${class_id}.tab";
+    open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $! ";
     print OUT join("\t", "OPF", @{ $self->get_sample_ids() }, "\n" );
     my %opfs        = ();
     my %opf_map     = (); #$sample->$opf->n_hits;  
@@ -1766,7 +1704,7 @@ sub build_PCA_data_frame{
 	$sample_cnts{$sample_id} = $sample_total;
     }
     foreach my $opf( keys( %opfs ) ){
-	print OUT $opf . "\t";
+	print OUT ($opf . "\t");
 	foreach my $sample_id( @{ $self->get_sample_ids() } ){
 	    if( defined( $opf_map{$sample_id}->{$opf} ) ){
 		#total classified reads
@@ -1785,9 +1723,8 @@ sub build_PCA_data_frame{
     #return $self;
 }
 
-sub calculate_project_richness{
-    my $self     = shift;
-    my $class_id = shift;
+sub calculate_project_richness {
+    my ($self, $class_id) = @_;
     #identify which families were uniquely found across the project
     my $hit_fams = {}; #hashref
 
@@ -1798,8 +1735,8 @@ sub calculate_project_richness{
 	$hit_fams->{$famid}++;
     }
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_richness_" . $class_id . ".tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_project_richness: $!\n";    
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_richness_${class_id}.tab";
+    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_project_richness: $! ";   
     print OUT join( "\t", "opf", "\n" );
     #dump the famids that were found in the project to the output
     foreach my $famid( keys( %$hit_fams ) ){
@@ -1814,7 +1751,7 @@ sub calculate_sample_richness{
     my $class_id = shift;
     #create the outfile
     my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/sample_richness_" . $class_id . ".tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_sample_richness: $!\n";    
+    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_sample_richness: $!";    
     print OUT join( "\t", "sample", "opf", "\n" );
     #identify which families were uniquely hit in each sample
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
@@ -1849,7 +1786,7 @@ sub calculate_project_relative_abundance{
     print "creating outfile...\n";
     #create the outfile
     my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_relative_abundance_" . $class_id . ".tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_project_relative_abundance: $!\n" ;    
+    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_project_relative_abundance: $!";    
     print OUT join( "\t", "opf", "r_abundance", "hits", "total_orfs", "\n" );
     #dump the famids that were found in the project to the output
     foreach my $famid( keys( %$hit_fams ) ){
@@ -1867,7 +1804,7 @@ sub calculate_sample_relative_abundance{
     my $class_id = shift;
     #create the outfile
     my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/sample_relative_abundance_" . $class_id . ".tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_sample_relative_abundance: $!\n";    
+    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_sample_relative_abundance: $!";
     print OUT join( "\t", "sample", "opf", "r_abundance", "hits", "sample_orfs", "\n" );
     #identify number of times each family hit in each sample. also, how many reads were classified.
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
@@ -1893,7 +1830,7 @@ sub build_classification_map{
     my ($self, $class_id) = @_;
     #create the outfile
     my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/classification_map_" . $class_id . ".tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!\n";    
+    open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
     print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "\n" );
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
 	my $family_rs = $self->MRC::DB::get_families_with_orfs_by_sample( $sample_id );

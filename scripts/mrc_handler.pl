@@ -11,6 +11,7 @@
 # perl ./MRC/scripts/mrc_handler.pl --dbuser=alexgw --dbpass=$PASS --dbhost=lighthouse.ucsf.edu --rhost=chef.compbio.ucsf.edu --ruser=alexgw --ffdb=/home/alexgw/MRC_ffdb --refdb=/home/alexgw/sifting_families  --projdir=./MRC/data/randsamp_subset_perfect_2/ 
 
 # perl ./MRC/scripts/mrc_handler.pl --dbuser=alexgw --dbpass=$PASS --dbhost=lighthouse.ucsf.edu --rhost=chef.compbio.ucsf.edu --ruser=alexgw --ffdb=/home/alexgw/MRC_ffdb --refdb=/home/alexgw/sifting_families  --projdir=./MRC/data/randsamp_subset_perfect_2/ --dryrun
+# perl ./MRC/scripts/mrc_handler.pl --dbuser=alexgw --dbpass=$PASS --dbhost=lighthouse.ucsf.edu --rhost=chef.compbio.ucsf.edu --ruser=alexgw --rdir=/scrapp2/alexgw/MRC --ffdb=/home/alexgw/MRC_ffdb --refdb=/home/alexgw/sifting_families --projdir=./MRC/data/randsamp_subset_perfect_2/
 
 ## ================================================================================
 ## ================================================================================
@@ -78,10 +79,8 @@ my $is_remote        = 1; # By default, assume we ARE using a remote compute clu
 my $stage            = 0; # By default, do NOT stage the database (this takes a long time)!
 my $remote_hostname  = undef; #"chef.compbio.ucsf.edu";
 my $remote_user      = undef; #"sharpton";
-my $remoteMRCdir     = "/netapp/home/sharpton/projects/MRC"; # added by Alex
-my $rffdb            = "/scrapp2/sharpton/MRC/MRC_ffdb/";
-#my $rscripts       = "/netapp/home/sharpton/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of rffdb
-
+my $remoteDir        = undef;
+#my $rscripts       = "/netapp/home/sharpton/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
 
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
 my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
@@ -146,7 +145,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   # Remote computational cluster server related variables
 	   , "rhost=s"     => \$remote_hostname
 	   , "ruser=s"     => \$remote_user
-	   , "rdir=s"      => \$rffdb
+	   , "rdir=s"      => \$remoteDir
 
 	   ,              's=s' => \$sWasSpecified #interestingly, you can't have a "sub" here that dies, as execution continues on
 	   ,    "hmmdb|h=s"     => \$hmmdb_name
@@ -174,18 +173,19 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
    );
 
 
-my $remoteScriptDir       = "${remoteMRCdir}/scripts"; # this should probably be automatically set to a subdir of rffdb
+#MRC::warnPrint($dryRun);
 
-### =========== Automatic setting of default parameters ========
+#/scrapp2/alexgw/MRC/MRC_ffdb/
 
-if (!defined($blastdb_name)) { $blastdb_name = $db_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size; } # set default blast DB name, if none was specified
 
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
+(defined($remoteDir)) or dieWithUsageError("--rdir (remote computational server scratch/flatfile location. Example: --rdir=/cluster/share/yourname/MRC). This is mandatory!");
+
 (!$dryRun) or dieWithUsageError("Sorry, --dryrun is actually not supported, as it's a huge mess right now! My apologies.");
-(!defined($sWasSpecified) && !$sWasSpecified) or dieWithUsageError("-s is no longer a valid option. Instead, remove it from the command line and export the 'MRC_LOCAL' environment variable to point to your local MRC directory.\nExample of what you could type in bash instead of the -s option:  export MRC_LOCAL=/your/home/location/MRC\n");
+(!defined($sWasSpecified) && !$sWasSpecified) or dieWithUsageError("-s is no longer a valid option. Instead, remove it from the command line and export the 'MRC_LOCAL' environment variable to point to your local MRC directory.\nExample of what you could type in bash instead of the -s option:  export MRC_LOCAL=/your/home/location/MRC");
 (defined($local_ffdb)) or dieWithUsageError("--ffdb (local flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/sharpton/MRC_ffdb");
-(-d $local_ffdb)       or dieWithUsageError("--ffdb (local flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Note that Perl does NOT UNDERSTAND the tilde (~) expansion for home directories, so please specify the full path in that case. You must Specify a directory that exists.");
+(-d $local_ffdb)       or dieWithUsageError("--ffdb (local flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Note that Perl does NOT UNDERSTAND the tilde (~) expansion for home directories, so please specify the full path in that case. You must specify a directory that already exists.");
 
 (defined($local_reference_ffdb)) or dieWithUsageError("--refdb (local REFERENCE flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/sharpton/sifting_families");
 (-d $local_reference_ffdb)       or dieWithUsageError("--refdb (local REFERENCE flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Note that Perl does NOT UNDERSTAND the tilde (~) expansion for home directories, so please specify the full path in that case. Specify a directory that exists.");
@@ -206,7 +206,15 @@ if ($is_remote and ($hmmdb_build or $blastdb_build)) {
 }
 
 (-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n");
-### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
+### =========== END OF SANITY CHECKING OF INPUT ARGUMENTS ==========
+### =========== Automatic setting of default parameters ========
+
+# Automatically set the blast database name, if the user didn't specify something already.
+if (!defined($blastdb_name)) { $blastdb_name = $db_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size; } # set default blast DB name, if none was specified
+
+my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
+my $remote_ffdb_dir     = "${remoteDir}/MRC_ffdb"; #  used to be = "/scrapp2/sharpton/MRC/MRC_ffdb/";
+### =========== Automatic setting of default parameters ========
 
 
 
@@ -254,8 +262,8 @@ $analysis->is_remote($is_remote);
 if ($is_remote) {
     $analysis->set_remote_server($remote_hostname);
     $analysis->set_remote_username($remote_user);
-    $analysis->set_remote_ffdb($rffdb);
-    $analysis->set_remote_scripts($remoteScriptDir);
+    $analysis->set_remote_ffdb($remote_ffdb_dir);
+    $analysis->set_remote_scripts($remote_script_dir);
     if (!$dryRun) {
 	$analysis->build_remote_ffdb($verbose); #checks if necessary to build and then builds
     } else {
@@ -343,7 +351,7 @@ if ($is_remote){
 # At this point, project, samples and metareads have been loaded into the DB. Now translate the metareads!
 printHeader("TRANSLATING READS");
 
-if ($dryRun) {
+if (!$dryRun) {
     if ($is_remote) {
 	#run transeq remotely, check on SGE job status, pull results back locally once job complete.
 	my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
@@ -396,8 +404,8 @@ BUILDHMMDB:
     ; # <-- this keeps emacs from indenting the code stupidly. Ugh!
 if (!$hmmdb_build) {
     if (!(-d $analysis->MRC::DB::get_hmmdb_path())) {
-	warnPrint("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.\n");
-	warnPrint("Apparently we MUST create the database if it does not already exist? Quitting now.\n");
+	MRC::warnPrint("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.\n");
+	MRC::warnPrint("Apparently we MUST create the database if it does not already exist? Quitting now.\n");
 	die "The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.\n";
 	#$hmmdb_build = 1;
     }
@@ -405,7 +413,7 @@ if (!$hmmdb_build) {
 
 if ($hmmdb_build){
     if (!$use_hmmscan && !$use_hmmsearch) {
-	warnPrint("WARNING: It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n");
+	MRC::warnPrint("WARNING: It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n");
     }
     printHeader("BUILDING HMM DATABASE");
     $analysis->MRC::Run::build_search_db($hmmdb_name, $hmm_db_split_size, $force_db_build, "hmm");
