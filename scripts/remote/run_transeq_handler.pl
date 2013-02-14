@@ -103,12 +103,11 @@ if ($array){
     }
     #6971202.1-4:1
     #Your job-array 6971206.1-4:1 ("run_transeq_array.sh") has been submitted
-    if( $results =~ m/^Your job-array (\d+)\./ ) {
+    if( $results =~ m/^Your job-array (\d+)\./ ) { ## <-- Look for this EXACT text!
 	my $job_id = $1;
 	$jobs{$job_id}++;
-    }
-    else{
-	die( "Remote server did not return a properly formatted job id when running transeq on (remote) localhost. Got $results instead!. Exiting.");
+    } else{
+	die("Remote server did not return a properly formatted job id when running transeq on (remote) localhost. Got $results instead!. Exiting. Note that we require this EXACT text, so maybe they changed the format? But probably not.");
     }
 }
 
@@ -129,12 +128,10 @@ sub run_transeq_array {
     defined($remote_scripts_path) or die "missing remote_scripts_path!";
     defined($logsdir) or die "missing logsdir!";
     # The final variable, $split_outdir, is OPTIONAL and does not need to be defined
+    ($array_length >= 1) or die "qsub requires that the second array length parameter CANNOT be less than the first one. However, in our case, the array length is: $array_length (which is less than 1!).";
 
     my $script = "$remote_scripts_path/run_transeq_array.sh";
-
-    ($array_length > 1) or die "qsub requires that the second array length parameter CANNOT be less than the first one. However, in our case, the array length is: $array_length (which is less than 1!).";
-
-    my $qsubArrayJobArgument = "t 1-${array_length}";
+    my $qsubArrayJobArgument = " -t '1-${array_length}' ";
     my @args = ($qsubArrayJobArgument, $script, $indir, $inbasename, $outdir, $outbasename, $remote_scripts_path, $logsdir);
     if (defined($split_outdir) && $split_outdir) { push(@args, $split_outdir); } ## add $split_outdir to the argument list, if it was specified
 

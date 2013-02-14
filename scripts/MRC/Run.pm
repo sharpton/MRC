@@ -1339,8 +1339,8 @@ sub translate_reads_remote{
     my $remote_script   = $self->get_scripts_dir() . "/remote/run_transeq_array.sh"; # what is going on here
     my $transeqPerlRemote = "$remote_script_dir/run_transeq_handler.pl";
 
-    MRC::Run::remote_transfer_file( $remote_handler, $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_script_dir);
-    MRC::Run::remote_transfer_file( $remote_script,  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_script_dir);
+    MRC::Run::remote_transfer_file( $remote_handler, "$connection:$remote_script_dir/"); # transfer the script into the remote directory
+    MRC::Run::remote_transfer_file( $remote_script,  "$connection:$remote_script_dir/"); # transfer the script into the remote directory
     foreach my $sample_id( @{$self->get_sample_ids()} ) {
 	my $remote_input_dir    = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/raw";
 	my $remote_output_dir   = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs";
@@ -1393,27 +1393,24 @@ sub translate_reads_remote_ping{
     my @job_ids = keys(%jobs);
     my $time = $self->MRC::Run::remote_job_listener( \@job_ids, $waitTimeInSeconds );
     MRC::notify( "Reads were translated in approximately $time seconds on remote server");
-    MRC::notifyWithLine("Pulling translated reads from remote server"); # <-- consider that a completed job doesn't mean a successful run!
+    MRC::notifyWithLine("Pulling translated reads from remote server"); # <-- consider that a completed job doesn't mean a *successful* run!
     foreach my $job( keys( %jobs ) ){
 	my $sample_id = $jobs{$job};
-	my $results = MRC::Run::remote_transfer_file("$connection:$remote_ffdb/projects/$pid/$sample_id/orfs.fa", "$local_ffdb/projects/$pid/$sample_id/orfs.fa");
+	my $results = MRC::Run::remote_transfer_file("$connection:$remote_ffdb/projects/$pid/$sample_id/orfs.fa", "$local_ffdb/projects/$pid/$sample_id/orfs.fa"); # retrieve the file from remote->local
     }
 }
 
 sub remote_job_listener{
-    my $self     = shift;
-    my $jobs     = shift; #a refarray
-    my $waitTimeInSeconds = shift;
+    my ($self, $jobsArrayRef, $waitTimeInSeconds) = @_;
     my %status   = ();
-    my $remote_cmd = "\'qstat\'";
     my $startTimeInSeconds = time();
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
+    my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
     while(1){
-	last if( scalar( keys( %status ) ) == scalar( @{ $jobs } ) ); #stop checking if every job has a finished status
+	last if( scalar( keys( %status ) ) == scalar( @{ $jobsArrayRef } ) ); #stop checking if every job has a finished status
 	#call qstat and grab the output
-	my $results = execute_ssh_cmd( $connection, $remote_cmd );
+	my $results = execute_ssh_cmd( $connection, "\'qstat\'");
 	#see if any of the jobs are complete. pass on those we've already finished
-	foreach my $jobid( @{ $jobs } ){
+	foreach my $jobid( @{ $jobsArrayRef } ){
 	    next if( exists( $status{$jobid} ) );
 	    if( $results !~ m/$jobid/ ){
 		$status{$jobid}++;
