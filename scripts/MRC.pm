@@ -636,48 +636,28 @@ sub get_project_desc{
 }
 
 =head2 set_hmmdb_name
-
- Title   : set_hmmdb_name
- Usage   : $analysis->set_hmmdb_name( );
  Function: Set the name of the hmm database you want to use. Should be unique if you want to build a new database
  Example : my $remote_scripts_path = $analysis->get_hmmdb_name( "ALL_HMMS_FCI_1" );
- Returns : The name of the hmm database to use (string) 
  Args    : The name of the hmm database to use (string) 
 
 =cut 
 
-sub set_hmmdb_name{
-    my ( $self, $name ) = @_;
+sub set_hmmdb_name {
+    my ($self, $name) = @_;
+    (defined($name) && length($name) > 0) or die "Invalid argument: You passed in an empty value apparently.";
     $self->{"hmmdb"} = $name;
-    return $self->{"hmmdb"};
 }
+sub get_hmmdb_name {     my $self = shift;  return $self->{"hmmdb"};   }
 
-sub set_blastdb_name{
-    my ( $self, $name ) = @_;
+sub set_blastdb_name {
+    my ($self, $name) = @_; 
+    (defined($name) && length($name) > 0) or die "Invalid argument: You passed in an empty value apparently.";
     $self->{"blastdb"} = $name;
-    return $self->{"blastdb"};
 }
+sub get_blastdb_name {   my $self = shift;  return $self->{"blastdb"}; }
 
-=head2 get_hmmdb_name
 
- Title   : set_hmmdb_name
- Usage   : $analysis->get_hmmdb_name( );
- Function: Get the name of the hmm database you want to use. Should be unique if you want to build a new database
- Example : my $remote_scripts_path = $analysis->set_hmmdb_name();
- Returns : The name of the hmm database to use (string) 
- Args    : None
 
-=cut 
-
-sub get_hmmdb_name{
-    my $self = shift;
-    return $self->{"hmmdb"};
-}
-
-sub get_blastdb_name{
-    my $self = shift;
-    return $self->{"blastdb"};
-}
 
 =head2 set_remote_server
 

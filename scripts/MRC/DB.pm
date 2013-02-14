@@ -328,9 +328,9 @@ sub build_db_ffdb {
 }
 
 sub get_hmmdb_path{
-    my $self = shift;
-    (defined($self->get_ffdb())) or warn("get_hmmdb_path: ffdb was not defined!\n");
-    (defined($self->get_hmmdb_name())) or warn("get_hmmdb_path: get_hmmdb_name was not defined!\n");
+    my ($self) = @_;
+    (defined($self->get_ffdb())) or die("get_hmmdb_path: ffdb was not defined!");
+    (defined($self->get_hmmdb_name())) or die("get_hmmdb_path: get_hmmdb_name was not defined!");
     my $hmmdb_path = $self->get_ffdb() . "HMMdbs/" . $self->get_hmmdb_name();
     return $hmmdb_path;
 }

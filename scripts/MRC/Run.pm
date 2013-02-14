@@ -243,7 +243,7 @@ sub back_load_project(){
         $self->set_remote_last_script( $self->get_remote_project_path() . "/run_last.sh" );
         $self->set_remote_formatdb_script( $self->get_remote_project_path() . "/run_formatdb.sh" );
         $self->set_remote_lastdb_script( $self->get_remote_project_path() . "/run_lastdb.sh" );
-	$self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
+	$self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs" );
     }
 }
 
@@ -271,7 +271,7 @@ sub back_load_samples{
 	$self->set_remote_hmmscan_script( $self->get_remote_project_path() . "/run_hmmscan.sh" );
         $self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "/run_hmmsearch.sh" );
         $self->set_remote_blast_script( $self->get_remote_project_path() . "/run_blast.sh" );
-        $self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
+        $self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs" );
     }
     warn("Backloading of samples complete");
     #return $self;

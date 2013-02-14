@@ -50,7 +50,14 @@ use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
 use Benchmark;
 
-sub dieWithUsageError($) { chomp($_[0]); print("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n"); print STDOUT <DATA>; die(MRC::safeColor("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "", "yellow on_red")); exit(1); }
+sub dieWithUsageError($) {
+    my ($msg) = @_;
+    chomp($msg);
+    print("[TERMINATED DUE TO USAGE ERROR]: " . $msg . "\n");
+    print STDOUT <DATA>;
+    die(MRC::safeColor("[TERMINATED DUE TO USAGE ERROR]: " . $msg . " ", "yellow on_red"));
+}
+
 print STDERR ">> ARGUMENTS TO mrc_handler.pl: perl mrc_handler.pl @ARGV\n";
 
 ## "ffdb" = "flat file data base"
@@ -86,8 +93,8 @@ my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
 my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
 my $nseqs_per_samp_split = 100000; #how many seqs should each sample split file contain?
 my @fcis                 = (0, 1); #what family construction ids are allowed to be processed?
-my $db_basename          = "SFams_all_v0"; #set the basename of your database here.
-my $hmmdb_name           = "${db_basename}_${hmm_db_split_size}";
+my $db_prefix_basename   = "SFams_all_v0"; #set the basename of your database here.
+my $hmmdb_name           = undef;
 #"SFams_all_v1.03_500"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $local_ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
 my $nr_db                = 1; #should we build a non-redundant version of the sequence database?
@@ -119,7 +126,7 @@ my $goto           = undef; #B=Build HMMdb
 my $scratch              = 0; #should we use scratch space on remote machine?
 my $multi                = 1; #should we multiload our inserts to the database?
 my $bulk_insert_count    = 1000;
-my $database_name        = "Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
+my $dbname               = "Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
 my $schema_name          = "Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
 my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 
@@ -143,7 +150,9 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "dbuser|u=s"   => \$db_username
 	   , "dbpass|p=s"   => \$db_pass
 	   , "dbhost=s"     => \$db_hostname
-	   , "dbname=s"       => \$database_name
+	   , "dbname=s"       => \$dbname
+	   
+	   , "dbprefix=s"   => \$db_prefix_basename
 
 	   # Remote computational cluster server related variables
 	   , "rhost=s"     => \$remote_hostname
@@ -204,7 +213,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 if ((defined($goto) && $goto) && !defined($input_pid)) { dieWithUsageError("If you specify --goto=SOMETHING, you must ALSO specify the --pid to goto!"); }
 
 #try to detect if we need to stage the database or not on the remote server based on runtime options
-if ($is_remote and ($hmmdb_build or $blastdb_build)) {
+if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
     #$stage = 1;
     dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");
 }
@@ -214,7 +223,21 @@ if ($is_remote and ($hmmdb_build or $blastdb_build)) {
 ### =========== Automatic setting of default parameters ========
 
 # Automatically set the blast database name, if the user didn't specify something already.
-if (!defined($blastdb_name)) { $blastdb_name = $db_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size; } # set default blast DB name, if none was specified
+if (!defined($blastdb_name)) {
+    # set default blast DB name, if none was specified
+    $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
+    warn "Note: blastdb_name was not specified on the command line (--blastdb=NAME). Using the default value, which is <$blastdb_name>.";
+} 
+
+if (!defined($db_prefix_basename)) {
+    $db_prefix_basename = "SFams_all_v0";
+    warn "Note: db_prefix_basename (database basename/prefix) was not specified on the command line (--dbprefix=PREFIX). Using the default value, which is <$db_prefix_basename>.";
+}
+
+if (!defined($hmmdb_name)) {
+    $hmmdb_name = "${db_prefix_basename}_${hmm_db_split_size}";
+    warn "Note: hmmdb_name was not specified on the command line (--hmmdb=NAME). Using the default value, which is <$hmmdb_name>.";
+}
 
 my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
 my $remote_ffdb_dir     = "${remoteDir}/MRC_ffdb"; #  used to be = "/scrapp2/sharpton/MRC/MRC_ffdb/";
@@ -238,7 +261,7 @@ my $analysis = MRC->new();  #Initialize the project
 $analysis->set_scripts_dir($localScriptDir);
 
 #Get a DB connection
-$analysis->set_dbi_connection("DBI:mysql:$database_name:$db_hostname", $database_name, $db_hostname); $analysis->set_username($db_username); $analysis->set_password($db_pass); $analysis->set_schema_name($schema_name);
+$analysis->set_dbi_connection("DBI:mysql:$dbname:$db_hostname", $dbname, $db_hostname); $analysis->set_username($db_username); $analysis->set_password($db_pass); $analysis->set_schema_name($schema_name);
 $analysis->build_schema();
 $analysis->multi_load($multi);
 $analysis->bulk_insert_count($bulk_insert_count);
@@ -248,13 +271,13 @@ $analysis->set_ffdb($local_ffdb); $analysis->set_ref_ffdb($local_reference_ffdb)
 
 #constrain analysis to a set of families of interest
 $analysis->set_family_subset($family_subset_list, $check);
-if ($use_hmmscan || $use_hmmsearch) {
-    $analysis->set_hmmdb_name($hmmdb_name);
-}
+#if ($use_hmmscan || $use_hmmsearch ) {
+    $analysis->set_hmmdb_name($hmmdb_name); # always set it; why not, right?
+#}
 
-if ($use_blast || $use_last) {
-    $analysis->set_blastdb_name($blastdb_name);
-}
+#if ($use_blast || $use_last) {
+    $analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right?
+#}
 #set some clustering definitions here
 $analysis->is_strict_clustering($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score);
 
@@ -832,6 +855,9 @@ DATABASE ARGUMENTS:
 --dbname=DATABASENAME (REQUIRED argument)
     The database name. Usually something like "Sfams_lite".
 
+--dbprefix=STRING (Optional: default is "SFams_all_v0")
+    Some kind of prefix/basename. I am confused.
+
 REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 
 --rhost=SOME.CLUSTER.HEAD.NODE.COM     (REQUIRED argument)
@@ -850,7 +876,7 @@ REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 
 
 
---hmmdb=STRING (or -h STRING)
+--hmmdb=STRING (or -h STRING) (Optional: automatically set to a default value)
    HMM database name
 
 --blastdb=STRING (or -b STRING)
