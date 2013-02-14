@@ -473,7 +473,7 @@ sub build_sample_ffdb{
 	if (-d $raw_sample_dir) {
 	    warn("The directory \"$raw_sample_dir\" already exists...");
 	    if ($self->{"clobber"}) { warn("But you specified the CLOBBER option, so we will brutally overwrite it anyway!"); }
-	    else { die("Since the data already exists in $raw_sample_dir. Will not overwrite! Unless you specify the flag --clobber to brutally clobber those directories anyway. NOT RECOMMENDED unless you know what you're doing."); }
+	    else { die("Since the data already exists in $raw_sample_dir , we will not overwrite it! Unless you specify the flag --clobber to brutally clobber those directories anyway. NOT RECOMMENDED unless you know what you're doing."); }
 	}
 	
 	File::Path::make_path($raw_sample_dir);

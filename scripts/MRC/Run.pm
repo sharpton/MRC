@@ -34,41 +34,39 @@ use Bio::SearchIO;
 use DBIx::Class::ResultClass::HashRefInflator;
 use Benchmark;
 
-
-
 # ServerAliveInterval : in SECONDS
 # ServerAliveCountMax : number of times to keep the connection alive
 # Total keep-alive time in minutes = (ServerAliveInterval*ServerAliveCountMax)/60 minutes
 my $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING = '-o TCPKeepAlive=no -o ServerAliveInterval=30 -o ServerAliveCountMax=480';
+
 my $HMMDB_DIR = "HMMdbs";
 my $BLASTDB_DIR = "BLASTdbs";
 
 
-
-
 sub remote_transfer($$$) {
     my ($src_path, $dest_path, $path_type) = @_;
-    #1. a file or dir path (not a connection string!)
-    #2. a file or dir path
-    #3. 'file' or 'directory' or 'contents'
-    my @args = ();
-    if( $path_type eq 'file' || $path_type eq "f" ){ 
-	@args = ( $src_path, $dest_path );
-    } elsif( $path_type eq 'directory' || $path_type eq "d" ){
-	@args = ( "-r", $src_path, $dest_path );
-    } elsif( $path_type eq 'contents' || $path_type eq "c" ){
-	warn "This should probably never be called!";
+    #Arg 1. a file or dir path (not a connection string!)
+    #Arg 2. a file or dir path
+    #Arg 3. 'file' or 'directory'
+    ($path_type eq 'directory' or $path_type eq 'file') or die "unsupported path type! must be 'file' or 'directory'. Yours was: '$path_type'.";
+
+    my $ALLOW_COMPRESSION_FLAG = '-C';
+    my $RECURSIVE_FLAG = (($path_type eq 'directory') ? ('-r' : '')); # only specify recursion if DIRECTORIES are being transferred!
+    my $FLAGS = "$ALLOW_COMPRESSION_FLAG $RECURSIVE_FLAG";
+    my @args = ($FLAGS, $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING, $src_Path, $dest_path);
+    #elsif( $path_type eq 'contents' || $path_type eq "c" ){
+#	die "This should probably never be called!";
 	#on some machines, if the directories are the same on remote and local, a recursive scp will create a subdir with identical dir name. Use the contents setting to 
 	#copy all of the contents of a file over, without transferring the actual sourcedir as well
-	@args = ($src_path . "/*", $dest_path);
-    } else {
-	die("Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!");
-    }
+	#@args = ($src_path . "/*", $dest_path);
+ #   } else {
+#	die("Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!");
+ #   }
 
     MRC::notifyAboutScp("remote_transfer ($path_type): scp @args");
-    my $results = IPC::System::Simple::capture("scp @args");
+    my $resultCode = IPC::System::Simple::capture("scp @args");
     (0 == $EXITVAL) or die("Error transferring $src_path to $dest_path using $path_type: $results");
-    return $results;
+    return $resultCode;
 }
 
 sub remote_transfer_directory($$) {
@@ -83,9 +81,8 @@ sub remote_transfer_file($$) {
 
 sub execute_ssh_cmd($$;$) {
     my ($connection, $remote_cmd, $verbose) = @_;
-    my @args = ($connection, $remote_cmd);
     my $verboseFlag = (defined($verbose) && $verbose) ? '-v' : '';
-    my $sshCmd = "ssh $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING $verboseFlag @args";
+    my $sshCmd = "ssh $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING $verboseFlag $connection $remote_cmd";
     MRC::notifyAboutRemoteCmd($sshCmd);
     my $results = IPC::System::Simple::capture($sshCmd);
     (0 == $EXITVAL) or die( "Error running this ssh command: $sshCmd: $results\n" );
@@ -1323,8 +1320,8 @@ sub translate_reads_remote{
     # "split_orfs" argument means "split orfs on stop?" Should be 1 or 0.
 
     #push translation scripts to remote server
-    my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
-    my $remote_script_dir = $self->get_remote_scripts();
+    my $connection = $self->get_remote_connection();
+    my $remote_script_dir = $self->get_remote_script_dir();
 
     my $remote_handler  = $self->get_scripts_dir() . "/remote/run_transeq_handler.pl";
     my $remote_script   = $self->get_scripts_dir() . "/remote/run_transeq_array.sh"; # what is going on here
@@ -1361,7 +1358,7 @@ sub translate_reads_remote{
 sub translate_reads_remote_ping{
     my ($self, $waitTimeInSeconds) = @_; # waitTimeInSeconds is the amount of time between queue checks
 
-    my $connection  = $self->get_remote_username() . "@" . $self->get_remote_server();
+    my $connection  = $self->get_remote_connection();
     my $pid         = $self->get_project_id();
     my $remote_ffdb = $self->get_remote_ffdb();
     my $local_ffdb  = $self->get_ffdb();
@@ -1370,7 +1367,7 @@ sub translate_reads_remote_ping{
     foreach my $sample_id( @{$self->get_sample_ids()} ){
 	my $remote_input  = "$remote_ffdb/projects/$pid/$sample_id/raw.fa";
 	my $remote_output = "$remote_ffdb/projects/$pid/$sample_id/orfs.fa";
-	my $transeqShRemoteLocation = $self->get_remote_scripts() . "/run_transeq.sh";
+	my $transeqShRemoteLocation = $self->get_remote_script_dir() . "/run_transeq.sh";
 	my $results = execute_ssh_cmd( $connection, "\'qsub $transeqShRemoteLocation $remote_input $remote_output\'");
 	if ($results =~ m/^Your job (\d+) / ){
 	    my $job_id = $1;
@@ -1394,11 +1391,10 @@ sub remote_job_listener{
     my ($self, $jobsArrayRef, $waitTimeInSeconds) = @_;
     my %status   = ();
     my $startTimeInSeconds = time();
-    my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
     while(1){
 	last if( scalar( keys( %status ) ) == scalar( @{ $jobsArrayRef } ) ); #stop checking if every job has a finished status
 	#call qstat and grab the output
-	my $results = execute_ssh_cmd( $connection, "\'qstat\'");
+	my $results = execute_ssh_cmd( $self->get_remote_connection(), "\'qstat\'");
 	#see if any of the jobs are complete. pass on those we've already finished
 	foreach my $jobid( @{ $jobsArrayRef } ){
 	    next if( exists( $status{$jobid} ) );
@@ -1453,9 +1449,8 @@ sub remote_transfer_batch{
 
 sub gunzip_file_remote{
     my ( $self, $remote_file ) = @_;
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     my $remote_cmd = "gunzip -f $remote_file";
-    my $results = execute_ssh_cmd( $connection, $remote_cmd );
+    my $results = execute_ssh_cmd( $self->get_remote_connection(), $remote_cmd );
     return $results;
 }
 
@@ -1526,10 +1521,9 @@ sub run_search_remote{
 	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmscan";
     }
     
-    my $perlScriptRemoteLoc = $self->get_remote_scripts() . "/run_remote_search_handler.pl";
+    my $perlScriptRemoteLoc = $self->get_remote_script_dir() . "/run_remote_search_handler.pl";
     my $remote_cmd  = "\'perl $perlScriptRemoteLoc -h $remote_db_dir -o $remote_search_res_dir -i $remote_query_dir -n $db_name -s $remote_script_path -w $waitTimeInSeconds > ${search_handler_log}.out 2> $search_handler_log.err \'";
-    my $connection  = $self->get_remote_username() . "@" . $self->get_remote_server();
-    my $results     = execute_ssh_cmd( $connection, $remote_cmd, $verbose );
+    my $results     = execute_ssh_cmd( $self->get_remote_connection(), $remote_cmd, $verbose );
     return $results;
 }
 
@@ -1556,15 +1550,15 @@ sub get_remote_search_results {
 #     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
 #     my $remote_cmd;
 #     if( defined( $second_output ) ){
-# 	$remote_cmd = "\'qsub -sync y " . $self->get_remote_scripts() . "run_hmmscan.sh "  . $in_seqs_dir . " " .$inseq_file . " " . $hmmdb . " " . $output . " " . $outstem . " " . $type . " " . $second_output . "\'";
+# 	$remote_cmd = "\'qsub -sync y " . $self->get_remote_script_dir() . "run_hmmscan.sh "  . $in_seqs_dir . " " .$inseq_file . " " . $hmmdb . " " . $output . " " . $outstem . " " . $type . " " . $second_output . "\'";
 #     }
 #     else{
 # 	#set closed = 1 if you don't want the connection to remote server to remain open. This is important if you are worried about flooding the connection pool.
 # 	if( defined( $closed ) && $closed == 1 ){
-# 	    $remote_cmd = "\'qsub " . $self->get_remote_scripts() . "run_hmmscan.sh " .  $in_seqs_dir . " " . $inseq_file . " " . $hmmdb . " " . $output . " " . $outstem . " " . $type . "\'";
+# 	    $remote_cmd = "\'qsub " . $self->get_remote_script_dir() . "run_hmmscan.sh " .  $in_seqs_dir . " " . $inseq_file . " " . $hmmdb . " " . $output . " " . $outstem . " " . $type . "\'";
 # 	}
 # 	else{
-# 	    $remote_cmd = "\'qsub -sync y " . $self->get_remote_scripts() . "run_hmmscan.sh " .  $in_seqs_dir . " " . $inseq_file . " " . $hmmdb . " " . $output . " " . $outstem . " " . $type . "\'";
+# 	    $remote_cmd = "\'qsub -sync y " . $self->get_remote_script_dir() . "run_hmmscan.sh " .  $in_seqs_dir . " " . $inseq_file . " " . $hmmdb . " " . $output . " " . $outstem . " " . $type . "\'";
 # 	}
 #     }
 #     my $results = execute_ssh_cmd( $connection, $remote_cmd );
@@ -1574,13 +1568,12 @@ sub get_remote_search_results {
 #not used in mrc_handler.pl
 sub run_blast_remote{
     my ( $self, $inseq, $db, $output, $closed ) = @_;
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    my $remoteScriptDir = $self->get_remote_scripts();
+    my $remoteScriptDir = $self->get_remote_script_dir();
 
     my $SINGLE_QUOTE = "\'";
     my $sync_parameter = (!defined($closed) || !$closed) ? ' -sync y ' : ''; # if "closed" is false or unspecified, then add "-sync y" to the parameter list
     my $remote_cmd = $SINGLE_QUOTE . "qsub $sync_parameter $remoteScriptDir/run_blast.sh  $inseq  $db  $output " . $SINGLE_QUOTE;
-    return(execute_ssh_cmd($connection, $remote_cmd));
+    return(execute_ssh_cmd($self->get_remote_connection(), $remote_cmd));
 }
 
 sub transfer_hmmsearch_remote_results{
@@ -1593,22 +1586,19 @@ sub transfer_hmmsearch_remote_results{
 
 sub remove_remote_file{
     my($self, $file) = @_;
-    my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
-    return(execute_ssh_cmd( $connection, "/bin/rm $file"));
+    return(execute_ssh_cmd($self->get_remote_connection(), "/bin/rm $file"));
 }
 
 sub remove_hmmsearch_remote_results{
     my ($self, $search_outfile) = @_;
     my $remote_file = $self->get_remote_ffdb() . "/hmmsearch/$search_outfile";
-    my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
-    return(execute_ssh_cmd( $connection, "/bin/rm $remote_file"));
+    return(execute_ssh_cmd($self->get_remote_connection(), "/bin/rm $remote_file"));
 }
 
 sub run_hmmscan_remote_ping{
     my ($self, $hmmdb_name, $waitTimeInSeconds) = @_;  # waitTimeInSeconds is amount of time between queue checks
     my @sample_ids = @{$self->get_sample_ids()};
     my %jobs = ();
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     my %hmmdbs =  %{ $self->MRC::DB::get_hmmdbs( $hmmdb_name, 1 ) };     #use get_hmmdbs with the 1 flag to indicate remote server file paths
     foreach my $sample_id( @sample_ids ){ #search each sample against each hmmdb split
 	my $projID = $self->get_project_id();
@@ -1619,14 +1609,14 @@ sub run_hmmscan_remote_ping{
 	    my $remote_hmmdb_path = $hmmdbs{$hmmdb};
 	    my $remote_output = "${thisSampleDir}/search_results/${sample_id}_v_${hmmdb}.hsc";
 
-	    my $runHmmScanShRemoteLocation =  $self->get_remote_scripts() . "/run_hmmscan.sh";
+	    my $runHmmScanShRemoteLocation =  $self->get_remote_script_dir() . "/run_hmmscan.sh";
 	    my $remote_cmd = "\'qsub $runHmmScanShRemoteLocation -o $remote_output $remote_hmmdb_path $remote_input \'";
-	    my $results = execute_ssh_cmd( $connection, $remote_cmd );
+	    my $results = execute_ssh_cmd( $self->get_remote_connection(), $remote_cmd );
 	    if ($results =~ m/^Your job (\d+) /) {
 		my $job_id = $1;
 		$jobs{$job_id}{$sample_id}{$hmmdb} = $remote_output;
 	    } else {
-		die("Remote server did not return a properly formatted job id when running $remote_cmd using connection $connection. Got $results instead!. Exiting.");
+		die("Remote server did not return a properly formatted job id when running $remote_cmd. Got $results instead!. Exiting.");
 	    }
 
 	    MRC::notify("Sleeping for 10 seconds here to avoid flooding the remote server...");

@@ -65,7 +65,7 @@ sub notifyAboutScp($) {
     my ($msg) = @_;
     chomp($msg);
     my $parentFunction = defined((caller(2))[3]) ? (caller(2))[3] : '';
-    print STDERR (safeColor("[SCP]: $parentFunction: $msg", "green on_black") . "\n"); ## different colors from normal notification message
+    print STDERR (safeColor("[SCP]: $parentFunction: $msg\n", "green on_black")); ## different colors from normal notification message
     # no point in printing the line number for an SCP command, as they all are executed from Run.pm anyway
 }
 
@@ -73,7 +73,7 @@ sub notifyAboutRemoteCmd($) {
     my ($msg) = @_;
     chomp($msg);
     my $parentFunction = defined((caller(2))[3]) ? (caller(2))[3] : '';
-    print STDERR (safeColor("[REMOTE CMD]: $parentFunction: $msg", "black on_green") . "\n"); 
+    print STDERR (safeColor("[REMOTE CMD]: $parentFunction: $msg\n", "black on_green")); 
     ## different colors from normal notification message
     # no point in printing the line number for a remote command, as they all are executed from Run.pm anyway
 }
@@ -81,7 +81,7 @@ sub notifyAboutRemoteCmd($) {
 sub notify($) { # one required argument
     my ($msg) = @_;
     chomp($msg);
-    warn(safeColor("[NOTE]: $msg\n", "cyan on_blue"));
+    print STDERR (safeColor("[NOTE]: $msg\n", "cyan on_black"));
 }
 
 
@@ -114,8 +114,8 @@ sub new{
     $self->{"proj_desc"}   = undef;
     $self->{"samples"}     = undef; #hash relating sample names to paths   
     $self->{"rusername"}   = undef;
-    $self->{"r_ip"}        = undef;
-    $self->{"rscripts"}    = undef;
+    $self->{"r_ip"}                 = undef;
+    $self->{"remote_script_dir"}    = undef;
     $self->{"rffdb"}       = undef;
     $self->{"fid_subset"}  = undef; #an array of famids
     $self->{"schema"}      = undef; #current working DB schema object (DBIx)    
@@ -790,59 +790,27 @@ sub get_remote_sample_path{
     return $path;
 }
 
-=head2 set_remote_scripts
 
- Title   : set_remote_scripts
- Usage   : $analysis->set_remote_scripts( );
- Function: Store the location of the remote scripts path (place where this code is stored) in the MRC object
- Example : my $remote_scripts_path = $analysis->set_remote_scripts( "~/projects/MRC/scripts/" );
- Returns : The path to the remote scripts directory (string)
- Args    : The path to the remote scripts directory (string)
 
-=cut 
-
-sub set_remote_scripts{
-    my $self     = shift;
-    my $rscripts = shift;
-    $self->{"rscripts"} = $rscripts;
-    return $self->{"rscripts"};
+sub set_remote_script_dir{
+    my ($self, $remote_script_dir) = @_;
+    $self->{"remote_script_dir"} = $remote_script_dir;
 }
-
-=head2 get_remote_scripts
-
- Title   : get_remote_scripts
- Usage   : $analysis->get_remote_scripts( );
- Function: Get the location of the remote scripts path (place where this code is stored) from the MRC object
- Example : my $remote_scripts_path = $analysis->get_remote_scripts( "~/projects/MRC/scripts/" );
- Returns : The path to the remote scripts directory (string)
- Args    : None
-
-=cut 
-
-sub get_remote_scripts{
-    my $self = shift;
-    return $self->{"rscripts"};
+sub get_remote_script_dir{ # remote script DIRECTORY
+    my ($self) = @_;
+    return $self->{"remote_script_dir"}; # remote script directory
 }
-
 
 =head2 get_remote_connection
 
  Title   : get_remote_connection
- Usage   : $analysis->get_remote_connection( );
  Function: Get the connection string to the remote host (i.e., username@hostname). Must have set remote_username and
            remote_server before running this command
- Example : my $connection = $analysis->get_remote_connectoin();
  Returns : A connection string(string) 
- Args    : None
-
 =cut 
-
 sub get_remote_connection{
-    my $self = shift;
-    my $username = $self->get_remote_username();
-    my $server   = $self->get_remote_server();
-    my $connection = $username . "@" . $server;
-    return $connection;
+    my ($self) = @_;
+    return($self->get_remote_username() . "@" . $self->get_remote_server());
 }
 
 =head build_remote_ffdb
@@ -861,9 +829,9 @@ sub build_remote_ffdb {
     my $rffdb      = $self->{"rffdb"};
     my $connection = $self->get_remote_connection();
     MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb"          , $verbose); # <-- 'mkdir' with the '-p' flag won't produce errors or overwrite if existing, so simply always run this.
-    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/projects/", $verbose);
-    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/HMMdbs/"  , $verbose);   
-    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/BLASTdbs/", $verbose);
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/projects", $verbose);
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/HMMdbs"  , $verbose);   
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/BLASTdbs", $verbose);
 }
 
 =head set_remote_hmmscan_script
