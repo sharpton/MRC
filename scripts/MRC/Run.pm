@@ -60,11 +60,12 @@ sub remote_transfer($$$) {
 	warn "This should probably never be called!";
 	#on some machines, if the directories are the same on remote and local, a recursive scp will create a subdir with identical dir name. Use the contents setting to 
 	#copy all of the contents of a file over, without transferring the actual sourcedir as well
-	@args = ( $src_path . "/*", $dest_path );
+	@args = ($src_path . "/*", $dest_path);
     } else {
 	MRC::dieDramatically("Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!");
     }
-    warn("remote_transfer: scp @args ");
+
+    MRC::notifyAboutScp("remote_transfer ($path_type): scp @args");
     my $results = IPC::System::Simple::capture("scp @args");
     if (0 != $EXITVAL) { dieDramatically("Error transferring $src_path to $dest_path using $path_type: $results"); }
     return $results;
@@ -85,7 +86,7 @@ sub execute_ssh_cmd($$;$) {
     my @args = ($connection, $remote_cmd);
     my $verboseFlag = (defined($verbose) && $verbose) ? '-v' : '';
     my $sshCmd = "ssh $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING $verboseFlag @args";
-    MRC::notifyWithLine($sshCmd);
+    MRC::notifyAboutRemoteCmd($sshCmd);
     my $results = IPC::System::Simple::capture($sshCmd);
     if ($EXITVAL != 0) { MRC::dieDramatically( "Error running this ssh command: $sshCmd: $results\n" ); }
     return $results; ## <-- this gets used! Don't remove it.
@@ -280,8 +281,13 @@ sub back_load_samples{
 sub translate_reads{
     my ($self, $input, $output) = @_;
     my @args     = ("$input", "$output", "-frame=6");
+
+    # so... $input and $output should be what, directories or something?
+
+    warn "Should add a sanity check here to make sure $input and $output both exist I guess.";
+
     my $results  = IPC::System::Simple::capture("transeq " . "@args" );
-    ($EXITVAL != 0) or MRC::dieDramatically("Error translating sequences in $input: $results");
+    ($EXITVAL == 0) or MRC::dieDramatically("Error translating sequences in $input: $results");
     return $results;
 }
 
@@ -295,7 +301,7 @@ sub run_hmmscan{
 	@args = ("$hmmdb", "$inseqs", "> $output");
     }
     my $results  = IPC::System::Simple::capture( "hmmscan " . "@args" );
-    ($EXITVAL != 0) or MRC::dieDramatically("Error translating sequences in $inseqs: $results");
+    ($EXITVAL == 0) or MRC::dieDramatically("Error translating sequences in $inseqs: $results");
 }
 
 #this method may be faster, but suffers from having a few hardcoded parameters.
@@ -509,16 +515,15 @@ sub classify_reads{
 	    my $orfs       = $self->MRC::DB::get_orf_from_alt_id_dbi( $dbh, $orf_alt_id, $sample_id );
 	    my $orf        = $orfs->fetchall_arrayref();
 	    my $orf_id     = $orf->[0][0];
-	    $orfs->finish;
+	    $orfs->finish; # I guess this is a function?
+
 	    #need to ensure that this stores the raw values, need some upper limit thresholds, so maybe we need classification_id here. simpler to store anything with evalue < 1. Still not sure I want to store this in the DB.
 	    #$self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
 	    
-	    #let's try bulk loading to speed things up....
-	    if( $self->multi_load() ){
+	    if( $self->multi_load() ){ 	    #let's try bulk loading to speed things up....
 		$orf_hits{$orf_id} = $famid; #currently only works for strict clustering!
-	    }
-	    #otherwise, the slow way...
-	    else{
+	    } else {
+		#otherwise, the slow way...
 		$self->MRC::DB::insert_familymember_orf( $orf_id, $famid, $class_id );
 	    }
 	}
@@ -1426,10 +1431,7 @@ sub local_job_listener{
     while(1) {
 	last if( scalar( keys( %status ) ) == scalar( @{ $jobsArrayRef } ) ); #stop checking if every job has a finished status
 	my $results = IPC::System::Simple::capture( "ps" ); #call ps and grab the output
-	if( $EXITVAL != 0 ){
-	    warn( "Error running ps!\n" );
-	    exit(0);
-	}
+	($EXITVAL == 0) or MRC::dieDramatically( "Error running ps!\n" );
 	#see if any of the jobs are complete. pass on those we've already finished
 	foreach my $jobid(@{ $jobsArrayRef} ){
 	    next if(exists( $status{$jobid}) ); # Skip... for some reason

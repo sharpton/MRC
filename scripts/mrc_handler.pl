@@ -129,9 +129,12 @@ my $dryRun               = 0; # <-- (Default: disabled) If this is specified, th
 #hacky hardcoding on mh_scaffold pilot 2 to test random die bug...
 my %skip_samps = ();
 
-my $sWasSpecified = undef;
-#Need to set up command line args for running blast
 
+my $extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
+my $sWasSpecified = undef; # The "s" parameter is no longer valid, so we specially detect it with this variable. This is sorta required; "sub {...}" doesn't actually allow program exit it seems.
+
+
+#Need to set up command line args for running blast
 GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "refdb=s"       => \$local_reference_ffdb
 	   , "projdir|i=s"   => \$project_dir
@@ -169,6 +172,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,    "c=f"  => \$coverage
 	   ,    "verbose|v!" => \$verbose
 	   
+	   ,    "clobber" => \$extraBrutalClobberingOfDirectories
 	   ,    "dryrun|dry!" => \$dryRun
    );
 
@@ -258,6 +262,7 @@ $analysis->is_strict_clustering($is_strict); $analysis->set_evalue_threshold($ev
 
 $analysis->is_remote($is_remote);
 
+$analysis->{"clobber"} = $extraBrutalClobberingOfDirectories; # Set a local variable in this "MRC" object
 
 if ($is_remote) {
     $analysis->set_remote_server($remote_hostname);
@@ -342,7 +347,7 @@ if ($is_remote){
     $analysis->set_remote_last_script($analysis->get_remote_project_path() . "run_last.sh");
     $analysis->set_remote_formatdb_script($analysis->get_remote_project_path() . "run_formatdb.sh");
     $analysis->set_remote_lastdb_script($analysis->get_remote_project_path() . "run_lastdb.sh");
-    $analysis->set_remote_project_log_dir($analysis->get_remote_project_path() . "/logs/");
+    $analysis->set_remote_project_log_dir($analysis->get_remote_project_path() . "/logs");
 }
 
 ## ================================================================================
@@ -360,8 +365,8 @@ if (!$dryRun) {
     } else {
 	my $projID = $analysis->get_project_id();
 	foreach my $sampleID (@{$analysis->get_sample_ids()}){
-	    my $sample_reads = "${local_ffdb}/projects/$projID/${sampleID}/raw/";
-	    my $orfs_file    = "${local_ffdb}/projects/$projID/${sampleID}/orfs/";
+	    my $sample_reads = "${local_ffdb}/projects/$projID/${sampleID}/raw";
+	    my $orfs_file    = "${local_ffdb}/projects/$projID/${sampleID}/orfs";
 	    # We could potentially do some file splitting here to speed up the remote compute...
 	    if (!$dryRun) { $analysis->MRC::Run::translate_reads($sample_reads, $orfs_file); }
 	    else { MRC::dryNotify("[Dry run]: in a real run, we would have translated reads here.\n"); }

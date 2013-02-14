@@ -487,29 +487,16 @@ sub build_sample_ffdb{
 	    # or die "System error: Can't create directory $dirToMake! $! "; # We don't really care whether the directory already exists, just make it again anyway!
 	}
 
-	# if( -d $raw_sample_dir ){
-	#     die "Data already exists in $raw_sample_dir. Will not overwrite!";
-	# } else{
-	#     make_path( $raw_sample_dir );
-	#     #copy( $self->get_samples->{$sample}->{"path"}, $raw_sample ) || die "Copy of $sample failed in build_project_ffdb: $! ";
-	#     my $basename = $sample . "_raw_split_";
-	#     my @split_names = @{ $self->MRC::DB::split_sequence_file( $self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $basename, $nseqs_per_samp_split ) };
-	#     #because search results may be large in volume, we will break each set of search results into the corresponding search_dir
-	#     #for each split. We don't do this here anymore. Instead, we have the directory created as part of run_hmmscan. Provides more flexibility and 
-	#     #enables more consistency (these will be named *raw*, but the file used in hmmscan is *orf*, so it is screwy if we use method below)
-	#     if( 0 ){
-	# 	foreach my $split_name( @split_names ){
-	# 	    my $split_search_path = $search_res . $split_name . "/";
-	# 	    if( -d $split_search_path ){
-	# 		warn "Search result path already exists for $split_search_path!\n";
-	# 		die;
-	# 	    }
-	# 	    else{
-	# 		make_path( $split_search_path );
-	# 	    }
-	# 	}	    
-	#     }
-	# }
+	if (-d $raw_sample_dir) {
+	    warn "The directory \"$raw_sample_dir\" already exists...";
+	    if ($self->{"clobber"}) { warn("But you specified the CLOBBER option, so we will brutally overwrite it anyway!"); }
+	    else { die "Since the data already exists in $raw_sample_dir. Will not overwrite! Unless you specify the flag --clobber to brutally clobber those directories anyway. NOT RECOMMENDED unless you know what you're doing."; }
+	}
+	
+	File::Path::make_path($raw_sample_dir);
+	#copy( $self->get_samples->{$sample}->{"path"}, $raw_sample ) || die "Copy of $sample failed in build_project_ffdb: $! ";
+	my $namebase = $sample . "_raw_split_";
+	$self->MRC::DB::split_sequence_file($self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $namebase, $nseqs_per_samp_split);
     }
     return $self;
 }

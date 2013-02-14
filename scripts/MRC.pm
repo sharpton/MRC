@@ -73,6 +73,24 @@ sub dryNotify(;$) { # one optional argument
 
 sub notifyWithLine($) { my ($msg) = @_; chomp($msg); warn(safeColor("[NOTE]: $msg", "cyan on_blue")); } # regarding "warn": if it ends with a newline it WON'T print the line number
 
+sub notifyAboutScp($) {
+    my ($msg) = @_;
+    chomp($msg);
+    print STDERR (safeColor("[SCP]: $msg", "green on_black") . "\n"); ## different colors from normal notification message
+    # no point in printing the line number for an SCP command, as they all are executed from Run.pm anyway
+}
+
+sub notifyAboutRemoteCmd($) {
+    my ($msg) = @_;
+    chomp($msg);
+    print STDERR (safeColor("[REMOTE CMD]: $msg", "black on_green") . "\n"); 
+    ## different colors from normal notification message
+    # no point in printing the line number for a remote command, as they all are executed from Run.pm anyway
+}
+
+
+
+
 sub notify($) { # one required argument
     my ($msg) = @_;
     chomp($msg);
