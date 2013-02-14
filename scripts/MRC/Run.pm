@@ -43,6 +43,53 @@ my $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING = '-o TCPKeepAlive=no -o ServerAliveInterv
 my $HMMDB_DIR = "HMMdbs";
 my $BLASTDB_DIR = "BLASTdbs";
 
+
+
+
+sub remote_transfer($$$) {
+    my ($src_path, $dest_path, $path_type) = @_;
+    #1. a file or dir path (not a connection string!)
+    #2. a file or dir path
+    #3. 'file' or 'directory' or 'contents'
+    my @args = ();
+    if( $path_type eq 'file' || $path_type eq "f" ){ 
+	@args = ( $src_path, $dest_path );
+    } elsif( $path_type eq 'directory' || $path_type eq "d" ){
+	@args = ( "-r", $src_path, $dest_path );
+    } elsif( $path_type eq 'contents' || $path_type eq "c" ){
+	warn "This should probably never be called!\n";
+	#on some machines, if the directories are the same on remote and local, a recursive scp will create a subdir with identical dir name. Use the contents setting to 
+	#copy all of the contents of a file over, without transferring the actual sourcedir as well
+	@args = ( $src_path . "/*", $dest_path );
+    } else {
+	die "Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!\n";
+    }
+    warn("remote_transfer: scp @args ");
+    my $results = IPC::System::Simple::capture("scp @args");
+    if (0 != $EXITVAL) {
+	warn("Error transferring $src_path to $dest_path using $path_type: $results\n" );
+	exit(0);
+    }
+    return $results;
+}
+
+sub remote_transfer_directory($$) {
+    my ($src_path, $dest_path) = @_;
+    return(remote_transfer($src_path, $dest_path, 'directory'));
+}
+
+sub remote_transfer_file($$) {
+    my ($src_path, $dest_path) = @_;
+    return(remote_transfer($src_path, $dest_path, 'file'));
+}
+
+
+
+
+
+
+
+
 sub clean_project{
     my $self       = shift;
     my $project_id = shift;
@@ -129,19 +176,37 @@ sub load_samples{
 	    my $errMsg = $@;
 	    chomp($errMsg);
 	    if ($errMsg =~ m/duplicate entry/i) {
-		warn("*" x 80 . "\n");
-		warn("DATABASE INSERTION ERROR\nCaught an exception when attempting to add sample \"$samp\" for project PID #${pid} to the database.\nThe exception message was:\n$errMsg\n");
-		warn("Note that the error above was a DUPLICATE ENTRY error.\nThis is a VERY COMMON error, and is due to the database already having a sample/project ID with the same number as the one we are attempting to insert. This most often happens if a run is interrupted---so there is an entry in the database for your project run, but there are no files on the filesystem for it, since it did not complete the run. The solution to this problem is to manually remove the entries for project id #$pid from the Mysql database.\n");
-		warn("*" x 80 . "\n");
-		die "Terminating: Duplicate database entry error! See above for a possible solution.\n";
+		print STDERR ("*" x 80 . "\n");
+		print STDERR ("DATABASE INSERTION ERROR\nCaught an exception when attempting to add sample \"$samp\" for project PID #${pid} to the database.\nThe exception message was:\n$errMsg\n");
+		print STDERR ("Note that the error above was a DUPLICATE ENTRY error.\nThis is a VERY COMMON error, and is due to the database already having a sample/project ID with the same number as the one we are attempting to insert. This most often happens if a run is interrupted---so there is an entry in the database for your project run, but there are no files on the filesystem for it, since it did not complete the run. The solution to this problem is to manually remove the entries for project id #$pid from the Mysql database.\n");
+		print STDERR ("You can do this as follows:\n");
+		print STDERR ("   1. Go to your database server (probably " . $self->get_db_hostname() . ")\n");
+		print STDERR ("   2. Log into mysql with this command: mysql -u YOURNAME -p   <--- YOURNAME is probably \"" . $self->get_username() . "\"\n");
+		print STDERR ("   3. Type these commands in mysql: use ***THE DATABASE***;   <--- THE DATABASE is probably " . $self->get_db_name() . "\n");
+		print STDERR ("   4.                        mysql: select * from project;    <--- just to look at the projects.\n");
+		print STDERR ("   5.                        mysql: delete from project where project_id=${pid};    <-- actually deletes this project.\n");
+		print STDERR ("   6. Then you can log out of mysql and hopefully re-run this script successfully!\n");
+		print STDERR ("   7. You MAY also need to delete the entry from the 'samples' table in MySQL that has the same name as this sample/proejct.\n");
+		print STDERR ("   8. Try connecting to mysql, then typing 'select * from samples;' . You should see an OLD project ID (but with the same textual name as this one) that may be preventing you from running another analysis. Delete that id ('delete from samples where sample_id=the_bad_id;'");
+		my $mrcCleanCommand = (qq{perl \$MRC_LOCAL/scripts/mrc_clean_project.pl} 
+				       . qq{ --pid=} . $pid
+				       . qq{ --dbuser=} . $self->get_username()
+				       . qq{ --dbpass=} . "PUT_YOUR_PASSWORD_HERE"
+				       . qq{ --dbhost=} . $self->get_db_hostname()
+				       . qq{ --ffdb=} . $self->get_ffdb()
+				       . qq{ --dbname=} . $self->get_db_name()
+				       . qq{ --schema=} . $self->{"schema_name"});
+		print STDERR ("Or maybe run this: $mrcCleanCommand\n");
+		print STDERR ("*" x 80 . "\n");
+		die "Terminating: Duplicate database entry error! See above for a possible solution.";
 	    }
-	    die "Terminating: Database insertion error! See the message above for more details...\n";
+	    die "Terminating: Database insertion error! See the message above for more details..."; # no "newline" with die!
 	}
 	
-	my $seqs                  = Bio::SeqIO->new( -file => $samples{$samp}->{"path"}, -format => 'fasta' );
+	my $seqs                = Bio::SeqIO->new( -file => $samples{$samp}->{"path"}, -format => 'fasta' );
 	$samples{$samp}->{"id"} = $insert->sample_id();
-	my $sid                   = $insert->sample_id(); # just a short name for the sample ID above
-	my $numReads              = 0;
+	my $sid                 = $insert->sample_id(); # just a short name for the sample ID above
+	my $numReads            = 0;
 
 	if ($self->multi_load()) { # not sure what this means... "multi_load?"
 	    my @read_names = (); # empty list to start...
@@ -159,10 +224,10 @@ sub load_samples{
 	    }
 	}
 
-	warn("Loaded $numReads reads for sample $sid into the database.\n");
+	warn("Loaded $numReads reads for sample $sid into the database.");
     }
     $self->set_samples( \%samples ); #uncertain if this is necessary
-    warn("All $numSamples sample$plural associated with project " . $self->get_project_id() . " were loaded.\n" );
+    warn("All $numSamples sample$plural associated with project " . $self->get_project_id() . " were loaded.");
     #return $self;
 }
 
@@ -210,7 +275,7 @@ sub back_load_samples{
         $self->set_remote_blast_script( $self->get_remote_project_path() . "/run_blast.sh" );
         $self->set_remote_project_log_dir( $self->get_remote_project_path() . "/logs/" );
     }
-    warn( "Backloading of samples complete\n" );
+    warn("Backloading of samples complete");
     #return $self;
 }
 
@@ -222,7 +287,7 @@ sub translate_reads{
     my @args     = ("$input", "$output", "-frame=6");
     my $results  = IPC::System::Simple::capture( "transeq " . "@args" );
     if( $EXITVAL != 0 ){
-	warn("Error translating sequences in $input: $results\n");
+	warn("Error translating sequences in $input: $results");
 	exit(0);
     }
     return $results;
@@ -244,7 +309,7 @@ sub run_hmmscan{
     }   
     my $results  = IPC::System::Simple::capture( "hmmscan " . "@args" );
     if( $EXITVAL != 0 ){
-	warn("Error translating sequences in $inseqs: $results\n");
+	warn("Error translating sequences in $inseqs: $results");
 	exit(0);
     }
     #return $self;
@@ -265,8 +330,7 @@ sub load_orf{
 	}
     );
     if ($reads->count() > 1){
-	warn "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!\n";
-	die "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!\n";
+	die "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!";
     }
     my $read = $reads->next();
     my $read_id = $read->read_id();
@@ -299,8 +363,7 @@ sub load_multi_orfs{
 		    }
 		    );
 		if( $reads->count() > 1 ){
-		    warn "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!\n";
-		    die;
+		    die "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!";
 		}
 		my $read = $reads->next();
 		$read_id = $read->read_id();
@@ -726,10 +789,11 @@ sub parse_search_results{
     open( RES, "$file" ) || die "can't open $file for read: $!\n";    
     while(<RES>){
 	chomp $_;
-	if( $_ =~ m/^\#/ || $_ =~ m/^$/ ){
-	    next;
+	if($_ =~ m/^\#/ || $_ =~ m/^$/) {
+	    next; # skip comments (lines starting with a '#') and completely-blank lines
 	}
-	my( $qid, $qlen, $tid, $tlen, $evalue, $score, $start, $stop );
+	
+	my($qid, $qlen, $tid, $tlen, $evalue, $score, $start, $stop);
 	if( $type eq "hmmscan" ){
 	    my @data = split( ' ', $_ );
 	    $qid  = $data[3];
@@ -741,8 +805,10 @@ sub parse_search_results{
 	    $start  = $data[19]; #this is env_start
 	    $stop   = $data[20]; #this is env_stop
 	}
-	elsif( $type eq "hmmsearch" ){
+
+	if ( $type eq "hmmsearch" ){
 	    #the fast parse way
+	    # what in the heck is this?? apparently this is a fast way of splitting the data? Horrifying!
 	    if( $_ =~ m/(.*?)\s+(.*?)\s+(\d+?)\s+(\d+?)\s+(.*?)\s+(\d+?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s(.*)/ ){
 		$qid    = $1;
 		$qlen   = $3;
@@ -752,14 +818,14 @@ sub parse_search_results{
 		$score  = $8;  #this is dom score
 		$start  = $20; #this is env_start
 		$stop   = $21; #this is env_stop
-	    }
-	    else{
-		warn( "couldn't parse results from $type file:\n$_\n");
+	    } else{
+		warn( "couldn't parse results from $type file:\n$_ ");
 		next;
 	    }
+
 	    #the old and slow way
 	    if( 0 ){
-		my @data = split( ' ', $_ );
+		my @data = split(' ', $_);
 		$qid  = $data[0];
 		$qlen = $data[2];
 		$tid  = $data[3];
@@ -770,6 +836,7 @@ sub parse_search_results{
 		$stop   = $data[20]; #this is env_stop
 	    }
 	}
+	
 	if( $type eq "blast" ){
 	    if( $_ =~ m/^(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)$/ ){
 		$qid    = $1;
@@ -782,9 +849,8 @@ sub parse_search_results{
 #		print "$qid\n";
 #		print "$evalue\n";
 #		print "A" . $score . "B\n";
-	    }
-	    else{
-		warn( "couldn't parse results from $type file:\n$_\n");
+	    } else{
+		warn( "couldn't parse results from $type file:\n$_ ");
 		next;
 	    }
 	    #old and slow way
@@ -800,8 +866,9 @@ sub parse_search_results{
 		#won't calculate $tlen because it is messy - requires a DB lookup - and prolly unnecessary
 	    }
 	}
-	if( $type eq "last" ){
-	    if( $_ =~ m/^(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)$/ ){
+
+	if ($type eq "last") {
+	    if($_ =~ m/^(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)$/ ){
 		$score  = $1;
 		$tid    = $2;
 		$qid    = $7;
@@ -809,35 +876,34 @@ sub parse_search_results{
 		$stop   = $start + $9;
 		$qlen   = $11;
 		$evalue = 0; #hacky - no evalue reported for last, but want to use the same code below
-	    }
-	    else{
-		warn( "couldn't parse results from $type file:\n$_\n");
+	    } else {
+		warn( "couldn't parse results from $type file:\n$_ ");
 		next;
 	    }
 	}
+
 	#calculate coverage from query perspective
-	my $coverage  = 0;
-	if( $stop > $start ){
-	    my $len   = $stop - $start + 1; #coverage calc must include first base!
-	    $coverage = $len / $qlen;
+	my $coverage;
+	if ($stop > $start) {
+	    $coverage = ($stop - $start + 1) / $qlen; # <-- coverage calc must include ****first base!*****, so add one apparently
+	} elsif ($stop < $start) {
+	    $coverage = ($start - $stop) / $qlen;
+	} elsif ($stop == $start) {
+	    $coverage = 0;
 	}
-	if( $start > $stop ){
-	    my $len   = $start - $stop;
-	    $coverage = $len / $qlen;
-	}
+
 	#does hit pass threshold?
 	if( ( $evalue <= $t_evalue && $coverage >= $t_coverage ) ||
 	    ( $type eq "last" && $score >= $t_score && $coverage >= $t_coverage ) ){
 	    #is this the first hit for the query?
-	    if( $hit_map->{$qid}->{"has_hit"} == 0 ){
+	    if ($hit_map->{$qid}->{"has_hit"} == 0) {
 		#note that we use is_strict to differentiate top hit clustering from fuzzy clustering w/in hash
 		$hit_map->{$qid}->{$is_strict}->{"target"}   = $tid;
 		$hit_map->{$qid}->{$is_strict}->{"evalue"}   = $evalue;
 		$hit_map->{$qid}->{$is_strict}->{"coverage"} = $coverage;
 		$hit_map->{$qid}->{$is_strict}->{"score"}    = $score;
 		$hit_map->{$qid}->{"has_hit"} = 1;
-	    }
-	    elsif( $is_strict ){
+	    } elsif ($is_strict) {
 		#only add if the current hit is better than the prior best hit. start with best evalue
 #		print "evalue: $evalue\n";
 #		print "coverage: $coverage\n";
@@ -855,10 +921,10 @@ sub parse_search_results{
 		    $hit_map->{$qid}->{$is_strict}->{"coverage"} = $coverage;
 		    $hit_map->{$qid}->{$is_strict}->{"score"}    = $score;
 		}
-	    }
-	    else{
+	    } else {
 		#if stict clustering, we might have a pefect tie. Winner is the first one we find, so pass
-		if( $is_strict ){
+		if($is_strict) {
+		    warn "Alex: we should never be able to get here in the code";
 		    next;
 		}
 		#else, add every threshold passing hit to the hash
@@ -878,22 +944,22 @@ sub _get_sequence_lengths_from_file{
     my( $file ) = shift;    
     my %seqlens = ();
     open( FILE, "$file" ) || die "Can't open $file for read: $!\n";
-    my(  $header, $sequence );
-    while( <FILE> ){
+    my($header, $sequence);
+    while(<FILE>){
 	chomp $_;
-	if( eof ){
-	    $sequence .= $_;
-	    $seqlens{ $header } = length( $sequence );
+	if (eof) { # this is the last line I guess
+	    $sequence .= $_; # append to the sequence
+	    $seqlens{$header} = length($sequence);
 	}
+
 	if( $_ =~ m/\>(.*)/ ){
-	    #process old sequence
-	    if( defined( $header ) ){
-		$seqlens{ $header } = length( $sequence );
+	    # Starts with a '>' so this is a header line!
+	    if (defined($header)) { # <-- process the PREVIOUSLY READ sequence, which we have now completed
+		$seqlens{$header} = length($sequence);
 	    }
-	    $header   = $1;
-	    $sequence = "";
-	}
-	else{
+	    $header   = $1; # save the header apparently...
+	    $sequence = ""; # sequence is just plain nothing at this point
+	} else {
 	    $sequence .= $_;
 	}
     }
@@ -1274,7 +1340,7 @@ sub load_project_remote{
     my $project_dir_local = $self->get_ffdb() . "/projects/" . $self->get_project_id();
     my $remote_dir  = $self->get_remote_username() . "@" . $self->get_remote_server() . ":" . $self->get_remote_ffdb() . "/projects/" . $self->get_project_id();
     warn("Pushing $project_dir_local to the remote (" . $self->get_remote_server() . ") server's ffdb location in <$remote_dir>\n");
-    my $results = $self->MRC::Run::remote_transfer_directory($project_dir_local, $remote_dir);
+    my $results = MRC::Run::remote_transfer_directory($project_dir_local, $remote_dir);
     return $results;
 }
 
@@ -1292,8 +1358,8 @@ sub translate_reads_remote{
     my $rscripts        = $self->get_remote_scripts();
     my $remote_handler  = $self->get_scripts_dir . "/remote/run_transeq_handler.pl";
     my $remote_script   = $self->get_scripts_dir . "/remote/run_transeq_array.sh";
-    $self->MRC::Run::remote_transfer( $remote_handler, $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts, 'f' );
-    $self->MRC::Run::remote_transfer( $remote_script,  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts, 'f' );
+    MRC::Run::remote_transfer_file( $remote_handler, $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts);
+    MRC::Run::remote_transfer_file( $remote_script,  $self->get_remote_username . "@" . $self->get_remote_server . ":" . $rscripts);
     foreach my $sample_id( @sample_ids ){
 	my $remote_input_dir  = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/raw/";
 	my $remote_output_dir =  $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
@@ -1307,8 +1373,8 @@ sub translate_reads_remote{
 	    print( "translating reads, splitting orfs on stop codon\n" );       
 	    $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
 	    print( "translation complete, Transferring split and raw translated orfs\n" );
-	    $self->MRC::Run::remote_transfer( $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_unsplit_orfs, $local_unsplit_orfs, 'c' ); #the unsplit orfs
-	    $self->MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' ); #the split orfs
+	    MRC::Run::remote_transfer( $self->get_remote_username . "@" . $self->get_remote_server . ":" . $remote_unsplit_orfs, $local_unsplit_orfs, 'c' ); #the unsplit orfs
+	    MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' ); #the split orfs
 	}
 	else{ #no splitting of the orfs
 	    my $remote_cmd = "\'perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waitTimeInSeconds . 
@@ -1316,7 +1382,7 @@ sub translate_reads_remote{
 	    print( "translating reads\n" );       
 	    $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
 	    print( "translation complete. Transferring orfs\n" );
-	    $self->MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' );
+	    MRC::Run::remote_transfer( $remote_orfs, $local_orfs, 'c' );
 	}
 	print( "transfer of orfs successful\n");	
     }
@@ -1355,7 +1421,7 @@ sub translate_reads_remote_ping{
 	my $sample_id = $jobs{$job};
 	my $remote_orfs = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
 	my $local_orfs  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
-	my $results = $self->MRC::Run::remote_transfer_file( $remote_orfs, $local_orfs);
+	my $results = MRC::Run::remote_transfer_file( $remote_orfs, $local_orfs);
     }
 }
 
@@ -1406,42 +1472,8 @@ sub local_job_listener{
     return (time() - $startTimeInSeconds); # return amount of wall-clock time this took
 }
 
-sub remote_transfer_directory($$$) {
-    my ($self, $src_path, $dest_path) = @_;
-    return($self->remote_transfer($src_path, $dest_path, 'directory'));
-}
 
-sub remote_transfer_file($$$) {
-    my ($self, $src_path, $dest_path) = @_;
-    return($self->remote_transfer($src_path, $dest_path, 'file'));
-}
 
-sub remote_transfer{
-    my $self = shift;
-    my $src_path    = shift; #a file or dir path (not a connection string!)
-    my $dest_path   = shift; # a file or dir path
-    my $path_type   = shift; #'file' or 'directory' or 'contents'
-    my @args = ();
-    if( $path_type eq 'file' || $path_type eq "f" ){ 
-	@args = ( $src_path, $dest_path );
-    } elsif( $path_type eq 'directory' || $path_type eq "d" ){
-	@args = ( "-r", $src_path, $dest_path );
-    } elsif( $path_type eq 'contents' || $path_type eq "c" ){
-	warn "This should probably never be called!\n";
-	#on some machines, if the directories are the same on remote and local, a recursive scp will create a subdir with identical dir name. Use the contents setting to 
-	#copy all of the contents of a file over, without transferring the actual sourcedir as well
-	@args = ( $src_path . "/*", $dest_path );
-    } else {
-	die "Programming error: You did not correctly specify your parameters in remote_transfer when moving $src_path to $dest_path! Path type is $path_type. Terminating with an error!\n";
-    }
-    warn("scp @args");
-    my $results = IPC::System::Simple::capture("scp @args");
-    if (0 != $EXITVAL) {
-	warn( "Error transferring $src_path to $dest_path using $path_type: $results\n" );
-	exit(0);
-    }
-    return $results;
-}
 
 # This is never used
 #File::Base name has a dirname function, but it includes the full path. This only returns the current directory name from a path
@@ -1476,7 +1508,7 @@ sub remote_transfer_search_db{
     (defined($DATABASE_PARENT_DIR)) or die "Programming error: the 'type' in remote_transfer_search_db must be either \"hmm\" or \"blast\". Instead, it was: \"$type\". Fix this in the code!\n";
     my $db_dir     = $self->get_ffdb() . "/" . "${DATABASE_PARENT_DIR}/${db_name}";
     my $remote_dir = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/" . $DATABASE_PARENT_DIR . "/" . $db_name;
-    my $results = $self->MRC::Run::remote_transfer_directory( $db_dir, $remote_dir);
+    my $results = MRC::Run::remote_transfer_directory( $db_dir, $remote_dir);
     return $results;
 }
 
@@ -1484,7 +1516,7 @@ sub remote_transfer_batch{
     my ($self, $hmmdb_name) = @_;
     my $hmmdb_dir   = $self->get_ffdb() . "/HMMbatches/$hmmdb_name";
     my $remote_dir  = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb() . "/HMMbatches/$hmmdb_name";
-    my $results = $self->MRC::Run::remote_transfer_file($hmmdb_dir, $remote_dir);
+    my $results = MRC::Run::remote_transfer_file($hmmdb_dir, $remote_dir);
     return $results;
 }
 
@@ -1584,7 +1616,7 @@ sub get_remote_search_results {
     my $in_orf_dir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/"; # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs( @{ $self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0) } ) {
 	my $remoteStr = $self->get_remote_username() . '@' . $self->get_remote_server() . ':' . "$remote_search_res_dir/$in_orfs";
-	$self->MRC::Run::remote_transfer_directory($remoteStr, $local_search_res_dir);
+	MRC::Run::remote_transfer_directory($remoteStr, $local_search_res_dir);
     }
     #return $self; # unclear to me why this is returned...
 }
@@ -1618,90 +1650,75 @@ sub get_remote_search_results {
 sub run_blast_remote{
     my ( $self, $inseq, $db, $output, $closed ) = @_;
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    my $remote_cmd;
-    if( !defined( $closed ) ){
-	$remote_cmd = "\'qsub -sync y " . $self->get_remote_scripts() . "run_blast.sh " . $inseq . " " . $db . " " . $output . "\'";
-    }
-    elsif( $closed == 1 ){
-	$remote_cmd = "\'qsub " . $self->get_remote_scripts() . "run_blast.sh " . $inseq . " " . $db . " " . $output . "\'";
-    }
-    else{
-	#if( $closed == 0, or same as if not defined $closed)
-	$remote_cmd = "\'qsub -sync y " . $self->get_remote_scripts() . "run_blast.sh " . $inseq . " " . $db . " " . $output . "\'";
-    }
-    my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-    return $results;
+    my $remoteScriptDir = $self->get_remote_scripts();
+
+    my $SINGLE_QUOTE = "\'";
+    my $sync_parameter = (!defined($closed) || !$closed) ? ' -sync y ' : ''; # if "closed" is false or unspecified, then add "-sync y" to the parameter list
+    my $remote_cmd = $SINGLE_QUOTE . "qsub $sync_parameter $remoteScriptDir run_blast.sh $inseq $db $output " . $SINGLE_QUOTE;
+    return($self->MRC::Run::execute_ssh_cmd($connection, $remote_cmd));
 }
 
 sub transfer_hmmsearch_remote_results{
     my ($self, $hmmdb_name) = @_;
     my $ffdb = $self->get_ffdb();
-    my $local_file = $ffdb . "/hmmsearch/" . $hmmdb_name;
+    my $local_file = "$ffdb/hmmsearch/$hmmdb_name";
     my $remote_file  = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $self->get_remote_ffdb . "/hmmsearch/" . $hmmdb_name;
-    my $results = $self->MRC::Run::remote_transfer_file( $remote_file, $local_file);
-    return $results;
+    return(MRC::Run::remote_transfer_file( $remote_file, $local_file));
 }
 
 sub remove_remote_file{
-    my( $self, $file ) = @_;
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    my $remote_cmd = "rm " . $file;
-    my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-    return $results;
+    my($self, $file) = @_;
+    my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
+    return($self->MRC::Run::execute_ssh_cmd( $connection, "/bin/rm $file"));
 }
 
 sub remove_hmmsearch_remote_results{
-    my ( $self, $search_outfile ) = @_;
-    my $remote_file = $self->get_remote_ffdb() . "/hmmsearch/" . $search_outfile;
-    my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    my $remote_cmd = "rm " . $remote_file;
-    my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
-    return $results;
+    my ($self, $search_outfile) = @_;
+    my $remote_file = $self->get_remote_ffdb() . "/hmmsearch/$search_outfile";
+    my $connection = $self->get_remote_username() . "@" . $self->get_remote_server();
+    return($self->MRC::Run::execute_ssh_cmd( $connection, "/bin/rm $remote_file"));
 }
 
 sub run_hmmscan_remote_ping{
-    my $self = shift;
-    my $hmmdb_name = shift;
-    my $waitTimeInSeconds   = shift; #in seconds, amount of time between queue checks
-    my @sample_ids =  @{ $self->get_sample_ids() };
+    my ($self, $hmmdb_name, $waitTimeInSeconds) = @_;  # waitTimeInSeconds is amount of time between queue checks
+    my @sample_ids = @{$self->get_sample_ids()};
     my %jobs = ();
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
-    #use get_hmmdbs with the 1 flag to indicate remote server file paths
-    my %hmmdbs =  %{ $self->MRC::DB::get_hmmdbs( $hmmdb_name, 1 ) };
-    #search each sample against each hmmdb split
-    foreach my $sample_id( @sample_ids ){
-	my $remote_input  = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs.fa";
+    my %hmmdbs =  %{ $self->MRC::DB::get_hmmdbs( $hmmdb_name, 1 ) };     #use get_hmmdbs with the 1 flag to indicate remote server file paths
+    foreach my $sample_id( @sample_ids ){ #search each sample against each hmmdb split
+	my $projID = $self->get_project_id();
+	my $ff = $self->get_remote_ffdb();
+	my $thisSampleDir = "$ff/projects/${projID}/${sample_id}";
+	my $remote_input = "${thisSampleDir}/orfs.fa";
 	foreach my $hmmdb( keys( %hmmdbs ) ){
 	    my $remote_hmmdb_path = $hmmdbs{$hmmdb};
-	    my $remote_output =  $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
+	    my $remote_output = "${thisSampleDir}/search_results/${sample_id}_v_${hmmdb}.hsc";
 	    my $remote_cmd = "\'qsub " . $self->get_remote_scripts() . "run_hmmscan.sh -o " . $remote_output . " " . $remote_hmmdb_path . " " . $remote_input . "\'";
 	    my $results = $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
 	    if( $results =~ m/^Your job (\d+) / ){
 		my $job_id = $1;
 		$jobs{$job_id}{$sample_id}{$hmmdb} = $remote_output;
-	    }
-	    else{
-		warn( "Remote server did not return a properly formatted job id when running $remote_cmd using connection $connection. Got $results instead!. Exiting.\n" );
+	    } else{
+		MRC::warnPrint("Remote server did not return a properly formatted job id when running $remote_cmd using connection $connection. Got $results instead!. Exiting.");
 		exit(0);
 	    }
-	    #add a sleep so that we don't flood the remote server
-	    sleep(10);
+	    sleep(10); # sleep for ten seconds -- add a sleep so that we don't flood the remote server
 	}
     }
     #check the jobs until they are all complete
     my @job_ids = keys( %jobs );
-    my $time = $self->MRC::Run::remote_job_listener( \@job_ids, $waitTimeInSeconds );
-    warn( "Hmmscan was conducted translated in approximately $time seconds on remote server\n");
+    my $time = $self->MRC::Run::remote_job_listener(\@job_ids, $waitTimeInSeconds);
+    MRC::notifyWithLine("Hmmscan was conducted: translation finished (hopefully it was successful) on " . $self->get_remote_server() . " in approximately $time seconds.");
     #consider that a completed job doesn't mean a successful run!
-    warn( "Pulling hmmscan reads from remote server\n" );
+    MRC::notifyWithLine("Pulling hmmscan reads from remote server\n");
     foreach my $job( keys( %jobs ) ){
 	foreach my $sample_id( @sample_ids ){
 	    foreach my $hmmdb( keys( %hmmdbs ) ){
 		next unless exists( $jobs{$job}{$sample_id}{$hmmdb} );
 		warn( join("\t", $job, $sample_id, $hmmdb, "\n" ) );
 		my $remote_results = $self->get_remote_username . "@" . $self->get_remote_server . ":" . $jobs{$job}{$sample_id}{$hmmdb};
-		my $local_results  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/search_results/" . $sample_id . "_v_" . $hmmdb . ".hsc";
-		my $results = $self->MRC::Run::remote_transfer_file( $remote_results, $local_results);
+		my $local_results  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/${sample_id}/search_results/${sample_id}_v_${hmmdb}.hsc";
+		my $results = MRC::Run::remote_transfer_file( $remote_results, $local_results);
 	    }
 	}
     }    

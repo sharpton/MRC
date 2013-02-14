@@ -49,12 +49,7 @@ use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
 use Benchmark;
 
-use constant USE_COLORS_CONSTANT => 1; ## 1 = true, 0 = false
-use Term::ANSIColor;
-
-sub dieWithUsageError($) { print("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n"); print STDOUT <DATA>; die(safeColor("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n", "yellow on_red")); exit(1); }
-sub warnPrint($) { warn(safeColor("[WARNING]: " . $_[0] . "\n", "yellow on_black")); }
-
+sub dieWithUsageError($) { chomp($_[0]); print("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "\n"); print STDOUT <DATA>; die(MRC::safeColor("[TERMINATED DUE TO USAGE ERROR]: " . $_[0] . "", "yellow on_red")); exit(1); }
 print STDERR ">> ARGUMENTS TO mrc_handler.pl: perl mrc_handler.pl @ARGV\n";
 
 ## "ffdb" = "flat file data base"
@@ -126,7 +121,7 @@ my $scratch              = 0; #should we use scratch space on remote machine?
 my $multi                = 1; #should we multiload our inserts to the database?
 my $bulk_insert_count    = 1000;
 my $database_name        = "Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
-my $schema_name          = "Sfams"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
+my $schema_name          = "Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
 my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 
 my $verbose              = 0; # Print extra diagnostic info?
@@ -146,6 +141,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "dbuser|u=s"   => \$db_username
 	   , "dbpass|p=s"   => \$db_pass
 	   , "dbhost=s"     => \$db_hostname
+	   , "dbname=s"       => \$database_name
 
 	   # Remote computational cluster server related variables
 	   , "rhost=s"     => \$remote_hostname
@@ -229,8 +225,8 @@ my $analysis = MRC->new();  #Initialize the project
 
 $analysis->set_scripts_dir($localScriptDir);
 
-#Get a DB connection 
-$analysis->set_dbi_connection("DBI:mysql:$database_name:$db_hostname"); $analysis->set_username($db_username); $analysis->set_password($db_pass); $analysis->schema_name($schema_name);
+#Get a DB connection
+$analysis->set_dbi_connection("DBI:mysql:$database_name:$db_hostname", $database_name, $db_hostname); $analysis->set_username($db_username); $analysis->set_password($db_pass); $analysis->set_schema_name($schema_name);
 $analysis->build_schema();
 $analysis->multi_load($multi);
 $analysis->bulk_insert_count($bulk_insert_count);
@@ -263,7 +259,7 @@ if ($is_remote) {
     if (!$dryRun) {
 	$analysis->build_remote_ffdb($verbose); #checks if necessary to build and then builds
     } else {
-	dryNotify("Not setting the remote credentials.");
+	MRC::dryNotify("Not setting the remote credentials.");
     }
 }
 
@@ -288,7 +284,7 @@ if (defined($goto) && $goto) {
 	#$analysis->MRC::Run::get_part_samples($project_dir);
 	$analysis->MRC::Run::back_load_samples();
     } else {
-	dryNotify("Skipped loading samples.");
+	MRC::dryNotify("Skipped loading samples.");
     }
 
     $goto = uc($goto); ## upper case it
@@ -311,7 +307,7 @@ printHeader("LOADING PROJECT");
 #get the samples associated with project. a project description can be left in DESCRIPT.txt
 
 if (!$dryRun) { $analysis->MRC::Run::get_partitioned_samples($project_dir); }
-else { dryNotify("Skipped getting the partitioned samples for $project_dir."); }
+else { MRC::dryNotify("Skipped getting the partitioned samples for $project_dir."); }
 
 ############
 #come back and add a check that ensures sequences associated with samples
@@ -323,14 +319,14 @@ if (!$dryRun) {
     $analysis->MRC::Run::load_project($project_dir, $nseqs_per_samp_split);
 } else {
     $analysis->set_project_id(-99); # Dummy project ID
-    dryNotify("Skipping the local load of the project.");
+    MRC::dryNotify("Skipping the local load of the project.");
 }
 
 if ($is_remote){
     if (!$dryRun) {
 	$analysis->MRC::Run::load_project_remote($analysis->get_project_id());
     } else {
-	dryNotify("Skipping the REMOTE loading of the project.");
+	MRC::dryNotify("Skipping the REMOTE loading of the project.");
     }
     $analysis->set_remote_hmmscan_script($analysis->get_remote_project_path() . "run_hmmscan.sh");
     $analysis->set_remote_hmmsearch_script($analysis->get_remote_project_path() . "run_hmmsearch.sh");
@@ -352,7 +348,7 @@ if ($dryRun) {
 	#run transeq remotely, check on SGE job status, pull results back locally once job complete.
 	my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
 	if (!$dryRun) { $analysis->MRC::Run::translate_reads_remote($waittime, $remote_logs, $split_orfs);	}
-	else { dryNotify("[Dry run]: in a real run, we would have translated reads here."); }
+	else { MRC::dryNotify("[Dry run]: in a real run, we would have translated reads here."); }
     } else {
 	my $projID = $analysis->get_project_id();
 	foreach my $sampleID (@{$analysis->get_sample_ids()}){
@@ -360,11 +356,11 @@ if ($dryRun) {
 	    my $orfs_file    = "${local_ffdb}/projects/$projID/${sampleID}/orfs/";
 	    # We could potentially do some file splitting here to speed up the remote compute...
 	    if (!$dryRun) { $analysis->MRC::Run::translate_reads($sample_reads, $orfs_file); }
-	    else { dryNotify("[Dry run]: in a real run, we would have translated reads here.\n"); }
+	    else { MRC::dryNotify("[Dry run]: in a real run, we would have translated reads here.\n"); }
 	}
     }
 } else {
-    dryNotify("Skipping translation of reads.");
+    MRC::dryNotify("Skipping translation of reads.");
 }
 
 ## ================================================================================
@@ -381,13 +377,13 @@ foreach my $sample_id(@{ $analysis->get_sample_ids() }){
 	if ($analysis->multi_load){
 	    my $trans_algo = ($split_orfs) ? "transeq_split" : "transeq";
 	    if (!$dryRun) { $analysis->MRC::Run::load_multi_orfs($orfs, $sample_id, $trans_algo); }
-	    else { dryNotify(); }
+	    else { MRC::dryNotify(); }
 	} else {
 	    while (my $orf = $orfs->next_seq()) {
 		my $orf_alt_id  = $orf->display_id();
 		my $read_alt_id = MRC::Run::parse_orf_id($orf_alt_id, "transeq");
 		if (!$dryRun) { $analysis->MRC::Run::load_orf($orf_alt_id, $read_alt_id, $sample_id); }
-		else { dryNotify(); }
+		else { MRC::dryNotify(); }
 		print "Added " . ($orfCount++) . " orfs to the DB...\n";
 	    }
 	}
@@ -459,7 +455,7 @@ if ($is_remote && $stage){
 	    my $r_script_path        = $analysis->get_remote_formatdb_script();
 	    my $n_blastdb_splits     = $analysis->MRC::DB::get_number_db_splits("blast");
 	    build_remote_formatdb_script($formatdb_script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	    $analysis->MRC::Run::remote_transfer($formatdb_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path, "f");
+	    MRC::Run::remote_transfer_file($formatdb_script_path, $analysis->get_remote_username() . "@" . $analysis->get_remote_server() . ":" . $r_script_path);
 	    $analysis->MRC::Run::format_remote_blast_dbs($r_script_path);
 	}
 	if ($use_last){
@@ -468,7 +464,7 @@ if ($is_remote && $stage){
 	    my $r_script_path     = $analysis->get_remote_lastdb_script();
 	    my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits("blast");
 	    build_remote_lastdb_script($lastdb_script, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	    $analysis->MRC::Run::remote_transfer($lastdb_script, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path, "f");
+	    MRC::Run::remote_transfer_file($lastdb_script, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_script_path);
 	    #we can use the blast code here 
 	    $analysis->MRC::Run::format_remote_blast_dbs($r_script_path);
 	}
@@ -488,7 +484,7 @@ if ($is_remote) {
 	my $n_hmmdb_splits  = $analysis->MRC::DB::get_number_db_splits("hmm");
 	print "number of hmm splits: $n_hmmdb_splits\n";
 	build_remote_hmmscan_script($h_script_path, $n_hmm_searches, $hmmdb_name, $n_hmmdb_splits, $analysis->get_remote_project_path());
-	$analysis->MRC::Run::remote_transfer($h_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_h_script_path, "f");
+	MRC::Run::remote_transfer_file($h_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_h_script_path);
     }
     if ($use_hmmsearch){
 	printHeader("BUILDING REMOTE HMMSEARCH SCRIPT");
@@ -500,7 +496,7 @@ if ($is_remote) {
 	my $n_hmmdb_splits  = $analysis->MRC::DB::get_number_db_splits("hmm");
 	print "number of hmmdb splits: $n_hmmdb_splits\n";
 	build_remote_hmmsearch_script($h_script_path, $n_sequences, $hmmdb_name, $n_hmmdb_splits, $analysis->get_remote_project_path(), $scratch);
-	$analysis->MRC::Run::remote_transfer($h_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_h_script_path, "f");
+	MRC::Run::remote_transfer_file($h_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_h_script_path);
     }
     if ($use_blast){
 	printHeader("BUILDING REMOTE BLAST SCRIPT");
@@ -511,7 +507,7 @@ if ($is_remote) {
 	my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "number of blast db splits: $n_blastdb_splits\n";
 	build_remote_blastsearch_script($b_script_path, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	$analysis->MRC::Run::remote_transfer($b_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_b_script_path, "f");
+	MRC::Run::remote_transfer_file($b_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_b_script_path);
     }
     if ($use_last){
 	printHeader("BUILDING REMOTE LAST SCRIPT");
@@ -524,7 +520,7 @@ if ($is_remote) {
 	print "number of last db splits: $n_blastdb_splits\n";
 	#built
 	build_remote_lastsearch_script($b_script_path, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	$analysis->MRC::Run::remote_transfer($b_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_b_script_path, "f");
+	MRC::Run::remote_transfer_file($b_script_path, $analysis->get_remote_username . "@" . $analysis->get_remote_server . ":" . $r_b_script_path);
     }
 }
 
@@ -766,11 +762,6 @@ sub build_remote_lastdb_script {
     return $results;    
 }
 
-sub safeColor {
-    ## Allows you to totally disable colored printing by just changing USE_COLORS_CONSTANT to 0 at the top of this file
-    my ($str, $color) = @_;
-    return ((USE_COLORS_CONSTANT) ? colored($str, $color) : $str);
-}
 
 sub printHeader {
     my ($string) = @_;
@@ -779,20 +770,9 @@ sub printHeader {
     chomp($dateStr); # remote always-there newline from the `date` command
     my $stringWithDate = $string . " ($dateStr)";
     my $pad  = "#" x (length($stringWithDate) + 4); # add four to account for extra # and whitespce on either side of string
-    print STDERR safeColor("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n", "cyan on_blue");
+    print STDERR MRC::safeColor("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n", "cyan on_blue");
 }
 
-sub dryNotify {
-    my ($msg) = @_;
-    $msg = (defined($msg)) ? $msg : "This was only a dry run, so we skipped executing a command.";
-    print STDERR safeColor("[DRY RUN]: $msg\n", "black on_yellow");
-}
-
-sub notify {
-    my ($msg) = @_;
-    warn safeColor("[DRY RUN]: $msg\n", "cyan on_blue");
-
-}
 
 __DATA__
 
@@ -835,6 +815,9 @@ DATABASE ARGUMENTS:
 --dbpass=MYSQL_PASSWORD (in plain text)     (REQUIRED argument)
     The MySQL password for <dbuser>, on the remote database server.
     This is NOT VERY SECURE!!! Note, in particular, that it gets saved in your teminal history.
+
+--dbname=DATABASENAME (REQUIRED argument)
+    The database name. Usually something like "Sfams_lite".
 
 REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 

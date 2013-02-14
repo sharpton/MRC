@@ -30,6 +30,50 @@ use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
 
+my $USE_COLORS_CONSTANT = 1; ## Set this to '0' to avoid printing colored output to the terminal, or '1' to print colored output.
+
+sub tryToLoadModule($) {
+    my $x = eval("require $_[0]");
+    if ((defined($@) && $@)) {
+	warn "Module loading of $_[0] FAILED. Skipping this module.";
+	return 0;
+    } else {
+	$_[0]->import();
+	return 1;
+    }
+}
+
+if (!tryToLoadModule("Term::ANSIColor")) {
+    $USE_COLORS_CONSTANT = 0; # Failed to load the ANSI color terminal, so don't use colors!
+}
+
+sub warnPrint($) { chomp($_[0]); warn(safeColor("[WARNING]: " . $_[0] . "", "yellow on_black")); } # regarding "warn": if it ends with a newline it WON'T print the line number
+
+
+
+
+sub safeColor($;$) { # one required and one optional argument
+    ## Prints colored text, but only if USER_COLORS_CONSTANT is set.
+    ## Allows you to totally disable colored printing by just changing USE_COLORS_CONSTANT to 0 at the top of this file
+    my ($str, $color) = @_;
+    return (($USE_COLORS_CONSTANT) ? Term::ANSIColor::colored($str, $color) : $str);
+}
+
+sub dryNotify(;$) { # one optional argument
+    my ($msg) = @_;
+    $msg = (defined($msg)) ? $msg : "This was only a dry run, so we skipped executing a command.";
+    print STDERR safeColor("[DRY RUN]: $msg\n", "black on_yellow");
+}
+
+sub notifyWithLine($) { chomp($_[0]); warn(safeColor("[NOTE]: " . $_[0] . "", "cyan on_blue")); } # regarding "warn": if it ends with a newline it WON'T print the line number
+
+sub notify($) { # one required argument
+    my ($msg) = @_;
+    warn(safeColor("[NOTE]: $msg\n", "cyan on_blue"));
+}
+
+
+
 =head2 new
 
  Title   : new
@@ -190,16 +234,8 @@ sub set_ref_ffdb{
 
 =cut
 
-sub get_ffdb{
-  my $self = shift;
-  return $self->{"ffdb"};
-}
-
-
-sub get_ref_ffdb{
-  my $self = shift;
-  return $self->{"ref_ffdb"};
-}
+sub get_ffdb()     {  my $self = shift;  return $self->{"ffdb"};}
+sub get_ref_ffdb() {  my $self = shift;  return $self->{"ref_ffdb"};}
 
 =head2 set_dbi_connection
 
@@ -212,18 +248,16 @@ sub get_ref_ffdb{
 
 =cut
 
-sub set_dbi_connection{
-    my $self = shift;
-    my $path = shift;
-    $self->{"dbi"} = $path;
-    return $self->{"dbi"};
+sub set_dbi_connection {
+    my ($self, $dbipath, $database_name, $db_hostname) = @_;
+    $self->{"dbi"} = $dbipath;
+    $self->{"db_name"}     = $database_name; # <-- usually something like "Sfams_tmp" or whatever. Allowed to be UNDEFINED!
+    $self->{"db_hostname"} = $db_hostname; # <-- something like "test.myserver.com". Allowed to be UNDEFINED!
 }
 
-
-sub get_dbi_connection{
-    my $self = shift;
-    return $self->{"dbi"};
-}
+sub get_db_name()        { my $self = shift; return $self->{"db_name"}; }
+sub get_db_hostname()    { my $self = shift; return $self->{"db_hostname"}; }
+sub get_dbi_connection() { my $self = shift; return $self->{"dbi"}; }
 
 sub multi_load{
     my $self  = shift;
@@ -301,22 +335,14 @@ sub get_sample_path{
  Usage   : $analysis->set_username( $username );
  Function: Set the MySQL username
  Example : my $username = $analysis->set_username( "joebob" );
- Returns : A username (string)
  Args    : A username (string)
 
 =cut 
 
-sub set_username{
-    my $self = shift;
-    my $path = shift;
-    $self->{"user"} = $path;
-    return $self->{"user"};
+sub set_username { # note: this is the MYSQL username!
+    my ($self, $user) = @_; $self->{"user"} = $user;
 }
-
-sub get_username{
-    my $self = shift;
-    return $self->{"user"};
-}
+sub get_username() { my $self = shift; return $self->{"user"}; }
 
 =head2 set_password
 
@@ -324,37 +350,29 @@ sub get_username{
  Usage   : $analysis->set_password( $password );
  Function: Set the MySQL password
  Example : my $username = $analysis->set_password( "123456abcde" );
- Returns : A password (string)
  Args    : A password (string)
 
 =cut 
 
-#NOTE: Need to add encryption/decryption function before official release
+#NOTE: This is pretty dubious! Need to add encryption/decryption function before official release
 
 sub set_password{
     my $self = shift;
     my $path = shift;
+    warn "In MRC.pm (function: set_password()): Note: we are setting the password in plain text here. This should ideally be eventually changed to involve encryption or something.";
     $self->{"pass"} = $path;
-    return $self->{"pass"};
 }
 
-sub get_password{
-    my $self = shift;
-    return $self->{"pass"};
-}
-   
+sub get_password { my $self = shift; return $self->{"pass"}; }
 
-sub schema_name{
-    my $self = shift;
-    my $database_name = shift;
-    if( defined( $database_name ) ){
-	$self->{"schema_name"} = $database_name . "::Schema";
+sub set_schema_name{
+    my ($self, $new_name) = @_;
+    if ($new_name =~ m/::Schema$/) { ## <-- does the new schema end in the literal text '::Schema'?
+	$self->{"schema_name"} = $new_name; # Should end in ::Schema . "::Schema";
+    } else {
+	warn("Note: you passed the schema name in as \"$new_name\", but names should always end in the literal text \"::Schema\". So we have actually modified the input argument, now the schema name is being set to: \"$new_name::Schema\" ");
+	$self->{"schema_name"} = $new_name . "::Schema"; # Append "::Schema" to the name.
     }
-    if( !defined( $self->{"schema_name"} ) ){
-	warn( "You must define the schema name via MRC::schema_name() to connect to the DBIx engine! Defaulting to database Sfams\n" );
-	$self->{"schema_name"} = "Sfams::Schema";
-    }
-    return $self->{"schema_name"};
 }
 
 =head2 build_schema
@@ -371,13 +389,13 @@ sub schema_name{
 sub build_schema{
     my $self   = shift;
 #    my $schema = Sfams::Schema->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
-    my $schema = $self->schema_name->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
-				       #since we have terms in DB that are reserved words in mysql (e.g., order)
-				       #we need to put quotes around those field ids when calling SQL
-				       {
-					   quote_char => '`', #backtick is quote in sql
-					   name_sep   => '.'  #allows SQL generator to put quotes in right place
-				       }
+    my $schema = $self->{"schema_name"}->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
+						  #since we have terms in DB that are reserved words in mysql (e.g., order)
+						  #we need to put quotes around those field ids when calling SQL
+						  {
+						      quote_char => '`', #backtick is quote in sql
+						      name_sep   => '.'  #allows SQL generator to put quotes in right place
+						  }
 	);
     $self->{"schema"} = $schema;
     return $self->{"schema"};
