@@ -93,11 +93,11 @@ my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
 my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
 my $nseqs_per_samp_split = 100000; #how many seqs should each sample split file contain?
 my @fcis                 = (0, 1); #what family construction ids are allowed to be processed?
-my $db_prefix_basename   = "SFams_all_v0"; #set the basename of your database here.
+my $db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
 my $hmmdb_name           = undef;
 #"SFams_all_v1.03_500"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $local_ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
-my $nr_db                = 1; #should we build a non-redundant version of the sequence database?
+my $nr_db                = 1; #should we build a non-redundant version of the sequence database? For some reason, this is coded to ALWAYS be true.
 my $blastdb_name         = undef; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $local_ffdb/BLASTdbs/ Might change how this works. If you don't want to use a blastdb, leave undefined
 
 my $hmmdb_build    = 0;
@@ -126,8 +126,8 @@ my $goto           = undef; #B=Build HMMdb
 my $scratch              = 0; #should we use scratch space on remote machine?
 my $multi                = 1; #should we multiload our inserts to the database?
 my $bulk_insert_count    = 1000;
-my $dbname               = "Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
-my $schema_name          = "Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
+my $dbname               = undef; #"Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
+my $schema_name          = undef; #"Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
 my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 
 my $verbose              = 0; # Print extra diagnostic info?
@@ -135,7 +135,6 @@ my $dryRun               = 0; # <-- (Default: disabled) If this is specified, th
 
 #hacky hardcoding on mh_scaffold pilot 2 to test random die bug...
 my %skip_samps = ();
-
 
 my $extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
 my $sWasSpecified = undef; # The "s" parameter is no longer valid, so we specially detect it with this variable. This is sorta required; "sub {...}" doesn't actually allow program exit it seems.
@@ -150,8 +149,8 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "dbuser|u=s"   => \$db_username
 	   , "dbpass|p=s"   => \$db_pass
 	   , "dbhost=s"     => \$db_hostname
-	   , "dbname=s"       => \$dbname
-	   
+	   , "dbname=s"     => \$dbname
+	   , "dbschema=s"   => \$schema_name
 	   , "dbprefix=s"   => \$db_prefix_basename
 
 	   # Remote computational cluster server related variables
@@ -219,24 +218,46 @@ if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
 }
 
 (-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n");
+
+if (!$hmmdb_build && !(-d $analysis->MRC::DB::get_hmmdb_path())) {
+    MRC::warnPrint("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.");
+    MRC::dieDramatically("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.");
+}
+
+if (!$blastdb_build && !(-d $analysis->MRC::DB::get_blastdb_path())) {
+    MRC::warnPrint("The blast database path did not exist, BUT we did not specify the --bdb option to build a database.");
+    MRC::dieDramatically("The blast database path did not exist, BUT we did not specify the --bdb option to build a database. We should specify --bdb probably.");
+}
+
+
+
 ### =========== END OF SANITY CHECKING OF INPUT ARGUMENTS ==========
 ### =========== Automatic setting of default parameters ========
 
+if (!defined($dbname)) {
+    $dbname = "Sfams_hmp";
+    MRC::warnPrint("Note: --dbname=NAME was not specified on the command line, so we are using the default database name, which is \"$dbname\".");
+}
+
+if (!defined($schema_name)) {
+    $schema_name = "Sfams::Schema";
+    MRC::warnPrint("Note: --dbschema=SCHEMA was not specified on the command line, so we are using the default schema name, which is \"$schema_name\".");
+}
+
 # Automatically set the blast database name, if the user didn't specify something already.
 if (!defined($blastdb_name)) {
-    # set default blast DB name, if none was specified
     $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
-    warn "Note: blastdb_name was not specified on the command line (--blastdb=NAME). Using the default value, which is <$blastdb_name>.";
+    MRC::warnPrint("Note: blastdb_name was not specified on the command line (--blastdb=NAME). Using the default value, which is <$blastdb_name>.");
 } 
 
 if (!defined($db_prefix_basename)) {
     $db_prefix_basename = "SFams_all_v0";
-    warn "Note: db_prefix_basename (database basename/prefix) was not specified on the command line (--dbprefix=PREFIX). Using the default value, which is <$db_prefix_basename>.";
+    MRC::warnPrint("Note: db_prefix_basename (database basename/prefix) was not specified on the command line (--dbprefix=PREFIX). Using the default value, which is <$db_prefix_basename>.");
 }
 
 if (!defined($hmmdb_name)) {
     $hmmdb_name = "${db_prefix_basename}_${hmm_db_split_size}";
-    warn "Note: hmmdb_name was not specified on the command line (--hmmdb=NAME). Using the default value, which is <$hmmdb_name>.";
+    MRC::warnPrint("Note: hmmdb_name was not specified on the command line (--hmmdb=NAME). Using the default value, which is <$hmmdb_name>.");
 }
 
 my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
@@ -430,35 +451,18 @@ foreach my $sample_id(@{ $analysis->get_sample_ids() }){
 ## ================================================================================
 BUILDHMMDB:
     ; # <-- this keeps emacs from indenting the code stupidly. Ugh!
-if (!$hmmdb_build) {
-    if (!(-d $analysis->MRC::DB::get_hmmdb_path())) {
-	MRC::warnPrint("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.\n");
-	MRC::warnPrint("Apparently we MUST create the database if it does not already exist? Quitting now.\n");
-	die "The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.\n";
-	#$hmmdb_build = 1;
-    }
-}
 
 if ($hmmdb_build){
     if (!$use_hmmscan && !$use_hmmsearch) {
-	MRC::warnPrint("WARNING: It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.\n");
+	MRC::warnPrint("WARNING: It seems that you want to build an hmm database, but you aren't invoking hmmscan or hmmsearch. While I will continue, you should check your settings to make certain you aren't making a mistake.");
     }
     printHeader("BUILDING HMM DATABASE");
     $analysis->MRC::Run::build_search_db($hmmdb_name, $hmm_db_split_size, $force_db_build, "hmm");
 }
 
-if (!$blastdb_build) {
-    if (! -d $analysis->MRC::DB::get_blastdb_path()) {
-	print "The blast database path did not exist, BUT we did not specify the --bdb option to build a database.";
-	print "Apparently we MUST create the database if it does not already exist? Quitting now.";
-	die "The blast database path did not exist, BUT we did not specify the --bdb option to build a database. We should specify --bdb probably.";
-	#$blastdb_build = 1;
-    }	
-}
-
 if ($blastdb_build) {
-    if (!$use_blast && !$use_last){
-	warn("It seems that you want to build a blast database, but you aren't invoking blast or last. While I will continue, you should check your settings to make certain you aren't making a mistake.\n");
+    if (!$use_blast && !$use_last) {
+	MRC::warnPrint("It seems that you want to build a blast database, but you aren't invoking blast or last. While I will continue, you should check your settings to make certain you aren't making a mistake.");
     }
     printHeader("BUILDING BLAST DATABASE");
     #need to build the nr module here
@@ -824,9 +828,27 @@ See the examples below for more information.
 
 EXAMPLES:
 
-perl mrc_handler.pl --something --something
+1. You have to set your MRC_LOCAL environment variable.
+export MRC_LOCAL=/my/home/directory/MRC       <-- this is your github-checked-out copy of MRC
 
-(put some examples here)
+2. Now you need to store your MySQL database password in a local variable, since we have to (insecurely!) use this.
+I recommend typing this:
+PASS=yourMysqlPassword
+
+3. You have to set up passphrase-less SSH to your computational cluster. In this example, the cluster is "compute.cluster.university.edu".
+Follow the links at "https://www.google.com/search?q=passphraseless+ssh" in order to find some solutions for setting this up. It is quite easy!
+
+4. Then you can run mrc_handler.pl as follows. Sorry the command is so long!
+
+Note that the FIRST TIME you run it, you need to calculat the HMM database (--hdb) and the blast database (--bdb), and you have to STAGE (i.e. copy) the files to the remote cluster with the --stage option.
+So your first run will look something like this:
+   perl $MRC_LOCAL/scripts/mrc_handler.pl --hdb --bdb --stage [...the rest of the options should be copied from the super long command below...]
+
+On subsequent runs, you can omit "--hdb" and "--bdb" and "--stage" , and run just this:
+   perl $MRC_LOCAL/scripts/mrc_handler.pl --dbuser=sqlusername --dbpass=$PASS --dbhost=data.your.university.edu --rhost=compute.cluster.university.edu --ruser=clusterusername --rdir=/cluster_temp_storage/MRC --ffdb=/local_database/MRC_ffdb --refdb=/local_home/sifting_families --projdir=./MRC/data/randsamp_subset_perfect_2/
+
+
+(put some more examples here)
 
 OPTIONS:
 
@@ -852,8 +874,11 @@ DATABASE ARGUMENTS:
     The MySQL password for <dbuser>, on the remote database server.
     This is NOT VERY SECURE!!! Note, in particular, that it gets saved in your teminal history.
 
---dbname=DATABASENAME (REQUIRED argument)
-    The database name. Usually something like "Sfams_lite".
+--dbname=DATABASENAME (OPTIONAL argument: default is "Sfams_hmp")
+    The database name. Usually something like "Sfams_lite" or "Sfams_hmp".
+
+--dbschema=SCHEMANAME (OPTIONAL argument: default is "Sfams::Schema")
+    The schema name.
 
 --dbprefix=STRING (Optional: default is "SFams_all_v0")
     Some kind of prefix/basename. I am confused.
