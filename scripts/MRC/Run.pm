@@ -158,10 +158,10 @@ sub get_partitioned_samples{
 	} else {
 	    #get sample name here, simple parse on the period in file name
     	    my $thisSample = basename($file, (".fa", ".fna"));
-	    $samples{$thisSample}->{"path"} = "${path}/${file}";
+	    $samples{$thisSample}->{"path"} = "$path/$file";
 	}
     }
-    warn("Adding samples to analysis object at path <$path>.\n");
+    warn("Adding samples to analysis object at path <$path>.");
     $self->set_samples( \%samples );
     #return $self;
 }
@@ -285,7 +285,7 @@ sub back_load_samples{
     my %samples = ();
     foreach my $file( @files ){
 	next if ( $file =~ m/^\./ || $file =~ m/logs/ || $file =~ m/hmmscan/ || $file =~ m/output/ || $file =~ m/\.sh/ );
-	my $sample_id = $file;
+	my $sample_id = $file; # hmm.
 	my $samp    = $self->MRC::DB::get_sample_by_sample_id( $sample_id );
 #	my $sample_name = $samp->name();
 #	$samples{$sample_name}->{"id"} = $sample_id;
@@ -1131,34 +1131,28 @@ sub build_search_db{
 	push( @split, $family_db );
 	$count++;
 	#if we've hit our split size, process the split
-	if( $count >= $split_size || $family == $families[-1] ){
-	    $n_proc++;
-	    #build the DB
+	if($count >= $split_size || $family == $families[-1]) {
+	    $n_proc++; 	    #build the DB
 	    my $split_db_path;
 	    if( $type eq "hmm" ){
-		$nr_db = 0; #Makes no sense to build a NR HMM DB
-		$split_db_path = cat_db_split( $db_path_with_name, $n_proc, $ffdb, ".hmm", \@split, $nr_db );
-	    }
-	    elsif( $type eq "blast" ){
-		$split_db_path = cat_db_split( $db_path_with_name, $n_proc, $ffdb, ".fa", \@split, $nr_db );
-	    }
-	    #we do want DBs to be gzipped 
-	    gzip_file( $split_db_path );
-	    #save the gzipped copy, remove the uncompressed copy
-	    unlink( $split_db_path );
-	    @split = ();
-	    $count = 0;
+		$split_db_path = MRC::Run::cat_db_split($db_path_with_name, $n_proc, $ffdb, ".hmm", \@split, 0); # note: the $nr_db parameter for hmm is ALWAYS zero --- it makes no sense to build a NR HMM DB
+	    } elsif( $type eq "blast" ){
+		$split_db_path = MRC::Run::cat_db_split($db_path_with_name, $n_proc, $ffdb, ".fa", \@split, $nr_db);
+	    } else { die "invalid type: <$type>"; }
+	    gzip_file($split_db_path); # We want DBs to be gzipped.
+	    unlink($split_db_path); # So we save the gzipped copy, and DELETE the uncompressed copy
+	    @split = (); # clear this out
+	    $count = 0; # clear this too
 	}
     }
 
-    if( $type eq "blast" ){
+    if($type eq "blast"){
 	open( LEN, "> ${raw_db_path}/database_length.txt" ) || die "Can't open ${raw_db_path}/database_length.txt for write: $!\n";
 	print LEN $length;
 	close LEN;
     }
 
     print STDERR "Build Search DB: $type DB was successfully built and compressed.\n";
-    #return $self;
 }
 
 sub cat_db_split{
@@ -1170,8 +1164,7 @@ sub cat_db_split{
     foreach my $family( @families ){
 	#do we want a nonredundant version of the DB? 
 	if (defined($nr_db) && $nr_db) {
-	    #make a temp file for the nr 
-	    my $tmp = _build_nr_seq_db( $family );
+	    my $tmp = _build_nr_seq_db( $family ); #make a temp file for the nr 
 	    File::Cat::cat( $tmp, $fh ); # From the docs: "Copies data from EXPR to FILEHANDLE, or returns false if an error occurred. EXPR can be either an open readable filehandle or a filename to use as input."
 	    unlink($tmp); # delete the $tmp file
 	} else{
@@ -1237,13 +1230,13 @@ sub calculate_blast_db_length{
     my( $self ) = @_;
     my $length  = 0;
     my $db_name = $self->get_blastdb_name();
-    my $db_path = $self->get_ffdb() . "/$BLASTDB_DIR/" . $db_name . "/";
+    my $db_path = $self->get_ffdb() . "/$BLASTDB_DIR/$db_name";
     opendir( DIR, $db_path ) || die "Can't opendir $db_path for read: $!\n";
     my @files = readdir( DIR );
     closedir DIR;
     foreach my $file( @files ){
 	next unless( $file =~ m/\.fa/ );
-	my $filepath = $db_path . $file;
+	my $filepath = "$db_path/$file";
 	$length += get_sequence_length_from_file( $filepath );
     }
     return $length;
@@ -1268,60 +1261,64 @@ sub gzip_file {
     IO::Compress::Gzip::gzip $file => $file . ".gz" or die "gzip failed: $GzipError\n";
 }
 
+# Code below is both unused AND refers to non-existent code in DB (as of Feb 2013).
 #state how many spilts you want, will determine the correct number of hm
-sub build_hmm_db_by_n_splits{
-    my $self     = shift;
-    my $hmmdb    = shift; #name of hmmdb to use, if build, new hmmdb will be named this. check for dups
-    my $n_splits = shift; #integer - how many hmmdb splits should we produce?
-    my $force    = shift; #0/1 - force overwrite of old HMMdbs during compression.
-    my $ffdb     = $self->get_ffdb();
-    #where is the hmmdb going to go? each hmmdb has its own dir
-    my $hmmdb_path = $ffdb . "$HMMDB_DIR/" . $hmmdb . "/";
-    warn "Building HMMdb $hmmdb, splitting into $n_splits parts.\n";
-    #Have you built this HMMdb already?
-    if( -d $hmmdb_path && !$force ){
-	warn "You've already built an HMMdb with the name $hmmdb at $hmmdb_path. Please delete or overwrite by using the --force option.\n";
-	die;
-    }
-    #create the HMMdb dir that will hold our split hmmdbs
-    $self->MRC::DB::build_hmmdb_ffdb( $hmmdb_path );
-    #update the path to make it easier to build the split hmmdbs (e.g., points to an incomplete file name)
-    $hmmdb_path = $hmmdb_path . $hmmdb;
-    #constrain analysis to a set of families of interest
-    my @families   = sort( @{ $self->get_subset_famids() });
-    my $n_fams     = @families;
-    my $split_size = $n_fams / $n_splits;
-    my $count      = 0;
-    my @split      = (); #array of family HMMs (compressed)
-    my $n_proc     = 0;
-    my $ref_ffdb   = $self->get_ref_ffdb() . "/";
-    my @fcis       = @{ $self->get_fcis() };
-    foreach my $family( @families ){
-	#find the HMM associated with the family (compressed)
-	my $family_hmm;
-	foreach my $fci( @fcis ){
-	    my $path = $ref_ffdb . "fci_" . $fci . "/HMMs/" . $family . ".hmm.gz";
-	    if( -e $path ){
-		$family_hmm = $path;
-	    }
-	}
-	if( !defined( $family_hmm ) ){
-	    warn( "Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
-	    exit(0);
-	}
-	push( @split, $family_hmm );
-	#if we've hit our split size, process the split
-	if (scalar(@split) >= $split_size || $family == $families[-1] ){ #build the HMMdb
-	    $n_proc++;
-	    my $nrdb_local_always_false = 0; # apparently this is alaways false for this call
-	    my $split_db_path = cat_db_split( $hmmdb_path, $n_proc, $ffdb, ".hmm", \@split, $nrdb_local_always_false);
-	    compress_hmmdb( $split_db_path, $force ); #compress the HMMdb, a wrapper for hmmpress
-	    @split = (); # clear it out...
-	}
-    }
-    warn "HMMdb successfully built and compressed.\n";
-    #return $self;
-}
+# sub build_hmm_db_by_n_splits{
+#     my $self     = shift;
+#     my $hmmdb    = shift; #name of hmmdb to use, if build, new hmmdb will be named this. check for dups
+#     my $n_splits = shift; #integer - how many hmmdb splits should we produce?
+#     my $force    = shift; #0/1 - force overwrite of old HMMdbs during compression.
+#     my $ffdb     = $self->get_ffdb();
+#     #where is the hmmdb going to go? each hmmdb has its own dir
+#     my $hmmdb_path = "$ffdb/$HMMDB_DIR/$hmmdb";
+
+#     warn "Building HMMdb $hmmdb, splitting into $n_splits parts.";
+#     #Have you built this HMMdb already?
+#     if (-d $hmmdb_path && !$force) {
+# 	die "You've already built an HMMdb with the name $hmmdb at $hmmdb_path. Please delete or overwrite by using the --force option.";
+#     }
+#     #create the HMMdb dir that will hold our split hmmdbs
+#     $self->MRC::DB::build_hmmdb_ffdb( $hmmdb_path );
+#     #update the path to make it easier to build the split hmmdbs (e.g., points to an incomplete file name)
+
+
+#     my $hmmdb_UPDATED_path = "$hmmdb_path/$hmmdb"; # why did this get updated to have $hmmdb twice in it??? This was in the original code, but I don't know what
+#     warn "Alex is suspicious of the update from $hmmdb_path to $hmmdb_UPDATED_path above. I wonder if that line is an error.";
+
+#     #constrain analysis to a set of families of interest
+#     my @families   = sort( @{ $self->get_subset_famids() });
+#     my $n_fams     = @families;
+#     my $split_size = $n_fams / $n_splits;
+#     my $count      = 0;
+#     my @split      = (); #array of family HMMs (compressed)
+#     my $n_proc     = 0;
+#     my $ref_ffdb   = $self->get_ref_ffdb();
+#     my @fcis       = @{ $self->get_fcis() };
+#     foreach my $family( @families ){
+# 	#find the HMM associated with the family (compressed)
+# 	my $family_hmm;
+# 	foreach my $fci( @fcis ){
+# 	    my $path = "${ref_ffdb}/fci_${fci}/HMMs/${family}.hmm.gz";
+# 	    if( -e $path ){
+# 		$family_hmm = $path;
+# 	    }
+# 	}
+# 	if( !defined( $family_hmm ) ){
+# 	    die( "Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) . " ");
+# 	}
+# 	push( @split, $family_hmm );
+# 	#if we've hit our split size, process the split
+# 	if (scalar(@split) >= $split_size || $family == $families[-1] ){ #build the HMMdb
+# 	    $n_proc++;
+# 	    my $nrdb_local_always_false = 0; # apparently this is alaways false for this call
+# 	    my $split_db_path = MRC::Run::cat_db_split( $hmmdb_UPDATED_path, $n_proc, $ffdb, ".hmm", \@split, $nrdb_local_always_false);
+# 	    compress_hmmdb( $split_db_path, $force ); #compress the HMMdb, a wrapper for hmmpress
+# 	    @split = (); # clear it out...
+# 	}
+#     }
+#     warn "HMMdb successfully built and compressed.\n";
+#     #return $self;
+# }
 
 sub compress_hmmdb{
     my ($file, $force) = @_;
@@ -1461,7 +1458,7 @@ sub remote_transfer_search_db{
     if ($type eq "hmm") { $DATABASE_PARENT_DIR = $HMMDB_DIR; }
     if ($type eq "blast") { $DATABASE_PARENT_DIR = $BLASTDB_DIR; }
     (defined($DATABASE_PARENT_DIR)) or die "Programming error: the 'type' in remote_transfer_search_db must be either \"hmm\" or \"blast\". Instead, it was: \"$type\". Fix this in the code!\n";
-    my $db_dir     = $self->get_ffdb() . "/" . "${DATABASE_PARENT_DIR}/${db_name}";
+    my $db_dir     = $self->get_ffdb() . "/${DATABASE_PARENT_DIR}/${db_name}";
     my $remote_dir = $self->get_connection() . ":" . $self->get_remote_ffdb() . "/$DATABASE_PARENT_DIR/$db_name";
     return(MRC::Run::transfer_directory($db_dir, $remote_dir));
 }
@@ -1485,13 +1482,13 @@ sub gunzip_remote_dbs{
     my $db_dir = undef;
     if ($type eq "hmm")      { $db_dir = "$ffdb/$HMMDB_DIR/$db_name"; }
     elsif ($type eq "blast") { $db_dir = "$ffdb/$BLASTDB_DIR/$db_name"; }
-    else                     { die "invalid / unrecognized type."; }
+    else                     { die "invalid or unrecognized type."; }
 
     opendir( DIR, $db_dir ) || die "Can't opendir $db_dir for read: $!";
     my @files = readdir( DIR );
     closedir DIR;
     foreach my $file( @files ){
-	next unless( $file =~ m/\.gz/ );
+	next unless( $file =~ m/\.gz/ ); # Skip any files that are NOT .gz files
 	my $remote_db_file;
 	if( $type eq "hmm" ){   $remote_db_file = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name/$file"; }
 	if( $type eq "blast" ){ $remote_db_file = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name/$file"; }
