@@ -50,6 +50,9 @@ use File::Basename;
 use IPC::System::Simple qw(capture $EXITVAL);
 use Benchmark;
 
+use Carp;
+$SIG{ __DIE__ } = sub { Carp::confess( @_ ) }; # prints a STACK TRACE whenever there is a fatal error! Very handy
+
 sub dieWithUsageError($) {
     my ($msg) = @_;
     chomp($msg);
@@ -376,13 +379,13 @@ if ($is_remote){
     } else {
 	MRC::dryNotify("Skipping the REMOTE loading of the project.");
     }
-    $analysis->set_remote_hmmscan_script($analysis->get_remote_project_path() . "run_hmmscan.sh");
-    $analysis->set_remote_hmmsearch_script($analysis->get_remote_project_path() . "run_hmmsearch.sh");
-    $analysis->set_remote_blast_script($analysis->get_remote_project_path() . "run_blast.sh");
-    $analysis->set_remote_last_script($analysis->get_remote_project_path() . "run_last.sh");
-    $analysis->set_remote_formatdb_script($analysis->get_remote_project_path() . "run_formatdb.sh");
-    $analysis->set_remote_lastdb_script($analysis->get_remote_project_path() . "run_lastdb.sh");
-    $analysis->set_remote_project_log_dir($analysis->get_remote_project_path() . "/logs");
+    $analysis->set_remote_hmmscan_script($analysis->get_remote_project_path()   . "/run_hmmscan.sh");
+    $analysis->set_remote_hmmsearch_script($analysis->get_remote_project_path() . "/run_hmmsearch.sh");
+    $analysis->set_remote_blast_script($analysis->get_remote_project_path()     . "/run_blast.sh");
+    $analysis->set_remote_last_script($analysis->get_remote_project_path()      . "/run_last.sh");
+    $analysis->set_remote_formatdb_script($analysis->get_remote_project_path()  . "/run_formatdb.sh");
+    $analysis->set_remote_lastdb_script($analysis->get_remote_project_path()    . "/run_lastdb.sh");
+    $analysis->set_remote_project_log_dir($analysis->get_remote_project_path()  . "/logs");
 }
 
 ## ================================================================================
@@ -480,24 +483,28 @@ if ($is_remote && $stage){
 	$analysis->MRC::Run::remote_transfer_search_db($blastdb_name, "blast");
 	#should do optimization here. Also, should roll over to blast+
 	$analysis->MRC::Run::gunzip_remote_dbs($blastdb_name, "blast");
+
+	my $project_path = $analysis->get_remote_project_path();
+	my $nsplits  = $analysis->MRC::DB::get_number_db_splits("blast");
+
 	if ($use_blast){
 	    print "Building remote formatdb script...\n";
 	    my $formatdb_script_path = "$local_ffdb/projects/$projID/run_formatdb.sh";
-	    my $r_script_path        = $analysis->get_remote_formatdb_script(); # a file and not a directory!
-	    my $n_blastdb_splits     = $analysis->MRC::DB::get_number_db_splits("blast");
-	    build_remote_formatdb_script($formatdb_script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	    MRC::Run::transfer_file($formatdb_script_path, $analysis->get_remote_connection() . ":" . $r_script_path);
-	    $analysis->MRC::Run::format_remote_blast_dbs($r_script_path);
+	    my $remote_script_path   = $analysis->get_remote_formatdb_script(); # a file and not a directory!
+	    #build_remote_formatdb_script($formatdb_script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
+	    #my @args = ("build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
+	    build_remote_script_generic("perl $localScriptDir/build_remote_formatdb_script.pl -o $formatdb_script_path -n $nsplits --name $blastdb_name -p $project_path -s $scratch");
+	    MRC::Run::transfer_file($formatdb_script_path, $analysis->get_remote_connection() . ":" . $remote_script_path);
+	    $analysis->MRC::Run::format_remote_blast_dbs($remote_script_path);
 	}
 	if ($use_last){
 	    print "Building remote lastdb script...\n";
-	    my $lastdb_script     = "$local_ffdb/projects/$projID/run_lastdb.sh";
-	    my $r_script_path     = $analysis->get_remote_lastdb_script(); # a file and not a directory!
-	    my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits("blast");
-	    build_remote_lastdb_script($lastdb_script, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	    MRC::Run::transfer_file($lastdb_script, $analysis->get_remote_connection() . ":" . $r_script_path);
-	    #we can use the blast code here 
-	    $analysis->MRC::Run::format_remote_blast_dbs($r_script_path);
+	    my $lastdb_script       = "$local_ffdb/projects/$projID/run_lastdb.sh";
+	    my $remote_script_path  = $analysis->get_remote_lastdb_script(); # a file and not a directory!
+	    #build_remote_lastdb_script($lastdb_script, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
+	    build_remote_script_generic("perl $localScriptDir/build_remote_lastdb_script.pl -o $lastdb_script -n $nsplits --name $blastdb_name -p $project_path -s $scratch");
+	    MRC::Run::transfer_file($lastdb_script, $analysis->get_remote_connection() . ":" . $remote_script_path);
+	    $analysis->MRC::Run::format_remote_blast_dbs($remote_script_path);
 	}
     }
 }
@@ -506,51 +513,54 @@ if ($is_remote && $stage){
 BUILDHMMSCRIPT:
 if ($is_remote) {
     my $projID = $analysis->get_project_id();
+    my $project_path = $analysis->get_remote_project_path();
     if ($use_hmmscan){
 	printBanner("BUILDING REMOTE HMMSCAN SCRIPT");
-	my $h_script   = "$local_ffdb/projects/$projID/run_hmmscan.sh";
-	my $r_h_script = $analysis->get_remote_hmmscan_script();
-	my $n_hmm_searches  = $analysis->MRC::DB::get_number_hmmdb_scans($hmm_db_split_size);
+	my $h_script       = "$local_ffdb/projects/$projID/run_hmmscan.sh";
+	my $n_hmm_searches = $analysis->MRC::DB::get_number_hmmdb_scans($hmm_db_split_size);
+	my $nsplits        = $analysis->MRC::DB::get_number_db_splits("hmm");
 	print "number of hmm searches: $n_hmm_searches\n";
-	my $n_hmmdb_splits  = $analysis->MRC::DB::get_number_db_splits("hmm");
-	print "number of hmm splits: $n_hmmdb_splits\n";
-	build_remote_hmmscan_script($h_script, $n_hmm_searches, $hmmdb_name, $n_hmmdb_splits, $analysis->get_remote_project_path());
-	MRC::Run::transfer_file($h_script, $analysis->get_remote_connection() . ":" . $r_h_script);
+	print "number of hmm splits: $nsplits\n";
+
+	build_remote_script_generic("perl $localScriptDir/build_remote_hmmscan_script.pl -z $n_hmm_searches -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $scratch");
+	#build_remote_hmmscan_script($h_script, $n_hmm_searches, $hmmdb_name, $nsplits, $analysis->get_remote_project_path());
+	MRC::Run::transfer_file($h_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_hmmscan_script());
     }
     if ($use_hmmsearch){
 	printBanner("BUILDING REMOTE HMMSEARCH SCRIPT");
 	my $h_script   = "$local_ffdb/projects/$projID/run_hmmsearch.sh";
-	my $r_h_script = $analysis->get_remote_hmmsearch_script();
 #	my $n_hmm_searches  = $analysis->MRC::DB::get_number_hmmdb_scans($hmm_db_split_size);
-	my $n_sequences     = $analysis->MRC::DB::get_number_sequences($nseqs_per_samp_split);
+	my $n_sequences = $analysis->MRC::DB::get_number_sequences($nseqs_per_samp_split);
+	my $nsplits     = $analysis->MRC::DB::get_number_db_splits("hmm");
 	print "number of searches: $n_sequences\n";
-	my $n_hmmdb_splits  = $analysis->MRC::DB::get_number_db_splits("hmm");
-	print "number of hmmdb splits: $n_hmmdb_splits\n";
-	build_remote_hmmsearch_script($h_script, $n_sequences, $hmmdb_name, $n_hmmdb_splits, $analysis->get_remote_project_path(), $scratch);
-	MRC::Run::transfer_file($h_script, $analysis->get_remote_connection() . ":" . $r_h_script);
+	print "number of hmmdb splits: $nsplits\n";
+	#build_remote_hmmsearch_script($h_script, $n_sequences, $hmmdb_name, $nsplits, $analysis->get_remote_project_path(), $scratch);
+	build_remote_script_generic("perl $localScriptDir/build_remote_hmmsearch_script.pl -z $n_sequences -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $scratch");
+	MRC::Run::transfer_file($h_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_hmmsearch_script());
     }
     if ($use_blast){
 	printBanner("BUILDING REMOTE BLAST SCRIPT");
-	my $b_script     = "$local_ffdb/projects/$projID/run_blast.sh";
-	my $r_b_script   = $analysis->get_remote_blast_script();
-	my $db_length         = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
+	my $b_script   = "$local_ffdb/projects/$projID/run_blast.sh";
+	my $db_length  = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
+	my $nsplits    = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
-	my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits("blast");
-	print "number of blast db splits: $n_blastdb_splits\n";
-	build_remote_blastsearch_script($b_script, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	MRC::Run::transfer_file($b_script, $analysis->get_remote_connection() . ":" . $r_b_script);
+	print "number of blast db splits: $nsplits\n";
+	#build_remote_blastsearch_script($b_script, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
+	build_remote_script_generic("perl $localScriptDir/build_remote_blast_script.pl -z $db_length -o $b_script -n $nsplits --name $blastdb_name -p $project_path -s $scratch");
+	MRC::Run::transfer_file($b_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_blast_script());
     }
     if ($use_last){
 	printBanner("BUILDING REMOTE LAST SCRIPT");
 	#we use the blast script code as a template given the similarity between the methods, so there are some common var names between the block here and above
 	my $b_script     = "$local_ffdb/projects/$projID/run_last.sh";
-	my $r_b_script   = $analysis->get_remote_last_script();
-	my $db_length         = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
+	my $db_length    = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
+	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
-	my $n_blastdb_splits  = $analysis->MRC::DB::get_number_db_splits("blast");
-	print "number of last db splits: $n_blastdb_splits\n";
-	build_remote_lastsearch_script($b_script, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	MRC::Run::transfer_file($b_script, $analysis->get_remote_connection() . ":" . $r_b_script);
+	print "number of last db splits: $nsplits\n";
+	build_remote_script_generic("perl $localScriptDir/build_remote_last_script.pl -z $db_length -o $b_script -n $nsplits --name $blastdb_name -p $project_path -s $scratch");
+	#build_remote_lastsearch_script($b_script, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
+	#my @args = ("build_remote_blast_script.pl -z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
+	MRC::Run::transfer_file($b_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_last_script());
     }
 }
 
@@ -573,7 +583,7 @@ if ($is_remote){
 	my $orfs        = "orfs.fa";
 	my $results_dir = "search_results";
 	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs($hmmdb_name) };
-	warn "Running hmmscan for sample ID ${sample_id}...\n";
+	warn "Running hmmscan for sample ID ${sample_id}...";
 	foreach my $hmmdb(keys(%hmmdbs)){
 	    my $results_full_path = "${results_dir}/${sample_id}_v_${hmmdb}.hsc";
 	    #run with tblast output format (e.g., --domtblout)
@@ -719,77 +729,85 @@ sub calculate_diversity {
 }
 
 
-sub build_remote_hmmscan_script{
-    my($h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch) = @_;
-    my @args = ("build_remote_hmmscan_script.pl", "-z $n_searches", "-o $h_script_path", "-n $n_splits", "--name $hmmdb_basename", "-p $project_path", "-s $scratch");
-    my $results = IPC::System::Simple::capture("perl " . "@args");
-    if ($EXITVAL != 0){
-	warn($results);
-	exit(0);
-    }
-    return $results;
+
+sub build_remote_script_generic {
+    my ($cmd) = @_;
+    my $results = IPC::System::Simple::capture($cmd);
+    (0 == $EXITVAL) or die "Error:  non-zero exit value: $results";
+    return($results);
 }
 
-sub build_remote_hmmsearch_script{
-    my ($h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch) = @_;
-    my @args = ("build_remote_hmmsearch_script.pl", "-z $n_searches", "-o $h_script_path", "-n $n_splits", "--name $hmmdb_basename", "-p $project_path", "-s $scratch");
-    print("perl " . "@args\n");
-    my $results = IPC::System::Simple::capture("perl " . "@args");
-    if ($EXITVAL != 0){
-	warn($results);
-	exit(0);
-    }
-    return $results;
-}
+# sub build_remote_hmmscan_script{
+#     my($h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch) = @_;
+#     my @args = ("build_remote_hmmscan_script.pl", "-z $n_searches", "-o $h_script_path", "-n $n_splits", "--name $hmmdb_basename", "-p $project_path", "-s $scratch");
+#     my $results = IPC::System::Simple::capture("perl " . "@args");
+#     if ($EXITVAL != 0){
+# 	warn($results);
+# 	exit(0);
+#     }
+#     return $results;
+# }
 
-sub build_remote_blastsearch_script{
-    my ($b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
-    my @args = ("build_remote_blast_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-    print("perl @args\n");
-    my $results = IPC::System::Simple::capture("perl " . "@args");
-    if ($EXITVAL != 0){
-	warn($results);
-	exit(0);
-    }
-    return $results;
-}
+# sub build_remote_hmmsearch_script{
+#     my ($h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch) = @_;
+#     my @args = ("build_remote_hmmsearch_script.pl", "-z $n_searches", "-o $h_script_path", "-n $n_splits", "--name $hmmdb_basename", "-p $project_path", "-s $scratch");
+#     print("perl " . "@args\n");
+#     my $results = IPC::System::Simple::capture("perl " . "@args");
+#     if ($EXITVAL != 0){
+# 	warn($results);
+# 	exit(0);
+#     }
+#     return $results;
+# }
+
+# sub build_remote_blastsearch_script{
+#     my ($b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
+#     my @args = ("build_remote_blast_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
+#     print("perl @args\n");
+#     my $results = IPC::System::Simple::capture("perl " . "@args");
+#     if ($EXITVAL != 0){
+# 	warn($results);
+# 	exit(0);
+#     }
+#     return $results;
+# }
 
 #need to build
-sub build_remote_lastsearch_script {
-    my ($b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
-    my @args = ("build_remote_last_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-    print("perl @args\n");
-    my $results = IPC::System::Simple::capture("perl " . "@args");
-    if ($EXITVAL != 0){
-	warn($results);
-	exit(0);
-    }
-    return $results;
-}
+# sub build_remote_lastsearch_script {
+#     my ($b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
+#     my @args = ("build_remote_last_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
+#     print("perl @args\n");
+#     my $results = IPC::System::Simple::capture("perl " . "@args");
+#     if ($EXITVAL != 0){
+# 	warn($results);
+# 	exit(0);
+#     }
+#     return $results;
+#}
 
-sub build_remote_formatdb_script {
-    my ($script_path, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
-    my @args = ("build_remote_formatdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-    print("perl " . "@args\n");
-    my $results = IPC::System::Simple::capture("perl " . "@args");
-    if ($EXITVAL != 0){
-	warn($results);
-	exit(0);
-    }
-    return $results;    
-}
+# sub build_remote_formatdb_script {
+#     my ($script_path, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
+#     my @args = ("build_remote_formatdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
+#     print("perl " . "@args\n");
+#     my $results = IPC::System::Simple::capture("perl " . "@args");
+#     if ($EXITVAL != 0){
+# 	warn($results);
+# 	exit(0);
+#     }
+#     return $results;    
+# }
 
-sub build_remote_lastdb_script {
-    my ($script_path, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
-    my @args = ("build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-    print("perl " . "@args\n");
-    my $results = IPC::System::Simple::capture("perl " . "@args");
-    if ($EXITVAL != 0){
-	warn($results);
-	exit(0);
-    }
-    return $results;    
-}
+# sub build_remote_lastdb_script {
+#     my ($script_path, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
+#     my @args = ("build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
+#     print("perl " . "@args\n");
+#     my $results = IPC::System::Simple::capture("perl " . "@args");
+#     if ($EXITVAL != 0){
+# 	warn($results);
+# 	exit(0);
+#     }
+#     return $results;    
+# }
 
 
 sub printBanner {

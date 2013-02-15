@@ -43,7 +43,7 @@ my $HMMDB_DIR = "HMMdbs";
 my $BLASTDB_DIR = "BLASTdbs";
 
 
-sub remote_transfer($$$) {
+sub _remote_transfer_internal($$$) {
     my ($src_path, $dest_path, $path_type) = @_;
     ($path_type eq 'directory' or $path_type eq 'file') or die "unsupported path type! must be 'file' or 'directory'. Yours was: '$path_type'.";
     my $COMPRESSION_FLAG = '-C';
@@ -60,13 +60,13 @@ sub ends_in_a_slash($) { return ($_[0] =~ /\/$/); } # return whether or not the 
 
 sub remote_transfer_directory($$) {
     my ($src_path, $dest_path) = @_;
-    return(remote_transfer($src_path, $dest_path, 'directory'));
+    return(_remote_transfer_internal($src_path, $dest_path, 'directory'));
 }
 
 sub remote_transfer_file($$) {
     my ($src_path, $dest_path) = @_;
     (!ends_in_a_slash($src_path)) or die "Since you are transferring a FILE, the source must not end in a slash (the slash indicates that the source is a DIRECTORY, which is probably incorrect). Your source file was <$src_path> and destination file was <$dest_path>.";
-    return(remote_transfer($src_path, $dest_path, 'file'));
+    return(_remote_transfer_internal($src_path, $dest_path, 'file'));
 }
 
 
@@ -74,14 +74,14 @@ sub transfer_file($$) {
     my ($src_path, $dest_path) = @_;
     (!ends_in_a_slash($src_path))  or die "Since you are transferring a FILE to a new FILE location, the source must not end in a slash.  Your source was <$src_path>, and destination was <$dest_path>.";
     (!ends_in_a_slash($dest_path)) or die "Since you are transferring a FILE to a new FILE location, the destination must not end in a slash. This will be the new location of the file, NOT the name of the parent directory. Your source was <$src_path>, and destination was <$dest_path>. If you want to transfer a file INTO a directory, use the function transfer_file_into_directory instead.";
-    return(remote_transfer($src_path, $dest_path, 'file'));
+    return(_remote_transfer_internal($src_path, $dest_path, 'file'));
 }
 
 sub transfer_directory($$) {
     my ($src_path, $dest_path) = @_;
     (!ends_in_a_slash($src_path))  or die "Since you are transferring a DIRECTORY, the source must not end in a slash.  Your source was <$src_path>, and destination was <$dest_path>.";
     (!ends_in_a_slash($dest_path)) or die "Since you are transferring a DIRECTORY, the destination must not end in a slash. This will be the new location of the directory, NOT the name of the parent directory. Your source was <$src_path>, and destination was <$dest_path>.";
-    return(remote_transfer($src_path, $dest_path, 'directory'));
+    return(_remote_transfer_internal($src_path, $dest_path, 'directory'));
 }
 
 sub transfer_file_into_directory($$) {
@@ -90,7 +90,7 @@ sub transfer_file_into_directory($$) {
     my ($src_path, $dest_path) = @_;
     (!ends_in_a_slash($src_path)) or die "Since you are transferring a FILE, the source must not end in a slash (the slash indicates that the source is a DIRECTORY, which is probably incorrect). Your source file was <$src_path> and destination file was <$dest_path>.";
     (ends_in_a_slash($dest_path)) or die "Since you are transferring a file INTO a directory, the destination path MUST END IN A SLASH (indicating that it is a destination directory. Otherwise, it is ambiguous as to whether you want to transfer the file INTO the directory, or if you want the file to be written to OVERWRITE that directory. Your source file was <$src_path> and destination file was <$dest_path>.";
-    return(remote_transfer($src_path, $dest_path, 'file'));
+    return(_remote_transfer_internal($src_path, $dest_path, 'file'));
 }
 
 
@@ -1074,27 +1074,25 @@ sub build_search_db{
     my @fcis       = @{ $self->get_fcis() };
     foreach my $family( @families ){
 	#find the HMM/sequences associated with the family (compressed)
-	my $family_db = undef;
+	my $family_db_file = undef;
 
 	if ($type eq "hmm") {
 	    foreach my $fci (@fcis) {
 		my $path = "${ref_ffdb}/fci_${fci}/HMMs/${family}.hmm.gz";
-		if( -e $path ) { $family_db = $path; } # assign the family_db to this path ONLY IF IT EXISTS!
+		if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
 	    }
-	    if (!defined( $family_db)) {
-		warn("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
-		exit(0);
+	    if (!defined( $family_db_file)) {
+		die("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) . " ");
 	    }
 
-	} elsif( $type eq "blast" ){
+	} elsif( $type eq "blast" ) {
 	    foreach my $fci( @fcis ){
 		if (0 == $fci) {
 		    $fci = 1; # <-- short term hack for the merged fci blast directory for 0 and 1
 		}
-		
 		my $path = "$ref_ffdb/fci_${fci}/seqs/${family}.fa.gz";
 		if( -e $path ){
-		    $family_db = $path; # <-- save the path, if it exists
+		    $family_db_file = $path; # <-- save the path, if it exists
 		    
 		    if ($reps_only) {
 			#do we only want rep sequences from big families?
@@ -1106,29 +1104,28 @@ sub build_search_db{
 			    my $reps_seq_path = "$ref_ffdb/reps/fci_${fci}/seqs/${family}.fa";
 			    if(! -e "${reps_seq_path}.gz" ){
 				print "Building reps sequence file for $family\n";
-				_grab_seqs_from_lookup_list( $reps_list_path, $family_db, $reps_seq_path );
+				_grab_seqs_from_lookup_list( $reps_list_path, $family_db_file, $reps_seq_path );
 				if(! -e "${reps_seq_path}.gz" ) {
 				    ## if it STILL doesn't exist
 				    warn( "Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.\n" );
 				    exit(0);
 				}
 			    }
-			    $family_db = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
+			    $family_db_file = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
 			}
 		    }
 		    #because of the fci hack, if we made it here, we don't want to rerun the above
 #		    last;
 		}
 	    }
-	    if(!defined($family_db) ){
-		warn( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) );
-		exit(0);
+	    if(!defined($family_db_file) ){
+		die( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" )  . " ");
 	    }
-#	    $family_db =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
-	    $length += $self->MRC::Run::get_sequence_length_from_file( $family_db );
+#	    $family_db_file =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
+	    $length += $self->MRC::Run::get_sequence_length_from_file($family_db_file);
 	}
 	
-	push( @split, $family_db );
+	push( @split, $family_db_file );
 	$count++;
 	#if we've hit our split size, process the split
 	if($count >= $split_size || $family == $families[-1]) {
@@ -1183,15 +1180,14 @@ sub _build_nr_seq_db{
     my $seqin  = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
     my $seqout = Bio::SeqIO->new( -file => ">$family_nr", -format => 'fasta' );
     my $dict   = {};
-    while( my $seq = $seqin->next_seq ){
+    while(my $seq = $seqin->next_seq ) {
 	my $id       = $seq->display_id();
 	my $sequence = $seq->seq();
 	#if we haven't seen this seq before, print it out
 	if( !defined( $dict->{$sequence} ) ){
 	    $seqout->write_seq( $seq );
 	    $dict->{$sequence}++;
-	}
-	else{
+	} else {
 	    #print "Removing duplication sequence $id\n";
 	}
     }
@@ -1225,19 +1221,23 @@ sub _grab_seqs_from_lookup_list{
     unlink( $out_seqs );
 }
 
-#calculates total amount of sequence in a file
+#calculates total amount of sequence in a file (looks like actually in a DIRECTORY rather than a file)
 sub calculate_blast_db_length{
-    my( $self ) = @_;
+    my($self) = @_;
     my $length  = 0;
     my $db_name = $self->get_blastdb_name();
     my $db_path = $self->get_ffdb() . "/$BLASTDB_DIR/$db_name";
-    opendir( DIR, $db_path ) || die "Can't opendir $db_path for read: $!\n";
-    my @files = readdir( DIR );
+    opendir( DIR, $db_path ) || die "Can't opendir $db_path for read: $! ";
+    my @files = readdir(DIR);
     closedir DIR;
-    foreach my $file( @files ){
-	next unless( $file =~ m/\.fa/ );
-	my $filepath = "$db_path/$file";
-	$length += get_sequence_length_from_file( $filepath );
+
+    my $numFilesRead = 0;
+    foreach my $file (@files) {
+	next unless( $file =~ m/\.fa/ ); # ONLY include files ending in .fa
+	my $lengthThisFileOnly = $self->MRC::Run::get_sequence_length_from_file("$db_path/$file");
+	$length += $lengthThisFileOnly;
+	$numFilesRead++;
+	MRC::notify("[$numFilesRead/" . scalar(@files) . "]: Got a sequence length of $lengthThisFileOnly from <$file>. Total length: $length");
     }
     return $length;
 }
@@ -1245,20 +1245,20 @@ sub calculate_blast_db_length{
 sub get_sequence_length_from_file{
     my($self, $file) = @_;
     my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
-    open(FILE, "$READSTRING") || die "Can't open $file for reading: $!\n";
+    open(FILE, "$READSTRING") || die "Can't open <$file> for reading: $! ";
     my $length = 0;
     while(<FILE>){
-	next if ($_ =~ m/\>/ ); # skip lines that start with a '>'
-	chomp $_;
+	next if ($_ =~ m/^\>/ ); # skip lines that start with a '>'
+	chomp $_; # remove the newline
 	$length += length($_);
     }
     close FILE;
-    return $length;
+    return $length; # return the sequence length
 }
 
 sub gzip_file {
     my $file = shift;
-    IO::Compress::Gzip::gzip $file => $file . ".gz" or die "gzip failed: $GzipError\n";
+    IO::Compress::Gzip::gzip $file => "${file}.gz" or die "gzip failed: $GzipError ";
 }
 
 # Code below is both unused AND refers to non-existent code in DB (as of Feb 2013).
@@ -1413,18 +1413,19 @@ sub translate_reads_remote_ping{
 }
 
 sub remote_job_listener{
+    # Note that this function is a nearly exact copy of "local_job_listener"
     my ($self, $jobsArrayRef, $waitTimeInSeconds) = @_;
-    my %status   = ();
+    ($waitTimeInSeconds >= 1) or die "Programming error: You can't set waitTimeInSeconds to less than 1 (but it was set to $waitTimeInSeconds)---we don't want to flood the machine with constant system requests.";
+    my %statusHash             = ();
     my $startTimeInSeconds = time();
-    while(1){
-	last if( scalar( keys( %status ) ) == scalar( @{ $jobsArrayRef } ) ); #stop checking if every job has a finished status
+    while (scalar(keys(%statusHash)) != scalar(@{$jobsArrayRef})) { # keep checking until EVERY SINGLE job has a finished status
 	#call qstat and grab the output
 	my $results = execute_ssh_cmd( $self->get_remote_connection(), "\'qstat\'");
 	#see if any of the jobs are complete. pass on those we've already finished
 	foreach my $jobid( @{ $jobsArrayRef } ){
-	    next if( exists( $status{$jobid} ) );
+	    next if( exists( $statusHash{$jobid} ) );
 	    if( $results !~ m/$jobid/ ){
-		$status{$jobid}++;
+		$statusHash{$jobid}++;
 	    }
 	}
 	sleep( $waitTimeInSeconds );
@@ -1433,21 +1434,21 @@ sub remote_job_listener{
 }
 
 sub local_job_listener{
+    # Note that this function is a nearly exact copy of "remote_job_listener"
     my ($self, $jobsArrayRef, $waitTimeInSeconds) = @_;
-    my %status   = ();
+    ($waitTimeInSeconds >= 1) or die "Programming error: You can't set waitTimeInSeconds to less than 1 (but it was set to $waitTimeInSeconds)---we don't want to flood the machine with constant requests for 'ps'.";
     my $startTimeInSeconds = time();
-    while(1) {
-	last if( scalar( keys( %status ) ) == scalar( @{ $jobsArrayRef } ) ); #stop checking if every job has a finished status
-	my $results = IPC::System::Simple::capture( "ps" ); #call ps and grab the output
-	($EXITVAL == 0) or die( "Error running ps! " );
-	#see if any of the jobs are complete. pass on those we've already finished
-	foreach my $jobid(@{ $jobsArrayRef} ){
-	    next if(exists( $status{$jobid}) ); # Skip... for some reason
-	    if($results !~ m/^$jobid /){
-		$status{$jobid}++;
+    my %statusHash   = ();
+    while (scalar(keys(%statusHash)) != scalar(@{$jobsArrayRef})) { # keep checking until EVERY SINGLE job has a finished status
+	my $results = IPC::System::Simple::capture("ps"); #call ps and grab the output
+	($EXITVAL == 0) or die("Error running ps! ");
+	foreach my $jobid(@{ $jobsArrayRef} ) { #see if any of the jobs are complete. pass on those we've already finished
+	    next if (exists( $statusHash{$jobid}) ); # Skip... for some reason
+	    if ($results !~ m/^$jobid /) {
+		$statusHash{$jobid}++;
 	    }
 	}
-	sleep( $waitTimeInSeconds ); # in seconds
+	sleep( $waitTimeInSeconds ); # 'sleep' here so as not to flood the machine with requests for "ps"
     }
     return (time() - $startTimeInSeconds); # return amount of wall-clock time this took
 }
@@ -1459,19 +1460,19 @@ sub remote_transfer_search_db{
     if ($type eq "blast") { $DATABASE_PARENT_DIR = $BLASTDB_DIR; }
     (defined($DATABASE_PARENT_DIR)) or die "Programming error: the 'type' in remote_transfer_search_db must be either \"hmm\" or \"blast\". Instead, it was: \"$type\". Fix this in the code!\n";
     my $db_dir     = $self->get_ffdb() . "/${DATABASE_PARENT_DIR}/${db_name}";
-    my $remote_dir = $self->get_connection() . ":" . $self->get_remote_ffdb() . "/$DATABASE_PARENT_DIR/$db_name";
+    my $remote_dir = $self->get_remote_connection() . ":" . $self->get_remote_ffdb() . "/$DATABASE_PARENT_DIR/$db_name";
     return(MRC::Run::transfer_directory($db_dir, $remote_dir));
 }
 
-sub remote_transfer_batch{
+sub remote_transfer_batch { # transfers HMMbatches, not actually a general purpose "batch transfer"
     my ($self, $hmmdb_name) = @_;
     my $hmmdb_dir   = $self->get_ffdb() . "/HMMbatches/$hmmdb_name";
-    my $remote_dir  = $self->get_connection() . ":" . $self->get_remote_ffdb() . "/HMMbatches/$hmmdb_name";
+    my $remote_dir  = $self->get_remote_connection() . ":" . $self->get_remote_ffdb() . "/HMMbatches/$hmmdb_name";
     return(MRC::Run::transfer_directory($hmmdb_dir, $remote_dir));
 }
 
-sub gunzip_file_remote{
-    my ( $self, $remote_file ) = @_;
+sub gunzip_file_remote {
+    my ($self, $remote_file) = @_;
     my $remote_cmd = "gunzip -f $remote_file";
     return(execute_ssh_cmd( $self->get_remote_connection(), $remote_cmd ));
 }
@@ -1500,7 +1501,7 @@ sub format_remote_blast_dbs{
     my( $self, $remote_script_path ) = @_;
     my $ffdb       = $self->get_ffdb();
     my $remote_database_dir   = $self->get_remote_ffdb() . "/$BLASTDB_DIR/" . $self->get_blastdb_name();
-    my $results    = execute_ssh_cmd($self->get_connection(), "qsub -sync y $remote_script_path $remote_database_dir");
+    my $results    = execute_ssh_cmd($self->get_remote_connection(), "qsub -sync y $remote_script_path $remote_database_dir");
 }
 
 sub run_search_remote{

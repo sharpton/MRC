@@ -78,7 +78,7 @@ sub notifyAboutRemoteCmd($) {
     # no point in printing the line number for a remote command, as they all are executed from Run.pm anyway
 }
 
-sub notify($) { # one required argument
+sub notify($) {
     my ($msg) = @_;
     chomp($msg);
     print STDERR (safeColor("[NOTE]: $msg\n", "cyan on_black"));
@@ -98,43 +98,46 @@ sub notify($) { # one required argument
 =cut
 
 sub new{
-    my $proto = shift;
+    my ($proto) = @_;
     my $class = ref($proto) || $proto;
     my $self  = {};
-    $self->{"fci"}         = undef; #family construction ids that are allowed to be processed. array reference
-    $self->{"workdir"}     = undef; #master path to MRC scripts
-    $self->{"ffdb"}        = undef; #master path to the flat file database
-    $self->{"ffdb"}        = undef; #master path to the reference dabase flat file data is located
-    $self->{"dbi"}         = undef; #DBI string to interact with DB
-    $self->{"user"}        = undef; #username to interact with DB
-    $self->{"pass"}        = undef; #password to interact with DB
-    $self->{"projectpath"} = undef;
-    $self->{"projectname"} = undef;
-    $self->{"project_id"}  = undef;
-    $self->{"proj_desc"}   = undef;
-    $self->{"samples"}     = undef; #hash relating sample names to paths   
-    $self->{"rusername"}   = undef;
-    $self->{"r_ip"}                 = undef;
-    $self->{"remote_script_dir"}    = undef;
-    $self->{"rffdb"}       = undef;
-    $self->{"fid_subset"}  = undef; #an array of famids
-    $self->{"schema"}      = undef; #current working DB schema object (DBIx)    
-    $self->{"hmmdb"}       = undef; #name of the hmmdb to use in this analysis
-    $self->{"blastdb"}     = undef; #name of the blastdb to use in this analysis
-    $self->{"is_remote"}   = 0;     #does analysis include remote compute? 0 = no, 1 = yes
-    $self->{"is_strict"}   = 1;     #strict (top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
-    $self->{"t_evalue"}    = undef; #evalue threshold for clustering
-    $self->{"t_coverage"}  = undef; #coverage threshold for clustering
-    $self->{"r_hmmscan_script"}   = undef; #location of the remote hmmscan script. holds a path string.
-    $self->{"r_hmmsearch_script"} = undef; #location of the remote hmmsearch script. holds a path string.
-    $self->{"r_blast_script"}     = undef; #location of the remote blast script. holds a path string.
-    $self->{"r_last_script"}      = undef; #location of the remote last script. holds a path string.
-    $self->{"r_formatdb_script"}  = undef; #location of the remote formatdb script (for blast). holds a path string.
-    $self->{"r_lastdb_script"}    = undef; #location of the remote lastdb script (for last). holds a path string.
-    $self->{"r_project_logs"}     = undef; #location of the remote project logs directory. holds a path string.
-    $self->{"multiload"}          = 0; #should we multiload our insert statements?
-    $self->{"bulk_insert_count"}  = undef; #how many rows should be added at a time when using multi_load?
-    $self->{"schema_name"}        = undef; #stores the schema module name, e.g., Sfams::Schema
+
+    warn "Setting default values: is_remote, is_strict, and multiload have default values.";
+    $self->{"is_remote"}   = 0;     # does analysis include remote compute? 0 = no, 1 = yes
+    $self->{"is_strict"}   = 1;     # strict (top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
+    $self->{"multiload"}   = 0;     # should we multiload our insert statements?
+
+    # $self->{"fci"}                = undef; #family construction ids that are allowed to be processed. array reference
+    # $self->{"scripts_dir"}        = undef; #master path to MRC scripts
+    # $self->{"ffdb"}               = undef; #master path to the flat file database
+    # $self->{"ref_ffdb"}           = undef; #master path to the reference dabase flat file data is located
+    # $self->{"dbi"}                = undef; #DBI string to interact with DB
+    # $self->{"user"}               = undef; #username to interact with DB
+    # $self->{"pass"}               = undef; #password to interact with DB
+    # $self->{"projectpath"}        = undef;
+    # $self->{"projectname"}        = undef;
+    # $self->{"project_id"}         = undef;
+    # $self->{"proj_desc"}          = undef;
+    # $self->{"samples"}            = undef; #hash relating sample names to paths   
+    # $self->{"rusername"}          = undef;
+    # $self->{"r_ip"}               = undef;
+    # $self->{"remote_script_dir"}  = undef;
+    # $self->{"rffdb"}              = undef;
+    # $self->{"fid_subset"}         = undef; #an array of famids
+    # $self->{"schema"}             = undef; #current working DB schema object (DBIx)    
+    # $self->{"hmmdb"}              = undef; #name of the hmmdb to use in this analysis
+    # $self->{"blastdb"}            = undef; #name of the blastdb to use in this analysis
+    # $self->{"t_evalue"}           = undef; #evalue threshold for clustering
+    # $self->{"t_coverage"}         = undef; #coverage threshold for clustering
+    # $self->{"r_hmmscan_script"}   = undef; #location of the remote hmmscan script. holds a path string.
+    # $self->{"r_hmmsearch_script"} = undef; #location of the remote hmmsearch script. holds a path string.
+    # $self->{"r_blast_script"}     = undef; #location of the remote blast script. holds a path string.
+    # $self->{"r_last_script"}      = undef; #location of the remote last script. holds a path string.
+    # $self->{"r_formatdb_script"}  = undef; #location of the remote formatdb script (for blast). holds a path string.
+    # $self->{"r_lastdb_script"}    = undef; #location of the remote lastdb script (for last). holds a path string.
+    # $self->{"r_project_logs"}     = undef; #location of the remote project logs directory. holds a path string.
+    # $self->{"bulk_insert_count"}  = undef; #how many rows should be added at a time when using multi_load?
+    # $self->{"schema_name"}        = undef; #stores the schema module name, e.g., Sfams::Schema
     bless($self);
     return $self;
 }
@@ -142,12 +145,9 @@ sub new{
 =head2 get_sample_ids
 
  Title   : get_sample_ids
- Usage   : $analysis->get_sample_ids( )
  Function: Obtains the unique sample_ids for each sample in the project
  Example : my @sample_ids = @{ analysis->get_sample_ids() };
  Returns : A array of sample_ids (array reference)
- Args    : None
-
 =cut
 
 sub get_sample_ids{
@@ -160,62 +160,27 @@ sub get_sample_ids{
     return \@sample_ids;
 }
 
-=head2 set_scripts_dir
-
- Title   : set_scripts_dir
- Usage   : $analysis->set_scripts_dir( "~/projects/MRC/scripts" )
- Function: Indicates where the MRC scripts directory is located
- Example : my $scripts_path = analysis->set_scripts_dir( "~/projects/MRC/scripts" );
- Returns : A string that points to a directory path (scalar, optional)
- Args    : A string that points to a directory path (scalar)
-
-=cut
-
 sub set_scripts_dir{
   my $self = shift;
   my $path = shift;
-  if( !defined( $path ) ){
-    warn "No scripts path specified for set_scripts_dir in MRC.pm. Cannot continue!\n";
-    die;
-  }
-  if( !( -e $path ) ){
-    warn "The method set_scripts_dir cannot access scripts path $path. Cannot continue!\n";
-    die;
-  }
-  $self->{"workdir"} = $path;
-  return $self->{"workdir"};
+  (defined($path)) or die "No scripts path specified for set_scripts_dir in MRC.pm. Cannot continue!";
+  (-e $path && -d $path) or die "The method set_scripts_dir cannot access scripts path $path. Maybe it isn't a directory or something. Cannot continue!";
+  $self->{"scripts_dir"} = $path;
 }
+sub get_scripts_dir{    my $self = shift;    return $self->{"scripts_dir"}; }
 
-sub get_scripts_dir{
-    my $self = shift;
-    return $self->{"workdir"};
-}
 
-=head2 set_ffdb
 
- Title   : set_ffdb
- Usage   : $analysis->set_ffdb( "~/projects/MRC/ffdb/" )
- Function: Indicates where the MRC flat file database is located
- Example : my $scripts_path = analysis->set_ffdb( "~/projects/MRC/ffdb" );
- Returns : A string that points to a directory path (scalar, optional)
- Args    : A string that points to a directory path (scalar)
-
-=cut
-
-sub set_ffdb{
-    my $self = shift;
+sub set_ffdb{ # Function: Indicates where the MRC flat file database is located
+    my $self = shift;  
     my $path = shift;
-    if( !defined( $path ) ){
-      warn "No ffdb path specified for set_flat_file_db in MRC.pm. Cannot continue!\n";
-      die;
-    }
-    if( !( -e $path ) ){
-      warn "The method set_flat_file_db cannot access ffdb path $path. Cannot continue!\n";
-    die;
-    }
+    if( !defined( $path ) ){	die "No ffdb path specified for set_flat_file_db in MRC.pm. Cannot continue!\n";    }
+    if( !( -e $path ) )    {	die "The method set_flat_file_db cannot access ffdb path $path. Cannot continue!\n";    }
     $self->{"ffdb"} = $path;
-    return $self->{"ffdb"};
 }
+sub get_ffdb()     {  my $self = shift;  return $self->{"ffdb"};}  # Function: Identify the location of the MRC flat file database. Must have been previously set with set_ffdb()
+
+
 
 sub set_ref_ffdb{
     my $self = shift;
@@ -229,24 +194,7 @@ sub set_ref_ffdb{
       die;
     }
     $self->{"ref_ffdb"} = $path;
-    return $self->{"ref_ffdb"};
 }
-
-
-
-=head2 get_ffdb
-
- Title   : get_ffdb
- Usage   : $analysis->get_ffdb()
- Function: Identify the location of the MRC flat file database. Must have been previously set with set_ffdb()
- Example : analysis->set_ffdb( "~/projects/MRC/ffdb" );
-           my $ffdb = analysis->get_ffdb();
- Returns : A string that points to a directory path (scalar)
- Args    : None
-
-=cut
-
-sub get_ffdb()     {  my $self = shift;  return $self->{"ffdb"};}
 sub get_ref_ffdb() {  my $self = shift;  return $self->{"ref_ffdb"};}
 
 =head2 set_dbi_connection
@@ -889,43 +837,12 @@ sub set_remote_lastdb_script{
     return $self;
 }
 
-=head get_remote_hmmscan_script
-
- Title   : get_remote_hmmscan_script
- Usage   : $analysis->get_remote_hmmscan_script();
- Function: Get the location of the script that is located on the remote server that runs the hmmscan jobs
- Example : my $filepath = $analysis->get_remote_hmmscan_script();
- Returns : A filepath to the script (string)
- Args    : None
-
-=cut 
-
-sub get_remote_hmmscan_script{
-    my $self = shift;
-    return $self->{"r_hmmscan_script"};
-}
-
-
-sub get_remote_hmmsearch_script{
-    my $self = shift;
-    return $self->{"r_hmmsearch_script"};
-}
-
-
-sub get_remote_blast_script{
-    my $self = shift;
-    return $self->{"r_blast_script"};
-}
-
-sub get_remote_last_script{
-    my $self = shift;
-    return $self->{"r_last_script"};
-}
-
-sub get_remote_lastdb_script{
-    my $self = shift;
-    return $self->{"r_lastdb_script"};
-}
+# Function: Get the location of the script that is located on the remote server
+sub get_remote_hmmscan_script{   my $self = shift;   return $self->{"r_hmmscan_script"}; }
+sub get_remote_hmmsearch_script{ my $self = shift;   return $self->{"r_hmmsearch_script"}; }
+sub get_remote_blast_script{     my $self = shift;   return $self->{"r_blast_script"}; }
+sub get_remote_last_script{      my $self = shift;   return $self->{"r_last_script"}; }
+sub get_remote_lastdb_script{    my $self = shift;   return $self->{"r_lastdb_script"}; }
 
 
 =head set_remote_project_log_dir
