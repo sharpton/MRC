@@ -229,9 +229,7 @@ sub create_multi_metareads{
 	$bulk->insert( $sample_id, $read_name );
     }
     $bulk->flush();
-    if( defined $dbh->errstr ){
-	die(  $dbh->errstr . " ");
-    }
+    if (defined $dbh->errstr) { die($dbh->errstr . " "); }
     return $self;
 }
 
@@ -254,9 +252,7 @@ sub create_multi_familymemberss{
 	$bulk->insert( $famid, $class_id, $orf_id );
     }
     $bulk->flush();
-    if( defined $dbh->errstr ){
-	die(  $dbh->errstr . " ");
-    }
+    if (defined $dbh->errstr) { die($dbh->errstr . " "); }
     return $self;
 }
 
@@ -337,7 +333,7 @@ sub get_number_db_splits{
     } elsif( $type eq "blast" ){ $db_path = $self->MRC::DB::get_blastdb_path();
     } else { die "invalid $type"; }
 
-    opendir( DIR, $db_path ) || die "Can't opendir " . $db_path . " for read: $! ";
+    opendir( DIR, $db_path ) || die "Can't opendir <$db_path> for readng: $! ";
     my @files = readdir( DIR );
     closedir( DIR );
 
@@ -355,7 +351,7 @@ sub get_number_db_splits{
 sub get_number_hmmdb_scans{
     my ( $self, $n_seqs_per_db_split ) = @_;
     my $n_splits = 0;
-    opendir( DIR, $self->MRC::DB::get_hmmdb_path ) || die "Can't opendir " . $self->get_hmmdb_path . " for read: $! ";
+    opendir( DIR, $self->MRC::DB::get_hmmdb_path ) || die "Can't opendir " . $self->get_hmmdb_path() . " for read: $! ";
     my @files = readdir( DIR );  # <-- Note that "@files" also includes the "fake" files '.' and '..'
     closedir( DIR );
     foreach my $file( @files ){
@@ -376,7 +372,7 @@ sub get_number_sequences{
     my $last_split_counts = 0;
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
 	my $orfDir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs";
-	opendir( DIR, $orfDir ) || die "Can't opendir " . $orfDir . " for read: $! ";
+	opendir( DIR, $orfDir ) || die "Can't opendir $orfDir for read: $! ";
 	my @files = readdir( DIR );  # <-- Note that "@files" also includes the "fake" files '.' and '..'
 	closedir( DIR );	
 	my $max_split_filename; #points to last split's file name
@@ -478,8 +474,8 @@ sub build_sample_ffdb{
 	
 	File::Path::make_path($raw_sample_dir);
 	#copy( $self->get_samples->{$sample}->{"path"}, $raw_sample ) || die "Copy of $sample failed in build_project_ffdb: $! ";
-	my $namebase = $sample . "_raw_split_";
-	$self->MRC::DB::split_sequence_file($self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $namebase, $nseqs_per_samp_split);
+	my $nameprefix = "${sample}_raw_split_"; # the "base name" here.
+	$self->MRC::DB::split_sequence_file($self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $nameprefix, $nseqs_per_samp_split);
     }
 }
 
@@ -514,17 +510,15 @@ sub split_sequence_file{
 sub get_split_sequence_paths{
     my $self      = shift;
     my $split_dir = shift; #dir path that contains the split files
-    my $full_path = shift; #0 = filename, 1 = full path 
+    my $should_use_full_path = shift; #0 = filename, 1 = full path 
     my @paths     = ();    
-    opendir( DIR, $split_dir ) || die "Error in MRC::DB::get_split_sequence_paths: Can't opendir $split_dir for read: $! ";
+    opendir(DIR, $split_dir) or die "Error in MRC::DB::get_split_sequence_paths: Can't opendir $split_dir for read: $! ";
     my @files = readdir( DIR );
     closedir( DIR );
+
     foreach my $file( @files ){
-	next if( $file =~ m/^\./ );
-	my $path = $file;
-	if( $full_path ){
-	    $path = $split_dir . $file;
-	}
+	next if( $file =~ m/^\./ ); # don't include '.' and '..' files (or any other dot-whatever file)
+	my $path = ($should_use_full_path) ? "$split_dir/$file" : "$file"; # use the FULL path, or just the filename?
 	push( @paths, $path ) 
     }      
     return \@paths;
@@ -536,10 +530,9 @@ sub get_hmmdbs{
     my $hmmdb_name = shift;
     $is_remote = shift;
 
-
     my $ffdb = $self->get_ffdb();
-    my $hmmdb_path = "$ffdb/HMMdbs/$hmmdb_name";
-    opendir( HMMS, $hmmdb_path ) || die "Can't opendir $hmmdb_path for read: $! ";
+    my $hmmdb_local_path = "$ffdb/HMMdbs/$hmmdb_name";
+    opendir( HMMS, $hmmdb_local_path ) || die "Can't opendir $hmmdb_local_path for read: $! ";
     my @files = readdir(HMMS);
     closedir( HMMS );
     my %hmmdbs = ();
@@ -547,13 +540,13 @@ sub get_hmmdbs{
 	next if( $file =~ m/^\./ ); # skip the fake "." and ".." files
 	next if( $file =~ m/\.h3[i|m|p|f]/ );
 	#if grabbing from remote server, use the fact that HMMdb is a mirror to get proper remote path
-	if($is_remote) {
+	if ($is_remote) {
 	    $hmmdbs{$file} = $self->get_remote_ffdb() . "/HMMdbs/$hmmdb_name/$file";
 	} else {
-	    $hmmdbs{$file} = "$hmmdb_path/$file";
+	    $hmmdbs{$file} = "$hmmdb_local_path/$file";
 	}
     }
-    MRC::notify("Grabbed " . scalar(keys(%hmmdbs)) . " HMM dbs from $hmmdb_path");
+    MRC::notify("Grabbed " . scalar(keys(%hmmdbs)) . " HMM dbs from $hmmdb_local_path");
     return \%hmmdbs;
 }
 
@@ -767,7 +760,7 @@ sub insert_search_result{
 	    famid => $famid,
 	    evalue => $evalue,
 	    score  => $score,
-	    other_searchstats => "coverage=" . $coverage,
+	    other_searchstats => "coverage=${coverage}",
 	}
 	);
     return $inserted;
@@ -911,11 +904,11 @@ sub get_famid_from_geneoid{
 	    gene_oid => $gene_oid,
 	}
     );
-    if( $families->count() > 1 ){
-	if(!(@fcis)) {
-	    die("Got multiple families for gene_oid $gene_oid. Must use fci to determine which family to select!");
-	}
+
+    if ($families->count() > 1  and  !(@fcis) ) {
+	die("Got multiple families for gene_oid $gene_oid. Must use fci to determine which family to select!");
     }
+
     my @selected = ();
     while( my $family = $families->next() ){
 	my $famid = $family->famid->famid;
@@ -934,8 +927,9 @@ sub get_famid_from_geneoid{
 	    }
 	}
     }
+
     if( scalar( @selected ) > 1 ){
-	die("Even with fci selection there are multiple family ids for gene_oid $gene_oid: " . join(" ", @selected, "\n"));
+	die("Even with fci selection, there are multiple family ids for gene_oid <$gene_oid>: " . join(" ", @selected, "\n") . " ");
     }
     
     return $selected[0];
@@ -1001,7 +995,7 @@ sub get_gene_length{
 
 sub get_classification_id{
     my ( $self, $evalue, $coverage, $score, $ref_db_name, $algo, $top_hit_type ) = @_;
-    my $method = $algo . ";" . "best_" . $top_hit_type;
+    my $method = $algo . ";" . "best_${top_hit_type}";
     my $inserted = $self->get_schema->resultset( "ClassificationParameter" )->find_or_create(
 	{
 	    evalue_threshold        => $evalue,
@@ -1344,7 +1338,7 @@ sub get_number_orfs_by_project{
     my $samples = $self->get_schema->resultset('Sample')->search( { project_id => $project_id } );
     my $total      = 0;
     while( my $theSample = $samples->next() ){
-	MRC::notify("getting n_classified orfs from sample ID " . $theSample->id() . '');
+	MRC::notify("getting n_classified orfs from sample ID " . $theSample->id());
 	my $count = $self->MRC::DB::get_number_orfs_by_samples( $theSample->id() );
 	$total    += $count;
     }
