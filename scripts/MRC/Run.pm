@@ -1230,30 +1230,36 @@ sub calculate_blast_db_length{
     opendir( DIR, $db_path ) || die "Can't opendir $db_path for read: $! ";
     my @files = readdir(DIR);
     closedir DIR;
-
     my $numFilesRead = 0;
+
+    my $PRINT_OUTPUT_EVERY_THIS_MANY_FILES = 25;
     foreach my $file (@files) {
 	next unless( $file =~ m/\.fa/ ); # ONLY include files ending in .fa
 	my $lengthThisFileOnly = $self->MRC::Run::get_sequence_length_from_file("$db_path/$file");
 	$length += $lengthThisFileOnly;
 	$numFilesRead++;
-	MRC::notify("[$numFilesRead/" . scalar(@files) . "]: Got a sequence length of $lengthThisFileOnly from <$file>. Total length: $length");
+	if ($numFilesRead == 1 or ($numFilesRead % $PRINT_OUTPUT_EVERY_THIS_MANY_FILES == 0)) {
+	    # Print diagnostic data for the FIRST entry, as well as periodically, every so often.
+	    MRC::notify("[$numFilesRead/" . scalar(@files) . "]: Got a sequence length of $lengthThisFileOnly from <$file>. Total length: $length");
+	}
     }
+    MRC::notify("$numFilesRead files were read. Total sequence length was: $length");
     return $length;
 }
 
 sub get_sequence_length_from_file{
     my($self, $file) = @_;
-    my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
-    open(FILE, "$READSTRING") || die "Can't open <$file> for reading: $! ";
-    my $length = 0;
+    #my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
+    open(FILE, "zcat --force $file") || die "Can't open <$file> for reading: $! "; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
+    my $seqLength = 0;
     while(<FILE>){
-	next if ($_ =~ m/^\>/ ); # skip lines that start with a '>'
+	next if ($_ =~ m/^\>/); # skip lines that start with a '>'
 	chomp $_; # remove the newline
-	$length += length($_);
+	$seqLength += length($_);
     }
     close FILE;
-    return $length; # return the sequence length
+    if ($seqLength == 0) { warn "Uh oh, we got a sequence length of ZERO from the file <$file>. This could indicate a serious problem!"; }
+    return $seqLength; # return the sequence length
 }
 
 sub gzip_file {
@@ -1506,41 +1512,32 @@ sub format_remote_blast_dbs{
 
 sub run_search_remote{
     my ($self, $sample_id, $type, $waitTimeInSeconds, $verbose) = @_;
-    my ( $remote_script_path, $search_handler_log, $db_name, $remote_db_dir, $remote_search_res_dir);
+    ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed in! The invalid type was: \"$type\".";
 
     my $remote_query_dir      = $self->get_remote_sample_path($sample_id) . "/orfs"; # This is the same for ALL entries!
-    
-    if( $type eq "blast" ){
-	$search_handler_log    = $self->get_remote_project_log_dir() . "/blast_handler";
-	$remote_script_path    = $self->get_remote_blast_script();
-	$db_name               = $self->get_blastdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name/";
-	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/blast/";
-    }
-    if( $type eq "last" ){
-	$search_handler_log    = $self->get_remote_project_log_dir() . "/last_handler";
-	$remote_script_path    = $self->get_remote_last_script();
+    my $search_handler_log    =       $self->get_remote_project_log_dir() . "/${type}_handler";
+    my $remote_search_res_dir = $self->get_remote_sample_path($sample_id) . "/search_results/${type}";
+    my ($remote_script_path, $db_name, $remote_db_dir);
+    if (($type eq "blast") or ($type eq "last")) {
 	$db_name               = $self->get_blastdb_name();
 	$remote_db_dir         = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name";
-	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/last";
+	if ($type eq "last" ) { $remote_script_path  = $self->get_remote_last_script();  } # LAST
+	if ($type eq "blast") { $remote_script_path  = $self->get_remote_blast_script(); } # BLAST
     }
-    if( $type eq "hmmsearch" ){
-	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmsearch_handler";
-	$remote_script_path    = $self->get_remote_hmmsearch_script();
+
+    if (($type eq "hmmsearch") or ($type eq "hmmscan")) {
 	$db_name               = $self->get_hmmdb_name();
 	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name";
-	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmsearch";
+	if ($type eq "hmmsearch") { $remote_script_path = $self->get_remote_hmmsearch_script(); } # HMM *SEARCH*
+	if ($type eq "hmmscan")   { $remote_script_path = $self->get_remote_hmmscan_script();   } # HMM *SCAN*
     }
-    if( $type eq "hmmscan" ){
-	$search_handler_log    = $self->get_remote_project_log_dir() . "/hmmscan_handler";
-	$remote_script_path    = $self->get_remote_hmmscan_script();
-	$db_name               = $self->get_hmmdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name";
-	$remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/hmmscan";
-    }
-    
-    my $perlScriptRemoteLoc = $self->get_remote_script_dir() . "/run_remote_search_handler.pl";
-    my $remote_cmd  = "\'perl $perlScriptRemoteLoc -h $remote_db_dir -o $remote_search_res_dir -i $remote_query_dir -n $db_name -s $remote_script_path -w $waitTimeInSeconds > ${search_handler_log}.out 2> $search_handler_log.err \'";
+
+    # Transfer the "run_remote_search_handler.pl" script to the remote server. For some reason, it doesn't get sent over otherwise!
+    my $perlScriptLocal = $self->get_scripts_dir() . "/remote/run_remote_search_handler.pl";
+    MRC::Run::transfer_file_into_directory($perlScriptLocal,  $self->get_remote_connection() . ':' . $self->get_remote_script_dir() . '/'); # transfer the script into the remote directory
+
+    my $perl_script_handler_remote_path = $self->get_remote_script_dir() . "/run_remote_search_handler.pl";
+    my $remote_cmd  = "\'perl $perl_script_handler_remote_path -h $remote_db_dir -o $remote_search_res_dir -i $remote_query_dir -n $db_name -s $remote_script_path -w $waitTimeInSeconds > ${search_handler_log}.out 2> $search_handler_log.err \'";
     my $results     = execute_ssh_cmd( $self->get_remote_connection(), $remote_cmd, $verbose );
     return $results;
 }
@@ -1553,8 +1550,8 @@ sub get_remote_search_results {
     # Note that every sequence split has its *own* output dir, in order to cut back on the number of files per directory.
     my $in_orf_dir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs"; # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs( @{ $self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0) } ) {
-	my $remoteStr = $self->get_remote_connection() . ':' . "$remote_search_res_dir/$in_orfs";
-	MRC::Run::transfer_directory($remoteStr, $local_search_res_dir);
+	my $remoteDir = $self->get_remote_connection() . ':' . "$remote_search_res_dir/$in_orfs";
+	MRC::Run::transfer_directory($remoteDir, $local_search_res_dir);
     }
 }
 
