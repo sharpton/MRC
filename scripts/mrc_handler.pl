@@ -53,6 +53,8 @@ use Benchmark;
 use Carp;
 $SIG{ __DIE__ } = sub { Carp::confess( @_ ) }; # prints a STACK TRACE whenever there is a fatal error! Very handy
 
+
+#### ========================== BELOW: FUNCTIONS ===============================
 sub dieWithUsageError($) {
     my ($msg) = @_;
     chomp($msg);
@@ -60,6 +62,41 @@ sub dieWithUsageError($) {
     print STDOUT <DATA>;
     die(MRC::safeColor("[TERMINATED DUE TO USAGE ERROR]: " . $msg . " ", "yellow on_red"));
 }
+
+
+sub calculate_diversity($$) {
+    my($analysis, $class_id) = @_; # "analysis" is an MRC object
+    print "Project richness...\n";             $analysis->MRC::Run::calculate_project_richness($class_id);
+    print "Project relative abundance...\n";   $analysis->MRC::Run::calculate_project_relative_abundance($class_id);
+    print "Per-sample richness...\n";          $analysis->MRC::Run::calculate_sample_richness($class_id);
+    print "Per-sample relative abundance..\n"; $analysis->MRC::Run::calculate_sample_relative_abundance($class_id);
+    print "Building classification map...\n";  $analysis->MRC::Run::build_classification_map($class_id);
+    print "Building PCA dataframe...\n";       $analysis->MRC::Run::build_PCA_data_frame($class_id);
+}
+
+sub build_remote_script_generic($) {
+    my ($cmd) = @_;
+    my $results = IPC::System::Simple::capture($cmd);
+    (0 == $EXITVAL) or die "Error:  non-zero exit value: $results";
+    return($results);
+}
+
+sub printBanner($) {
+    my ($string) = @_;
+    my $dateStr = `date`;
+    chomp($string); # remove any ending-of-string newline that might be there
+    chomp($dateStr); # remote always-there newline from the `date` command
+    my $stringWithDate = $string . " ($dateStr)";
+    my $pad  = "#" x (length($stringWithDate) + 4); # add four to account for extra # and whitespce on either side of string
+    print STDERR MRC::safeColor("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n", "cyan on_blue");
+}
+#### ========================== ABOVE: FUNCTIONS ===============================
+
+#### ==================== BELOW: Code that gets run DIRECTLY at the main level (not inside a function or anything!) ======================
+
+
+
+
 
 print STDERR ">> ARGUMENTS TO mrc_handler.pl: perl mrc_handler.pl @ARGV\n";
 
@@ -703,122 +740,9 @@ if ($use_blast){
 ### ====================================================================
 
 
-
-
 printBanner("ANALYSIS COMPLETED!\n");
 
-
 ### ============== MAIN CODE THAT GETS CALLED EVERY TIME: ABOVE =========================
-
-### ================================== FUNCTIONS BELOW ==================================
-
-sub calculate_diversity {
-    my($analysis, $class_id) = @_;
-    print "project richness...\n";
-    $analysis->MRC::Run::calculate_project_richness($class_id);
-    print "project relative abundance...\n";
-    $analysis->MRC::Run::calculate_project_relative_abundance($class_id);
-    print "per-sample richness...\n";
-    $analysis->MRC::Run::calculate_sample_richness($class_id);
-    print "per-sample relative abundance..\n";
-    $analysis->MRC::Run::calculate_sample_relative_abundance($class_id);
-    print "building classification map...\n";
-    $analysis->MRC::Run::build_classification_map($class_id);
-    print "building PCA dataframe...\n";
-    $analysis->MRC::Run::build_PCA_data_frame($class_id);
-}
-
-
-
-sub build_remote_script_generic {
-    my ($cmd) = @_;
-    my $results = IPC::System::Simple::capture($cmd);
-    (0 == $EXITVAL) or die "Error:  non-zero exit value: $results";
-    return($results);
-}
-
-# sub build_remote_hmmscan_script{
-#     my($h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch) = @_;
-#     my @args = ("build_remote_hmmscan_script.pl", "-z $n_searches", "-o $h_script_path", "-n $n_splits", "--name $hmmdb_basename", "-p $project_path", "-s $scratch");
-#     my $results = IPC::System::Simple::capture("perl " . "@args");
-#     if ($EXITVAL != 0){
-# 	warn($results);
-# 	exit(0);
-#     }
-#     return $results;
-# }
-
-# sub build_remote_hmmsearch_script{
-#     my ($h_script_path, $n_searches, $hmmdb_basename, $n_splits, $project_path, $scratch) = @_;
-#     my @args = ("build_remote_hmmsearch_script.pl", "-z $n_searches", "-o $h_script_path", "-n $n_splits", "--name $hmmdb_basename", "-p $project_path", "-s $scratch");
-#     print("perl " . "@args\n");
-#     my $results = IPC::System::Simple::capture("perl " . "@args");
-#     if ($EXITVAL != 0){
-# 	warn($results);
-# 	exit(0);
-#     }
-#     return $results;
-# }
-
-# sub build_remote_blastsearch_script{
-#     my ($b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
-#     my @args = ("build_remote_blast_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-#     print("perl @args\n");
-#     my $results = IPC::System::Simple::capture("perl " . "@args");
-#     if ($EXITVAL != 0){
-# 	warn($results);
-# 	exit(0);
-#     }
-#     return $results;
-# }
-
-#need to build
-# sub build_remote_lastsearch_script {
-#     my ($b_script_path, $db_length, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
-#     my @args = ("build_remote_last_script.pl", "-z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-#     print("perl @args\n");
-#     my $results = IPC::System::Simple::capture("perl " . "@args");
-#     if ($EXITVAL != 0){
-# 	warn($results);
-# 	exit(0);
-#     }
-#     return $results;
-#}
-
-# sub build_remote_formatdb_script {
-#     my ($script_path, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
-#     my @args = ("build_remote_formatdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-#     print("perl " . "@args\n");
-#     my $results = IPC::System::Simple::capture("perl " . "@args");
-#     if ($EXITVAL != 0){
-# 	warn($results);
-# 	exit(0);
-#     }
-#     return $results;    
-# }
-
-# sub build_remote_lastdb_script {
-#     my ($script_path, $blastdb_basename, $n_splits, $project_path, $scratch) = @_;
-#     my @args = ("build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-#     print("perl " . "@args\n");
-#     my $results = IPC::System::Simple::capture("perl " . "@args");
-#     if ($EXITVAL != 0){
-# 	warn($results);
-# 	exit(0);
-#     }
-#     return $results;    
-# }
-
-
-sub printBanner {
-    my ($string) = @_;
-    my $dateStr = `date`;
-    chomp($string); # remove any ending-of-string newline that might be there
-    chomp($dateStr); # remote always-there newline from the `date` command
-    my $stringWithDate = $string . " ($dateStr)";
-    my $pad  = "#" x (length($stringWithDate) + 4); # add four to account for extra # and whitespce on either side of string
-    print STDERR MRC::safeColor("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n", "cyan on_blue");
-}
 
 
 __DATA__

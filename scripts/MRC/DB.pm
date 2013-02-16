@@ -449,8 +449,8 @@ sub build_sample_ffdb{
 	File::Path::make_path($path);
     }
 
-    foreach my $sample (keys( %{ $self->get_samples() } )) {
-	my $thisSampleID = $self->get_samples->{$sample}->{"id"};
+    foreach my $sampleName (keys(%{$self->get_sample_hashref()})) {
+	my $thisSampleID = $self->get_sample_hashref()->{$sampleName}->{"id"};
 	my $sampDir      = "$projDir/${thisSampleID}";
 	my $raw_sample_dir  = "$sampDir/raw";
 	my $orf_sample_dir  = "$sampDir/orfs";
@@ -462,20 +462,17 @@ sub build_sample_ffdb{
 	my $blast_results = "$search_res/blast";
 	my $last_results = "$search_res/last";
 
-	foreach my $dirToMake ($sampDir, $search_res, $hmmscan_results, $hmmsearch_results, $blast_results, $last_results, $raw_sample_dir, $orf_sample_dir, $unsplit_orfs) {
-	    File::Path::make_path($dirToMake); # make_path ALREADY dies on "severe" errors. See http://search.cpan.org/~dland/File-Path-2.09/Path.pm#ERROR_HANDLING
-	}
-
 	if (-d $raw_sample_dir) {
-	    warn("The directory \"$raw_sample_dir\" already exists...");
+	    warn("The directory \"$raw_sample_dir\" already existed!");
 	    if ($self->{"clobber"}) { warn("But you specified the CLOBBER option, so we will brutally overwrite it anyway!"); }
 	    else { die("Since the data already exists in $raw_sample_dir , we will not overwrite it! Unless you specify the flag --clobber to brutally clobber those directories anyway. NOT RECOMMENDED unless you know what you're doing."); }
 	}
-	
-	File::Path::make_path($raw_sample_dir);
-	#copy( $self->get_samples->{$sample}->{"path"}, $raw_sample ) || die "Copy of $sample failed in build_project_ffdb: $! ";
-	my $nameprefix = "${sample}_raw_split_"; # the "base name" here.
-	$self->MRC::DB::split_sequence_file($self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $nameprefix, $nseqs_per_samp_split);
+
+	foreach my $dirToMake ($sampDir, $search_res, $hmmscan_results, $hmmsearch_results, $blast_results, $last_results, $raw_sample_dir, $orf_sample_dir, $unsplit_orfs) {
+	    File::Path::make_path($dirToMake); # <-- make_path ALREADY dies on "severe" errors, so no need to check for them. See http://search.cpan.org/~dland/File-Path-2.09/Path.pm#ERROR_HANDLING
+	}
+	my $nameprefix = "${sampleName}_raw_split_"; # the "base name" here.
+	$self->MRC::DB::split_sequence_file($self->get_sample_hashref()->{$sampleName}->{"path"}, $raw_sample_dir, $nameprefix, $nseqs_per_samp_split);
     }
 }
 
@@ -502,6 +499,9 @@ sub split_sequence_file{
 	    MRC::notify("Will dump to split $split_dir/$outname");
 	}
 	$output->write_seq($seq);
+
+	MRC::notify("Output file $split_dir/$outname was of size " . (-s "$split_dir/$outname") . "...");
+
 	$seq_ct++;
     }    
     return \@output_names;

@@ -50,7 +50,7 @@ sub _remote_transfer_internal($$$) {
     my $RECURSIVE_FLAG = ($path_type eq 'directory') ? '-r' : ''; # only specify recursion if DIRECTORIES are being transferred!
     my $FLAGS = "$COMPRESSION_FLAG $RECURSIVE_FLAG";
     my @args = ($FLAGS, $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING, $src_path, $dest_path);
-    MRC::notifyAboutScp("remote_transfer ($path_type): scp @args");
+    MRC::notifyAboutScp("scp @args");
     my $results = IPC::System::Simple::capture("scp @args");
     (0 == $EXITVAL) or die("Error transferring $src_path to $dest_path using $path_type: $results");
     return $results;
@@ -167,28 +167,22 @@ sub get_partitioned_samples{
 }
 
 sub load_project{
-    my $self    = shift;
-    my $path    = shift;
-    my $nseqs_per_samp_split = shift; #how many seqs should each sample split file contain?
-    #get project name and load
-    my ( $name, $dir, $suffix ) = fileparse( $path );        
-    my $proj = $self->MRC::DB::create_project( $name, $self->get_project_desc() );    
-    my $pid  = $proj->project_id();
-    warn("Loading project with PID $pid, files found at <$path>.\n");
+    my ($self, $path, $nseqs_per_samp_split) = @_;    # $nseqs_per_samp_split is how many seqs should each sample split file contain?
+    my ($name, $dir, $suffix) = fileparse( $path );     #get project name and load
+    my $proj = $self->MRC::DB::create_project($name, $self->get_project_desc() );
     #store vars in object
     $self->set_project_path($path);
-    $self->set_project_id($pid);
+    $self->set_project_id($proj->project_id());
     #process the samples associated with project
     $self->MRC::Run::load_samples();
     $self->MRC::DB::build_project_ffdb();
-    $self->MRC::DB::build_sample_ffdb( $nseqs_per_samp_split ); #this also splits the sample file
-    warn("Project with PID $pid was successfully loaded!\n");
-    #return $self;
+    $self->MRC::DB::build_sample_ffdb($nseqs_per_samp_split); #this also splits the sample file
+    warn("Project with PID " . $proj->project_id() . ", with files found at <$path>, was successfully loaded!\n");
 }
 
 sub load_samples{
-    my $self   = shift;
-    my %samples = %{ $self->get_samples() };
+    my ($self) = @_;
+    my %samples = %{$self->get_sample_hashref()}; # de-reference the hash reference
     my $numSamples = scalar( keys(%samples) );
     my $plural = ($numSamples == 1) ? '' : 's'; # pluralize 'samples'
     MRC::notify("Run.pm: load_samples: Processing $numSamples sample${plural} associated with project PID #" . $self->get_project_id() . " ");
@@ -253,7 +247,7 @@ sub load_samples{
 
 	MRC::notify("Loaded $numReads reads for sample $sid into the database.");
     }
-    $self->set_samples( \%samples ); #uncertain if this is necessary
+    $self->set_samples(\%samples);
     MRC::notify("Successfully loaded $numSamples sample$plural associated with the project PID #" . $self->get_project_id() . " ");
 }
 
@@ -350,17 +344,17 @@ sub load_orf{
 
 sub load_multi_orfs{
     my ($self, $orfsBioSeqObject, $sample_id, $algo) = @_;   # $orfsBioSeqObject is a Bio::Seq object
-    my %orf_map    = (); #orf_alt_id to read_id
-    my %read_map   = (); #read_alt_id to read_id
-    my $count      = 0;
+    my %orfHash       = (); #orf_alt_id to read_id
+    my %readHash      = (); #read_alt_id to read_id
+    my $numOrfsLoaded = 0;
     while (my $orf = $orfsBioSeqObject->next_seq() ){
-	$count++;
+	$numOrfsLoaded++;
 	my $orf_alt_id  = $orf->display_id();
 	my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, $algo );
 	#get the read id, but only if we haven't see this read before
 	my $read_id = undef;
-	if(defined( $read_map{ $read_alt_id } ) ){
-	    $read_id = $read_map{ $read_alt_id };
+	if(defined($readHash{$read_alt_id} ) ){
+	    $read_id = $readHash{$read_alt_id};
 	} else{
 	    my $reads = $self->get_schema->resultset("Metaread")->search(
 		{
@@ -371,12 +365,13 @@ sub load_multi_orfs{
 	    if ($reads->count() > 1) { die("Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!"); }
 	    my $read = $reads->next();
 	    $read_id = $read->read_id();
-	    $read_map{ $read_alt_id } = $read_id;
+	    $readHash{ $read_alt_id } = $read_id;
 	}
-	$orf_map{ $orf_alt_id } = $read_id;
+	$orfHash{ $orf_alt_id } = $read_id;
     }
-    $self->MRC::DB::insert_multi_orfs( $sample_id, \%orf_map );
-    MRC::notify("Bulk loaded $count orfs to the database.");
+    $self->MRC::DB::insert_multi_orfs( $sample_id, \%orfHash );
+    MRC::notify("Bulk loaded a total of <$numOrfsLoaded> orfs to the database.");
+    ($numOrfsLoaded > 0) or die "Uh oh, we somehow were not able to load ANY orfs in the Run.pm function load_multi_orfs. Sample ID was <$sample_id>. Maybe this is because you didn't --stage the database? Really unclear.";
 }
 
 
@@ -782,7 +777,7 @@ sub parse_search_results{
     #because blast table doesn't print the sequence lengths (ugh) we have to look up the query length
     my %seqlens    = ();
     if( $type eq "blast" ){
-	%seqlens   = %{ _get_sequence_lengths_from_file( $orfs_file ) };
+	%seqlens   = %{ _underscore_get_sequence_lengths_from_file( $orfs_file ) };
     }
     #open the file and process each line
 #    print "classifying reads from $file\n";
@@ -940,7 +935,7 @@ sub parse_search_results{
 }
 
 #produce a hashtab that maps sequence ids to sequence lengths
-sub _get_sequence_lengths_from_file{
+sub _underscore_get_sequence_lengths_from_file{
     my( $file ) = shift;    
     my %seqlens = ();
     open( FILE, "$file" ) || die "Can't open $file for read: $!\n";
@@ -1081,10 +1076,7 @@ sub build_search_db{
 		my $path = "${ref_ffdb}/fci_${fci}/HMMs/${family}.hmm.gz";
 		if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
 	    }
-	    if (!defined( $family_db_file)) {
-		die("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) . " ");
-	    }
-
+	    (defined($family_db_file)) or die("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) . " ");
 	} elsif( $type eq "blast" ) {
 	    foreach my $fci( @fcis ){
 		if (0 == $fci) {
@@ -1093,7 +1085,6 @@ sub build_search_db{
 		my $path = "$ref_ffdb/fci_${fci}/seqs/${family}.fa.gz";
 		if( -e $path ){
 		    $family_db_file = $path; # <-- save the path, if it exists
-		    
 		    if ($reps_only) {
 			#do we only want rep sequences from big families?
 			#first see if there is a reps file for the family
@@ -1105,11 +1096,7 @@ sub build_search_db{
 			    if(! -e "${reps_seq_path}.gz" ){
 				print "Building reps sequence file for $family\n";
 				_grab_seqs_from_lookup_list( $reps_list_path, $family_db_file, $reps_seq_path );
-				if(! -e "${reps_seq_path}.gz" ) {
-				    ## if it STILL doesn't exist
-				    warn( "Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.\n" );
-				    exit(0);
-				}
+				(-e "${reps_seq_path}.gz") or die("The gzipped file STILL doesn't exist, even after we tried to make it. Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.");
 			    }
 			    $family_db_file = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
 			}
@@ -1118,9 +1105,7 @@ sub build_search_db{
 #		    last;
 		}
 	    }
-	    if(!defined($family_db_file) ){
-		die( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" )  . " ");
-	    }
+	    (defined($family_db_file)) or die( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" )  . " ");
 #	    $family_db_file =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
 	    $length += $self->MRC::Run::get_sequence_length_from_file($family_db_file);
 	}
@@ -1250,7 +1235,7 @@ sub calculate_blast_db_length{
 sub get_sequence_length_from_file{
     my($self, $file) = @_;
     #my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
-    open(FILE, "zcat --force $file") || die "Can't open <$file> for reading: $! "; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
+    open(FILE, "zcat --force $file") || die "Unable to open <$file> for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
     my $seqLength = 0;
     while(<FILE>){
 	next if ($_ =~ m/^\>/); # skip lines that start with a '>'

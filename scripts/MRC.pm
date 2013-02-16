@@ -3,20 +3,9 @@
 #MRC.pm - The MRC workflow manager
 #Copyright (C) 2011  Thomas J. Sharpton 
 #author contact: thomas.sharpton@gladstone.ucsf.edu
-#
-#This program is free software: you can redistribute it and/or modify
-#it under the terms of the GNU General Public License as published by
-#the Free Software Foundation, either version 3 of the License, or
-#(at your option) any later version.
-#    
-#This program is distributed in the hope that it will be useful,
-#but WITHOUT ANY WARRANTY; without even the implied warranty of
-#MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#GNU General Public License for more details.
-#    
-#You should have received a copy of the GNU General Public License
-#along with this program (see LICENSE.txt).  If not, see 
-#<http://www.gnu.org/licenses/>.
+#This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+#This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+#You should have received a copy of the GNU General Public License along with this program (see LICENSE.txt).  If not, see <http://www.gnu.org/licenses/>.
 
 use strict;
 use warnings;
@@ -85,16 +74,11 @@ sub notify($) {
 }
 
 
-
 =head2 new
-
- Title   : new
  Usage   : $project = MRC->new()
  Function: initializes a new MRC analysis object
  Example : $analysus = MRC->new();
  Returns : A MRC analysis object
- Args    : None
-
 =cut
 
 sub new{
@@ -242,38 +226,16 @@ sub set_bulk_insert_count{
 }
 
 =head2 set_project_path
-
- Title   : set_project_path
  Usage   : $analysis->set_project_path( "~/data/metaprojects/project1/" );
  Function: Point to the raw project data directory (not the ffdb version)
- Example : my $path = analysis->set_project_path( "~/data/metaprojects/project1/" );
- Returns : A filepath (string)
- Args    : A filepath (string)
-
 =cut 
 
 sub set_project_path{
     my $self = shift;
     my $path = shift;
     $self->{"projectpath"} = $path;
-    return $self->{"projectpath"};
 }
-
-=head2 get_project_path
-
- Title   : get_project_path
- Usage   : $analysis->get_project_path();
- Function: Point to the raw project data directory (not the ffdb version)
- Example : my $path = analysis->get_project_path();
- Returns : A filepath (string)
- Args    : None
-
-=cut 
-
-sub get_project_path{
-    my $self = shift;
-    return $self->{"projectpath"};
-}
+sub get_project_path{ my $self = shift;    return $self->{"projectpath"}; }
 
 =head2 get_sample_path
 
@@ -326,8 +288,8 @@ sub set_password{
     warn "In MRC.pm (function: set_password()): Note: we are setting the password in plain text here. This should ideally be eventually changed to involve encryption or something.";
     $self->{"pass"} = $path;
 }
-
 sub get_password { my $self = shift; return $self->{"pass"}; }
+
 
 sub set_schema_name{
     my ($self, $new_name) = @_;
@@ -352,7 +314,6 @@ sub set_schema_name{
 
 sub build_schema{
     my $self   = shift;
-#    my $schema = Sfams::Schema->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
     my $schema = $self->{"schema_name"}->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
 						  #since we have terms in DB that are reserved words in mysql (e.g., order)
 						  #we need to put quotes around those field ids when calling SQL
@@ -362,7 +323,7 @@ sub build_schema{
 						  }
 	);
     $self->{"schema"} = $schema;
-    return $self->{"schema"};
+    return $self->{"schema"}; ## return the schema too! this gets used!
 }
 
 =head2 get_schema
@@ -376,11 +337,7 @@ sub build_schema{
 
 =cut 
 
-sub get_schema{
-    my $self = shift;
-    my $schema = $self->{"schema"};
-    return $schema;
-}
+sub get_schema{    my $self = shift;    return($self->{"schema"}); }
 
 =head2 set_project_id
 
@@ -522,18 +479,18 @@ sub set_samples{
     return $self->{"samples"};
 }
 
-=head2 get_samples
+=head2 get_sample_hashref
 
- Title   : get_samples
- Usage   : $analysis->get_samples()
+ Title   : get_sample_hashref
+ Usage   : $analysis->get_sample_hashref()
  Function: Retrieve a hash reference that relates sample names to sample ffdb path from the MRC object
- Example : my %samples = %{ $analysis->get_samples() };
+ Example : my %samples = %{ $analysis->get_sample_hashref() };
  Returns : A hash_ref of sample names to sample ffdb paths (hash reference)
  Args    : None
 
 =cut 
 
-sub get_samples{
+sub get_sample_hashref {
     my $self = shift;
     my $samples = $self->{"samples"}; #a hash reference
     return $samples;
