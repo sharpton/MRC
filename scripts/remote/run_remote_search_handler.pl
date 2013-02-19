@@ -4,6 +4,7 @@ use strict;
 use Getopt::Long;
 use File::Path qw(make_path rmtree);
 use IPC::System::Simple qw(capture $EXITVAL);
+use File::Spec;
 
 #called by lighthouse, executes run_hmmsearch.sh, run_hmmscan.sh, or run_blast.sh
 print "perl run_remote_search_handler.pl @ARGV\n";
@@ -30,9 +31,9 @@ my @query_files = readdir( IN );
 closedir( IN );
 #loop over the files, launching a queue job for each
 foreach my $query_seq_file( @query_files ){
-    next if( $query_seq_file =~ m/^\./ );
+    next if( $query_seq_file =~ m/^\./ ); # skip the '.' and '..' and other dot files
     #modify results_dir here such that the output is placed into each split's subdir w/in $results_dir
-    my $split_sub_results_dir = $results_dir . $query_seq_file . "/";
+    my $split_sub_results_dir = File::Spec->catdir($results_dir, $query_seq_file);
     #now let's see if that directory exists. If not, create it.
     check_and_make_path( $split_sub_results_dir, 0 );
     #run the jobs!
@@ -42,14 +43,13 @@ foreach my $query_seq_file( @query_files ){
     print $db_dir . "\n";
     print $db_name . "\n";
     print $split_sub_results_dir . "\n";
-    my $results = run_remote_search( $scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $split_sub_results_dir, $type ); 
-    if( $results =~ m/^Your job-array (\d+)\./ ) {
+    my $results = run_remote_search($scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $split_sub_results_dir, $type);
+    
+    if($results =~ m/^Your job-array (\d+)\./ ) {
 	my $job_id = $1;
 	$jobs{$job_id}++;
-    }
-    else{
-	warn( "Remote server did not return a properly formatted job id when running transeq on (remote) localhost. Got $results instead!. Exiting.\n" );
-	exit(0);
+    } else {
+	die "Remote server did not return a properly formatted job id when running transeq on (remote) localhost. Got $results instead!";
     }
 }
 
@@ -77,16 +77,12 @@ sub run_search{
     my @args = ( $scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $results_dir, $out_stem );
     print( "qsub ", "@args\n" );
     my $results = capture( "qsub " . "@args" );
-    if( $EXITVAL != 0 ){
-        warn( "Error running transeq on remote server: $results\n" );
-        exit(0);
-    }
+    (0 == $EXITVAL) or die "Error running transeq on remote server: $results";
     return $results;
 }
 
 sub remote_job_listener{
-    my $jobs     = shift;
-    my $waittime = shift;
+    my ($jobs, $waittime) = @_;
     my $numwaits = 0;
     my %status   = ();
      while(1){
@@ -109,11 +105,9 @@ sub remote_job_listener{
 }
 
 sub execute_qstat{
-    my $cmd = shift;
+    my ($cmd) = @_;
     my $results = capture( "qstat" );
-    if( $EXITVAL != 0 ){
-	warn( "Error running execute_cmd: $results\n" );
-    }
+    (0 == $EXITVAL) or die "Error running execute_cmd: $results";
     return $results;
 }
 

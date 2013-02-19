@@ -91,9 +91,10 @@ sub transfer_file_into_directory($$) {
 sub execute_ssh_cmd($$;$) {
     my ($connection, $remote_cmd, $verbose) = @_;
     my $verboseFlag = (defined($verbose) && $verbose) ? '-v' : '';
-    my $sshCmd = "ssh $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING $verboseFlag $connection $remote_cmd";
-    MRC::notifyAboutRemoteCmd($sshCmd);
-    my $results = IPC::System::Simple::capture($sshCmd);
+    my $sshOptions = "ssh $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING $verboseFlag $connection";
+    MRC::notifyAboutRemoteCmd($sshOptions);
+    MRC::notifyAboutRemoteCmd($remote_cmd);
+    my $results = IPC::System::Simple::capture("$sshOptions $remote_cmd");
     (0 == $EXITVAL) or die( "Error running this ssh command: $sshCmd: $results" );
     return $results; ## <-- this gets used! Don't remove it.
 }
@@ -1338,25 +1339,28 @@ sub translate_reads_remote($$$$) {
     warn "About to translate reads...";
     my $numReadsTranslated = 0;
     foreach my $sample_id( @{$self->get_sample_ids()} ) {
-	my $remote_input_dir    = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "raw");
-	my $remote_output_dir   = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "orfs");
-	MRC::notify("Translating reads on the REMOTE machine, from $remote_input_dir to $remote_output_dir...");
+	my $remote_raw_dir    = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "raw");
+	my $remote_output_dir = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "orfs");
+	MRC::notify("Translating reads on the REMOTE machine, from $remote_raw_dir to $remote_output_dir...");
 	if ($should_we_split_orfs) {
 	    # Split the ORFs!
 	    my $local_unsplit_dir  =        $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # This is where the files will be tranferred BACK to. Should NOT end in a slash!
 	    my $remote_unsplit_dir = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # Should NOT end in a slash!
-	    my $remote_cmd = "\'" . "perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . " -u $remote_unsplit_dir" . "\'";
-	    execute_ssh_cmd( $connection, $remote_cmd );
+	    my $remote_cmd = "\'" . "perl ${transeqPerlRemote} " . " -i $remote_raw_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . " -u $remote_unsplit_dir" . "\'";
+	    my $response = execute_ssh_cmd($connection, $remote_cmd);
+	    MRC::notify("Translation result text, if any was: \"$response\"");
 	    MRC::notify("Translation complete, Transferring split and raw translated orfs\n");
 	    MRC::Run::transfer_directory("${connection}:$remote_unsplit_dir", $local_unsplit_dir); # REMOTE to LOCAL: the unsplit orfs
-	} else{ 
-	    my $remote_cmd_no_unsplit = "\'perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . "\'";
+	} else{
+	    my $remote_cmd_no_unsplit = "\'perl ${transeqPerlRemote} " . " -i $remote_raw_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . "\'";
 	    execute_ssh_cmd($connection, $remote_cmd_no_unsplit);
 	}
+
 	MRC::notify("Translation complete, Transferring ORFs\n");
 	
 	my $theOutput = execute_ssh_cmd($connection, "ls -l $remote_output_dir/");
-	MRC::notify("Got the following files that were generated on the remote machine: $theOutput");
+	MRC::notify("Got the following files that were generated on the remote machine:\n$theOutput");
+	(not($theOutput =~ /total 0/i)) or die "Dang! Somehow nothing was translated on the remote machine. We expected the directory \"$remote_output_dir\" on the machine " . $self->get_remote_server() . " to have files in it, but it was totally empty! This means the translation of reads probably failed.";
 
 	my $localOrfDir  = File::Spec->catdir($self->get_sample_path($sample_id), "orfs");
 	MRC::Run::transfer_directory("$connection:$remote_output_dir", $localOrfDir); # This happens in both cases, whether or not the orfs are split!

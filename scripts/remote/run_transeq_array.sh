@@ -15,6 +15,9 @@
 
 #rather than set -t here, set it at the command line so that the range can vary across samples (different samples will have different number of splits)
 
+echo "************* THIS SCRIPT APPARENTLY SOURCES TOM'S bash profile!!"
+echo "Alex also cannot figure out how JOB_ID gets set."
+
 INPATH=$1
 INBASENAME=$2
 OUTPATH=$3
@@ -26,29 +29,37 @@ SPLITOUTPATH=$7
 INPUT=${INPATH}/${INBASENAME}${SGE_TASK_ID}.fa
 OUTPUT=${OUTPATH}/${OUTBASENAME}${SGE_TASK_ID}.fa
 
-
 #let's see if the results already exist....
 if [ -e ${OUTPATH}/${OUTPUT} ]
 then
+    echo "[Skipping]: Since results ALREADY EXIST at ${OUTPATH}/${OUTPUT}, we are not re-running this script."
     exit
 fi
+
+# /scrapp2/alexgw/MRC/scriptssplit_orf_on_stops.pl
+
+# where does JOB_ID get set?? I can't figure it out.
 
 qstat -f -j ${JOB_ID}                           > $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 uname -a                                       >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 echo "****************************"            >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 echo "RUNNING TRANSEQ WITH $*"                 >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
+
 source /netapp/home/sharpton/.bash_profile     >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
+
 date                                           >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 #transeq -frame=6 input.fa output.fa
 echo "transeq -frame=6 $INPUT $OUTPUT"         >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 transeq -frame=6 $INPUT $OUTPUT                >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 if[ -d $SPLITOUTPATH ]{
 	SPLITOUTPUT=${SPLITOUTPATH}/${OUTBASENAME}${SGE_TASK_ID}.fa   >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
-	echo "perl ${SCRIPTS}split_orf_on_stops.pl -i $OUTPUT -o $SPLITOUTPUT"  >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
-	perl ${SCRIPTS}split_orf_on_stops.pl -i $OUTPUT -o $SPLITOUTPUT         >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
+	echo "perl ${SCRIPTS}/split_orf_on_stops.pl -i $OUTPUT -o $SPLITOUTPUT"  >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
+	perl ${SCRIPTS}/split_orf_on_stops.pl -i $OUTPUT -o $SPLITOUTPUT         >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 	date                                                          >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 	echo "RUN FINISHED"                                           >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 } else {
 	date                                              >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 	echo "RUN FINISHED"                               >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
 } fi
+
+echo "****************************"            >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1
