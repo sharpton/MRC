@@ -95,9 +95,33 @@ sub execute_ssh_cmd($$;$) {
     MRC::notifyAboutRemoteCmd($sshOptions);
     MRC::notifyAboutRemoteCmd($remote_cmd);
     my $results = IPC::System::Simple::capture("$sshOptions $remote_cmd");
-    (0 == $EXITVAL) or die( "Error running this ssh command: $sshCmd: $results" );
+    (0 == $EXITVAL) or die( "Error running this ssh command: $sshOptions $remote_cmd: $results" );
     return $results; ## <-- this gets used! Don't remove it.
 }
+
+
+sub get_sequence_length_from_file($) {
+    my($file) = @_;
+    #my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
+    open(FILE, "zcat --force $file") || die "Unable to open the file \"$file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
+    my $seqLength = 0;
+    while(<FILE>){
+	next if ($_ =~ m/^\>/); # skip lines that start with a '>'
+	chomp $_; # remove the newline
+	$seqLength += length($_);
+    }
+    close FILE;
+    if ($seqLength == 0) { warn "Uh oh, we got a sequence length of ZERO from the file <$file>. This could indicate a serious problem!"; }
+    return $seqLength; # return the sequence length
+}
+
+sub gzip_file($) {
+    my($file) = @_;
+    IO::Compress::Gzip::gzip $file => "${file}.gz" or die "gzip failed: $GzipError ";
+}
+
+
+
 
 sub clean_project{
     my ($self, $project_id) = @_;
@@ -1095,7 +1119,7 @@ sub build_search_db{
 	    }
 	    (defined($family_db_file)) or die( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" )  . " ");
 #	    $family_db_file =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
-	    $length += $self->MRC::Run::get_sequence_length_from_file($family_db_file);
+	    $length += get_sequence_length_from_file($family_db_file);
 	}
 	
 	push( @split, $family_db_file );
@@ -1211,7 +1235,7 @@ sub calculate_blast_db_length{
     my $lenTotal  = 0;
     foreach my $file (@files) {
 	next unless( $file =~ m/\.fa/ ); # ONLY include files ending in .fa
-	my $lengthThisFileOnly = $self->MRC::Run::get_sequence_length_from_file( File::Spec->catfile($db_path, $file));
+	my $lengthThisFileOnly = get_sequence_length_from_file(File::Spec->catfile($db_path, $file));
 	$lenTotal += $lengthThisFileOnly;
 	$numFilesRead++;
 	if ($numFilesRead == 1 or ($numFilesRead % $PRINT_OUTPUT_EVERY_THIS_MANY_FILES == 0)) {
@@ -1223,25 +1247,6 @@ sub calculate_blast_db_length{
     return $lenTotal;
 }
 
-sub get_sequence_length_from_file{
-    my($self, $file) = @_;
-    #my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
-    open(FILE, "zcat --force $file") || die "Unable to open the file \"$file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
-    my $seqLength = 0;
-    while(<FILE>){
-	next if ($_ =~ m/^\>/); # skip lines that start with a '>'
-	chomp $_; # remove the newline
-	$seqLength += length($_);
-    }
-    close FILE;
-    if ($seqLength == 0) { warn "Uh oh, we got a sequence length of ZERO from the file <$file>. This could indicate a serious problem!"; }
-    return $seqLength; # return the sequence length
-}
-
-sub gzip_file {
-    my $file = shift;
-    IO::Compress::Gzip::gzip $file => "${file}.gz" or die "gzip failed: $GzipError ";
-}
 
 # Code below is both unused AND refers to non-existent code in DB (as of Feb 2013).
 #state how many spilts you want, will determine the correct number of hm
@@ -1337,6 +1342,12 @@ sub translate_reads_remote($$$$) {
     MRC::Run::transfer_file_into_directory($local_copy_of_remote_script,  "$connection:$remote_script_dir/"); # transfer the script into the remote directory
 
     warn "About to translate reads...";
+
+    my @scriptsToTransfer = (File::Spec->catfile($self->get_scripts_dir(), "remote", "split_orf_on_stops.pl"));
+    foreach my $transferMe (@scriptsToTransfer) {
+	MRC::Run::transfer_file_into_directory($transferMe, $self->get_remote_connection() . ':' . $self->get_remote_script_dir() . '/'); # transfer the script into the remote directory
+    }
+
     my $numReadsTranslated = 0;
     foreach my $sample_id( @{$self->get_sample_ids()} ) {
 	my $remote_raw_dir    = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "raw");
@@ -1360,7 +1371,7 @@ sub translate_reads_remote($$$$) {
 	
 	my $theOutput = execute_ssh_cmd($connection, "ls -l $remote_output_dir/");
 	MRC::notify("Got the following files that were generated on the remote machine:\n$theOutput");
-	(not($theOutput =~ /total 0/i)) or die "Dang! Somehow nothing was translated on the remote machine. We expected the directory \"$remote_output_dir\" on the machine " . $self->get_remote_server() . " to have files in it, but it was totally empty! This means the translation of reads probably failed.";
+	(not($theOutput =~ /total 0/i)) or die "Dang! Somehow nothing was translated on the remote machine. We expected the directory \"$remote_output_dir\" on the machine " . $self->get_remote_server() . " to have files in it, but it was totally empty! This means the translation of reads probably failed. You had better check the logs on the remote machine! There is probably something interesting in the \"" . File::Spec->catdir($logsdir, "transeq") . "\" directory (on the REMOTE machine!) that will tell you exactly why this command failed! Check that directory!";
 
 	my $localOrfDir  = File::Spec->catdir($self->get_sample_path($sample_id), "orfs");
 	MRC::Run::transfer_directory("$connection:$remote_output_dir", $localOrfDir); # This happens in both cases, whether or not the orfs are split!
@@ -1490,7 +1501,7 @@ sub format_remote_blast_dbs{
     my $results    = execute_ssh_cmd($self->get_remote_connection(), "qsub -sync y $remote_script_path $remote_database_dir");
 }
 
-sub run_search_remote{
+sub run_search_remote {
     my ($self, $sample_id, $type, $waitTimeInSeconds, $verbose) = @_;
     ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed in! The invalid type was: \"$type\".";
 
@@ -1512,9 +1523,12 @@ sub run_search_remote{
 	if ($type eq "hmmscan")   { $remote_script_path = $self->get_remote_hmmscan_script();   } # HMM *SCAN*
     }
 
-    # Transfer the "run_remote_search_handler.pl" script to the remote server. For some reason, it doesn't get sent over otherwise!
-    my $perlScriptLocal = $self->get_scripts_dir() . "/remote/run_remote_search_handler.pl";
-    MRC::Run::transfer_file_into_directory($perlScriptLocal,  $self->get_remote_connection() . ':' . $self->get_remote_script_dir() . '/'); # transfer the script into the remote directory
+    # Transfer the required scripts, such as "run_remote_search_handler.pl", to the remote server. For some reason, these don't get sent over otherwise!
+    my @scriptsToTransfer = (File::Spec->catfile($self->get_scripts_dir(), "remote", "run_remote_search_handler.pl"));
+			     #, File::Spec->catfile($self->get_scripts_dir(), "remote", "split_orf_on_stops.pl"));
+    foreach my $transferMe (@scriptsToTransfer) {
+	MRC::Run::transfer_file_into_directory($transferMe, $self->get_remote_connection() . ':' . $self->get_remote_script_dir() . '/'); # transfer the script into the remote directory
+    }
 
     my $perl_script_handler_remote_path = $self->get_remote_script_dir() . "/run_remote_search_handler.pl";
     my $remote_cmd  = "\'perl $perl_script_handler_remote_path -h $remote_db_dir -o $remote_search_res_dir -i $remote_query_dir -n $db_name -s $remote_script_path -w $waitTimeInSeconds > ${search_handler_log}.out 2> $search_handler_log.err \'";
@@ -1525,10 +1539,10 @@ sub run_search_remote{
 sub get_remote_search_results {
     my($self, $sample_id, $type) = @_;
     ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed into get_remote_search_results! The invalid type was: \"$type\".";
-    my $remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/$type";
-    my $local_search_res_dir  = $self->get_sample_path() . "/search_results/$type";
+    my $remote_search_res_dir = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", $type);
+    my $local_search_res_dir  = File::Spec->catdir(       $self->get_sample_path($sample_id), "search_results", $type);
     # Note that every sequence split has its *own* output dir, in order to cut back on the number of files per directory.
-    my $in_orf_dir = $self->get_sample_path() . "/orfs"; # <-- Always the same input directory (orfs) no matter what the $type is.
+    my $in_orf_dir = File::Spec->catdir($self->get_sample_path($sample_id), "orfs"); # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs( @{ $self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0) } ) {
 	my $remoteDir = $self->get_remote_connection() . ':' . "$remote_search_res_dir/$in_orfs";
 	MRC::Run::transfer_directory($remoteDir, $local_search_res_dir);
@@ -1624,33 +1638,30 @@ sub run_hmmscan_remote_ping{
     MRC::notify("Hmmscan was conducted: translation finished (hopefully it was successful) on " . $self->get_remote_server() . " in approximately $time seconds.");
     #consider that a completed job doesn't mean a successful run!
     MRC::notify("Pulling hmmscan reads from remote server\n");
-    foreach my $job( keys( %jobs ) ){
+    foreach my $job (keys(%jobs)){
 	foreach my $sample_id( @sample_ids ){
 	    foreach my $hmmdb( keys( %hmmdbs ) ){
-		next unless exists( $jobs{$job}{$sample_id}{$hmmdb} );
+		if (not exists($jobs{$job}{$sample_id}{$hmmdb})) { next; } #um... if it DOESN'T exist, then skip to the next one!
 		warn( join("\t", $job, $sample_id, $hmmdb) );
 		my $remote_src = $self->get_remote_connection() . ":" . $jobs{$job}{$sample_id}{$hmmdb};
-		my $local_dest = $self->get_sample_path() . "/search_results/${sample_id}_v_${hmmdb}.hsc";
-		MRC::Run::transfer_file( $remote_src, $local_dest);
+		my $local_dest = File::Spec->catfile($self->get_sample_path($sample_id), "search_results", "${sample_id}_v_${hmmdb}.hsc");
+		MRC::Run::transfer_file($remote_src, $local_dest);
 	    }
 	}
     }    
 }
 
 sub get_family_size_by_id{
-    my $self  = shift;
-    my $famid = shift;
-    my $refonly = shift; #only count reference family members?
+    my ($self, $famid, $should_count_ref_only) = @_;  # $should_count_ref_only: only count reference family members?
     my $fam_mems = $self->MRC::DB::get_family_members_by_famid( $famid );
     my $size = 0;
-    if( $refonly ){
-	while( my $member = $fam_mems->next() ){
-	    if( $member->gene_oid() ){
+    if(defined($should_count_ref_only) && $should_count_ref_only ){
+	while(my $member = $fam_mems->next() ){
+	    if($member->gene_oid()) {
 		$size++;
 	    }
 	}
-    }
-    else{
+    } else {
 	$size = $fam_mems->count();
     }
     return $size;

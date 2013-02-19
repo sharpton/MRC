@@ -389,7 +389,7 @@ sub get_project_id{
            famid per line)or select all families associated with various family construction ids. Note that the fci array 
            must be set in the MRC object prior to calling this function. If a subset is specified, you have the option of 
            checking whether the families in the file are from the construction_ids that you have set in the MRC object.
- Example : my @families = @{ $analysis->get_family_subset( "~/data/large_family_ids, 1 ) };
+ Example : my @families = @{ $analysis->get_family_subset( "~/data/large_family_ids", 1 ) };
  Returns : An array reference of family ids that will be used in the downstream analyses
  Args    : Subset file path (string), Binary for whether fci should be checked. Both are optional.
 

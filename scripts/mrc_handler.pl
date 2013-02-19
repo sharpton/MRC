@@ -275,18 +275,25 @@ if (!defined($schema_name)) {
     warn("Note: --dbschema=SCHEMA was not specified on the command line, so we are using the default schema name, which is \"$schema_name\".");
 }
 
-# Automatically set the blast database name, if the user didn't specify something already.
-if (!defined($blastdb_name)) {
-    $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
-    warn("Note: blastdb_name was not specified on the command line (--blastdb=NAME). Using the default value, which is <$blastdb_name>.");
-} 
 
 if (!defined($db_prefix_basename)) {
     $db_prefix_basename = "SFams_all_v0";
     warn("Note: db_prefix_basename (database basename/prefix) was not specified on the command line (--dbprefix=PREFIX). Using the default value, which is <$db_prefix_basename>.");
 }
 
+# Automatically set the blast database name, if the user didn't specify something already.
+if (!defined($blastdb_name)) {
+    (defined($db_prefix_basename)) or die "db_prefix_basename was not defined!";
+    (defined($reps_only)) or die "reps_only was not defined!";
+    (defined($nr_db)) or die "nr_db was not defined!";
+    (defined($blast_db_split_size)) or die "blast_db_split_size was not defined!";
+    $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
+    warn("Note: blastdb_name was not specified on the command line (--blastdb=NAME). Using the default value, which is <$blastdb_name>.");
+} 
+
 if (!defined($hmmdb_name)) {
+    (defined($db_prefix_basename)) or die "db_prefix_basename was not defined!";
+    (defined($hmm_db_split_size)) or die "hmm_db_split_size was not defined!";
     $hmmdb_name = "${db_prefix_basename}_${hmm_db_split_size}";
     warn("Note: hmmdb_name was not specified on the command line (--hmmdb=NAME). Using the default value, which is <$hmmdb_name>.");
 }

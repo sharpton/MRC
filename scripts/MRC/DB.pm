@@ -500,7 +500,7 @@ sub split_sequence_file{
 	}
 	$output->write_seq($seq);
 
-	MRC::notify("Output file $split_dir/$outname was of size " . (-s "$split_dir/$outname") . "...");
+	MRC::notify("Output file $split_dir/$outname is now of size " . (-s "$split_dir/$outname") . "...");
 
 	$seq_ct++;
     }    
