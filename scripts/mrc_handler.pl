@@ -441,7 +441,7 @@ printBanner("TRANSLATING READS");
 
 if (!$dryRun) {
     if ($is_remote) {
-	#run transeq remotely, check on SGE job status, pull results back locally once job complete.
+	# run transeq remotely, check on SGE job status, pull results back locally once job complete.
 	my $remoteLogDir = File::Spec->catdir($analysis->get_remote_project_path(), "logs");
 	$analysis->MRC::Run::translate_reads_remote($waittime, $remoteLogDir, $should_split_orfs);
     } else {
