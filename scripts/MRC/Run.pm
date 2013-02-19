@@ -1666,6 +1666,7 @@ sub run_hmmscan_remote_ping{
 }
 
 sub get_family_size_by_id{
+    warn "Note that this function is never called and thus may be either redundant or untested";
     my ($self, $famid, $should_count_ref_only) = @_;  # $should_count_ref_only: only count reference family members?
     my $fam_mems = $self->MRC::DB::get_family_members_by_famid( $famid );
     my $size = 0;
@@ -1680,6 +1681,8 @@ sub get_family_size_by_id{
     }
     return $size;
 }
+
+
 
 sub build_PCA_data_frame{
     my ($self, $class_id) = @_;
@@ -1726,51 +1729,45 @@ sub calculate_project_richness {
     my $hit_fams = {}; #hashref
 
     my $family_rs = $self->MRC::DB::get_families_with_orfs_by_project( $self->get_project_id(), $class_id );
-    while( my $family = $family_rs->next() ){
+    while(my $family = $family_rs->next() ){
 	my $famid = $family->famid->famid();
 	next if( defined( $hit_fams->{$famid} ) );
 	$hit_fams->{$famid}++;
     }
-    #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_richness_${class_id}.tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_project_richness: $! ";   
-    print OUT join( "\t", "opf", "\n" );
-    #dump the famids that were found in the project to the output
+    my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "output", "project_richness_${class_id}.tab");
+    open( OUT, ">$output" ) || die "Can't open $output for write: $! ";
+    print OUT join( "\t", "opf", "\n" ); # not sure why "join" is being used here...
     foreach my $famid( keys( %$hit_fams ) ){
-	print OUT "$famid\n";
+	print OUT "$famid\n";     # dump the famids that were found in the project to the output
     }
     close OUT;
-    #return $self;
 }
 
 sub calculate_sample_richness{
-    my $self     = shift;
-    my $class_id = shift;
-    #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/sample_richness_" . $class_id . ".tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in calculate_sample_richness: $!";    
-    print OUT join( "\t", "sample", "opf", "\n" );
+    my ($self, $class_id) = @_;
+    my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "output", "sample_richness_${class_id}.tab");
+    open( OUT, ">$output" ) || die "Can't open $output for write: $!";    
+    print OUT join("\t", "sample", "opf", "\n"); # <-- print to OUT!
     #identify which families were uniquely hit in each sample
-    foreach my $sample_id( @{ $self->get_sample_ids() } ){
+    foreach my $sid( @{ $self->get_sample_ids() } ){
 	my %hit_fams = ();
-	my $family_rs = $self->MRC::DB::get_families_with_orfs_by_sample( $sample_id );
+	my $family_rs = $self->MRC::DB::get_families_with_orfs_by_sample($sid);
 	while( my $family = $family_rs->next() ){
 	    my $famid = $family->famid->famid();
 	    next if( defined( $hit_fams{$famid} ) );
 	    $hit_fams{$famid}++;
 	}
-	foreach my $famid( keys( %hit_fams ) ){
-	    print OUT join( "\t", $sample_id, $famid, "\n" );
+	foreach my $famid(keys(%hit_fams)) {
+	    print OUT join( "\t", $sid, $famid, "\n"); # not sure why "join" is being used here. Tab-delimited output!
 	}	
     }
     close OUT;
-    #return $self;
 }
 
 #divides total number of reads per OPF by all classified reads
+#identify number of times each family hit across the project. also, how many reads were classified. 
 sub calculate_project_relative_abundance{
     my ($self, $class_id) = @_;
-    #identify number of times each family hit across the project. also, how many reads were classified. 
     my $hit_fams = {};
     my $total     = $self->MRC::DB::get_number_orfs_by_project( $self->get_project_id() );
     print "getting families that have orfs\n";
@@ -1792,7 +1789,6 @@ sub calculate_project_relative_abundance{
     }
     close OUT;
     print "outfile created!\n";
-    #return $self;
 }
 
 #for each sample, divides total number of reads per OPF by all classified reads
@@ -1819,7 +1815,6 @@ sub calculate_sample_relative_abundance{
 	}	
     }
     close OUT;
-    #return $self;
 }
 
 #maps project_id -> sample_id -> read_id -> orf_id -> famid
@@ -1840,7 +1835,6 @@ sub build_classification_map{
 	}	
     }
     close OUT;
-    #return $self;
 }
 
 1;

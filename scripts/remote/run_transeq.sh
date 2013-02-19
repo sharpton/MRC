@@ -12,36 +12,40 @@
 # #$ -l xe5520=true
 #$ -l mem_free=0.5G
 
-LOGS=/netapp/home/sharpton/projects/MRC/scripts/logs
-
+LOGS=/dev/stdout #/netapp/home/sharpton/projects/MRC/scripts/logs
 
 echo "************* NOTE THERE IS A HARD-CODED PATH IN run_transeq.sh"
 echo "************* ALSO IT APPARENTLY SOURCES TOM'S bash profile!!"
-echo "Alex also cannot figure out how JOB_ID gets set."
 
+# Arguments to the script: three command-line arguments
 INPUT=$1
 RAWOUT=$2
 SPLITOUT=$3
 
 # where does JOB_ID get set?? I can't figure it out.
 
-qstat -f -j ${JOB_ID}                              > $LOGS/transeq/${JOB_ID}.all 2>&1
-echo "****************************"               >> $LOGS/transeq/${JOB_ID}.all 2>&1
-echo "RUNNING TRANSEQ WITH $*"                    >> $LOGS/transeq/${JOB_ID}.all 2>&1
+## JOB_ID and TASK_ID are both *magic* environment variables that are set automatically by the job scheduler! This is some kind of cluster magic.
+
+ALL_OUT_FILE=$LOGS/transeq/${JOB_ID}.all
+
+qstat -f -j ${JOB_ID}                              > ${ALL_OUT_FILE} 2>&1
+# Note that the '>' above is just ONE caret, to CREATE the file, and all the subequent ones APPEND to the file ('>>')
+
+echo "****************************"               >> ${ALL_OUT_FILE} 2>&1
+echo "RUNNING TRANSEQ WITH $*"                    >> ${ALL_OUT_FILE} 2>&1
 
 #echo "Alex commented out the 'source' line below"
-source /netapp/home/sharpton/.bash_profile        >> $LOGS/transeq/${JOB_ID}.all 2>&1
-
-date                                              >> $LOGS/transeq/${JOB_ID}.all 2>&1
-transeq -frame=6 $INPUT $OUTPUT                   >> $LOGS/transeq/${JOB_ID}.all 2>&1
-date                                              >> $LOGS/transeq/${JOB_ID}.all 2>&1
+#source /netapp/home/sharpton/.bash_profile        >> ${ALL_OUT_FILE} 2>&1
+date                                              >> ${ALL_OUT_FILE} 2>&1
+transeq -frame=6 $INPUT $OUTPUT                   >> ${ALL_OUT_FILE} 2>&1
+date                                              >> ${ALL_OUT_FILE} 2>&1
 if[ -z "${SPLITOUT}" ]{
-	date                                              >> $LOGS/transeq/${JOB_ID}.all 2>&1
-	echo "RUN FINISHED"                               >> $LOGS/transeq/${JOB_ID}.all 2>&1
+	date                                      >> ${ALL_OUT_FILE} 2>&1
+	echo "RUN FINISHED"                       >> ${ALL_OUT_FILE} 2>&1
 } else {
-	perl ${SCRIPTS}/split_orf_on_stops.pl -i $OUTPUT -o $RAWOUT  >> $LOGS/transeq/${JOB_ID}.all 2>&1
-	date                                              >> $LOGS/transeq/${JOB_ID}.all 2>&1
-	echo "RUN FINISHED"                               >> $LOGS/transeq/${JOB_ID}.all 2>&1
+	perl ${SCRIPTS}/split_orf_on_stops.pl -i $OUTPUT -o $RAWOUT  >> ${ALL_OUT_FILE} 2>&1
+	date                                                         >> ${ALL_OUT_FILE} 2>&1
+	echo "RUN FINISHED"                                          >> ${ALL_OUT_FILE} 2>&1
 } fi
 
 echo "****************************"            >> $LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all 2>&1

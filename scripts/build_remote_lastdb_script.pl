@@ -73,7 +73,7 @@ print OUT join( "\n",
 		"uname -a                                          >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"echo \"****************************\"             >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"echo \"RUNNING LASTDB WITH \$*\"                 >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"source /netapp/home/sharpton/.bash_profile        >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+#		"source /netapp/home/sharpton/.bash_profile        >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"date                                              >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"\n" );
 

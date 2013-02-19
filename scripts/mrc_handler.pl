@@ -164,7 +164,7 @@ my $waittime       = 30;
 my $input_pid      = undef;
 my $goto           = undef; #B=Build HMMdb
 
-my $scratch              = 0; #should we use scratch space on remote machine?
+my $use_scratch              = 0; #should we use scratch space on remote machine?
 my $multi                = 1; #should we multiload our inserts to the database?
 my $bulk_insert_count    = 1000;
 my $dbname               = undef; #"Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
@@ -424,13 +424,13 @@ if ($is_remote){
     } else {
 	MRC::dryNotify("Skipping the REMOTE loading of the project.");
     }
-    $analysis->set_remote_hmmscan_script($analysis->get_remote_project_path()   . "/run_hmmscan.sh");
-    $analysis->set_remote_hmmsearch_script($analysis->get_remote_project_path() . "/run_hmmsearch.sh");
-    $analysis->set_remote_blast_script($analysis->get_remote_project_path()     . "/run_blast.sh");
-    $analysis->set_remote_last_script($analysis->get_remote_project_path()      . "/run_last.sh");
-    $analysis->set_remote_formatdb_script($analysis->get_remote_project_path()  . "/run_formatdb.sh");
-    $analysis->set_remote_lastdb_script($analysis->get_remote_project_path()    . "/run_lastdb.sh");
-    $analysis->set_remote_project_log_dir($analysis->get_remote_project_path()  . "/logs");
+    $analysis->set_remote_hmmscan_script(  File::Spec->catfile($analysis->get_remote_project_path(), "run_hmmscan.sh"));
+    $analysis->set_remote_hmmsearch_script(File::Spec->catfile($analysis->get_remote_project_path(), "run_hmmsearch.sh"));
+    $analysis->set_remote_blast_script(    File::Spec->catfile($analysis->get_remote_project_path(), "run_blast.sh"));
+    $analysis->set_remote_last_script(     File::Spec->catfile($analysis->get_remote_project_path(), "run_last.sh"));
+    $analysis->set_remote_formatdb_script( File::Spec->catfile($analysis->get_remote_project_path(), "run_formatdb.sh"));
+    $analysis->set_remote_lastdb_script(   File::Spec->catfile($analysis->get_remote_project_path(), "run_lastdb.sh"));
+    $analysis->set_remote_project_log_dir( File::Spec->catdir( $analysis->get_remote_project_path(), "logs"));
 }
 
 ## ================================================================================
@@ -512,7 +512,7 @@ if ($is_remote && $stage){
     printBanner("STAGING REMOTE SEARCH DATABASE");
     if (defined($hmmdb_name) && ($use_hmmsearch || $use_hmmscan)){
 	$analysis->MRC::Run::remote_transfer_search_db($hmmdb_name, "hmm");
-	if (!$scratch){
+	if (!$use_scratch){
 	    print "Not using remote scratch space, apparently... I guess there is some gunzipping going on?\n";
 	    #should do optimization here
 	    $analysis->MRC::Run::gunzip_remote_dbs($hmmdb_name, "hmm");
@@ -534,9 +534,9 @@ if ($is_remote && $stage){
 	    print "Building remote formatdb script...\n";
 	    my $formatdb_script_path = "$local_ffdb/projects/$projID/run_formatdb.sh";
 	    my $remote_script_path   = $analysis->get_remote_formatdb_script(); # a file and not a directory!
-	    #build_remote_formatdb_script($formatdb_script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	    #my @args = ("build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-	    build_remote_script_generic("perl $localScriptDir/build_remote_formatdb_script.pl -o $formatdb_script_path -n $nsplits --name $blastdb_name -p $project_path -s $scratch");
+	    #build_remote_formatdb_script($formatdb_script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $use_scratch);
+	    #my @args = ("build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $use_scratch");
+	    build_remote_script_generic("perl $localScriptDir/build_remote_formatdb_script.pl -o $formatdb_script_path -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	    MRC::Run::transfer_file($formatdb_script_path, $analysis->get_remote_connection() . ":" . $remote_script_path);
 	    $analysis->MRC::Run::format_remote_blast_dbs($remote_script_path);
 	}
@@ -544,8 +544,8 @@ if ($is_remote && $stage){
 	    print "Building remote lastdb script...\n";
 	    my $lastdb_script       = "$local_ffdb/projects/$projID/run_lastdb.sh";
 	    my $remote_script_path  = $analysis->get_remote_lastdb_script(); # a file and not a directory!
-	    #build_remote_lastdb_script($lastdb_script, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	    build_remote_script_generic("perl $localScriptDir/build_remote_lastdb_script.pl -o $lastdb_script -n $nsplits --name $blastdb_name -p $project_path -s $scratch");
+	    #build_remote_lastdb_script($lastdb_script, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $use_scratch);
+	    build_remote_script_generic("perl $localScriptDir/build_remote_lastdb_script.pl -o $lastdb_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	    MRC::Run::transfer_file($lastdb_script, $analysis->get_remote_connection() . ":" . $remote_script_path);
 	    $analysis->MRC::Run::format_remote_blast_dbs($remote_script_path);
 	}
@@ -565,7 +565,7 @@ if ($is_remote) {
 	print "number of hmm searches: $n_hmm_searches\n";
 	print "number of hmm splits: $nsplits\n";
 
-	build_remote_script_generic("perl $localScriptDir/build_remote_hmmscan_script.pl -z $n_hmm_searches -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $scratch");
+	build_remote_script_generic("perl $localScriptDir/build_remote_hmmscan_script.pl -z $n_hmm_searches -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $use_scratch");
 	#build_remote_hmmscan_script($h_script, $n_hmm_searches, $hmmdb_name, $nsplits, $analysis->get_remote_project_path());
 	MRC::Run::transfer_file($h_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_hmmscan_script());
     }
@@ -577,8 +577,8 @@ if ($is_remote) {
 	my $nsplits     = $analysis->MRC::DB::get_number_db_splits("hmm");
 	print "number of searches: $n_sequences\n";
 	print "number of hmmdb splits: $nsplits\n";
-	#build_remote_hmmsearch_script($h_script, $n_sequences, $hmmdb_name, $nsplits, $analysis->get_remote_project_path(), $scratch);
-	build_remote_script_generic("perl $localScriptDir/build_remote_hmmsearch_script.pl -z $n_sequences -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $scratch");
+	#build_remote_hmmsearch_script($h_script, $n_sequences, $hmmdb_name, $nsplits, $analysis->get_remote_project_path(), $use_scratch);
+	build_remote_script_generic("perl $localScriptDir/build_remote_hmmsearch_script.pl -z $n_sequences -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $use_scratch");
 	MRC::Run::transfer_file($h_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_hmmsearch_script());
     }
     if ($use_blast){
@@ -588,22 +588,21 @@ if ($is_remote) {
 	my $nsplits    = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
 	print "number of blast db splits: $nsplits\n";
-	#build_remote_blastsearch_script($b_script, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	build_remote_script_generic("perl $localScriptDir/build_remote_blast_script.pl -z $db_length -o $b_script -n $nsplits --name $blastdb_name -p $project_path -s $scratch");
+	#build_remote_blastsearch_script($b_script, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $use_scratch);
+	build_remote_script_generic("perl $localScriptDir/build_remote_blast_script.pl -z $db_length -o $b_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	MRC::Run::transfer_file($b_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_blast_script());
     }
     if ($use_last){
 	printBanner("BUILDING REMOTE LAST SCRIPT");
 	#we use the blast script code as a template given the similarity between the methods, so there are some common var names between the block here and above
-	my $b_script     = "$local_ffdb/projects/$projID/run_last.sh";
+	my $last_local     = "$local_ffdb/projects/$projID/run_last.sh";
 	my $db_length    = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
 	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
 	print "number of last db splits: $nsplits\n";
-	build_remote_script_generic("perl $localScriptDir/build_remote_last_script.pl -z $db_length -o $b_script -n $nsplits --name $blastdb_name -p $project_path -s $scratch");
-	#build_remote_lastsearch_script($b_script, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $scratch);
-	#my @args = ("build_remote_blast_script.pl -z $db_length", "-o $b_script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $scratch");
-	MRC::Run::transfer_file($b_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_last_script());
+	build_remote_script_generic("perl $localScriptDir/build_remote_last_script.pl -z $db_length -o $last_local -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
+	#build_remote_lastsearch_script($last_local, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $use_scratch);
+	MRC::Run::transfer_file($last_local, $analysis->get_remote_connection() . ":" . $analysis->get_remote_last_script());
     }
 }
 

@@ -8,15 +8,15 @@ use Getopt::Long;
 my ( $outfile, $in_split_db_dir, $n_seqs_per_db_split );
 my $n_searches     = 1;
 my $n_splits       = 1;
-my $bigmem         = 0; #should this select a big memory machine or not?
-my $array          = 1; #should this use array jobs or not?
+my $use_bigmen         = 0; #should this select a big memory machine or not?
+my $use_array          = 1; #should this use array jobs or not?
 #might need to tune this variable
 my $memory         = "5G"; #include units in this string, G for Gigabytes, K for Kilobytes
 #my $walltime       = "336:00:0";
 my $walltime       = "0:30:0";
 my $projectdir     = ""; #what is the top level project dir on the remote server?
 my $db_name_stem   = ""; #what is the basename of the db splits, ignoring the arrayjob split number?
-my $scratch        = 0; #should we use the local scratch directory?
+my $use_scratch        = 0; #should we use the local scratch directory?
 my $format         = 0; #last setting: -f optoin; 0=tab, 1=maf
 my $max_multiplicity = 1000; #last setting: -m option
 my $min_aln_score    = 40;  #last setting: -e option
@@ -33,7 +33,7 @@ GetOptions(
     "name=s" => \$db_name_stem,
     "z:s"    => \$n_searches,
     "p=s"    => \$projectdir,
-    "s:i"    => \$scratch,
+    "s:i"    => \$use_scratch,
     "m:i"    => \$max_multiplicity,
     "e:i"    => \$min_aln_score,
     );
@@ -60,24 +60,23 @@ print OUT join( "\n",
 		"#\$ -e /dev/null", 
 		"\n" );
 #THE ARRAY JOBS OPTION
-if( $array ){
+if( $use_array ){
     print OUT "#\$ -t 1-" . $n_splits . "\n";
 }
 #MEMORY USAGE
-if( $bigmem ){
+if( $use_bigmen ){
     print OUT "#\$ -l xe5520=true\n";
+} else {
+    print OUT "#\$ -l mem_free=${memory}\n";
 }
-else{
-    print OUT "#\$ -l mem_free=" . $memory . "\n";
-}
+
 #GET VARS FROM COMMAND LINE
 print OUT join( "\n", "INPATH=\$1", "INPUT=\$2", "DBPATH=\$3", "OUTPATH=\$4", "OUTSTEM=\$5", "\n" );
-if( $array ){
-    print OUT "DB=" . $db_name_stem . "_\${SGE_TASK_ID}.fa\n";
+if ($use_array){
+    print OUT "DB=${db_name_stem}_\${SGE_TASK_ID}.fa\n";
     #query_batch_1.fa-seed_seqs_ALL_fci4_6.fa_split_1-last.tab
     print OUT "OUTPUT=\${OUTSTEM}_" . "\${SGE_TASK_ID}" . ".tab\n";
-}
-else{
+} else {
     print OUT "DB=\$6\n";
     print OUT "OUTPUT=\$OUTSTEM\n";
 }
@@ -92,69 +91,71 @@ print OUT join( "\n",
 		"fi",
 		"\n" );
 
+
+my $LAST_ALL = "\$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all";
+
 #GET METADATA ASSOCIATED WITH JOB
 print OUT join( "\n", 
-		"qstat -f -j \${JOB_ID}                             > \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"uname -a                                          >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"echo \"****************************\"             >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"echo \"RUNNING LAST WITH \$*\"                 >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"source /netapp/home/sharpton/.bash_profile        >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"date                                              >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		"qstat -f -j \${JOB_ID}                             > ${LAST_ALL} 2>&1",
+		"uname -a                                          >> ${LAST_ALL} 2>&1",
+		"echo \"****************************\"             >> ${LAST_ALL} 2>&1",
+		"echo \"RUNNING LAST WITH \$*\"                 >> ${LAST_ALL} 2>&1",
+#		"source /netapp/home/sharpton/.bash_profile        >> ${LAST_ALL} 2>&1",
+		"date                                              >> ${LAST_ALL} 2>&1",
 		"\n" );
 
-if( $scratch ){
+if( $use_scratch ){
     #DO SOME ACTUAL WORK: Clean old files
     print OUT join( "\n",
-		    "files=\$(ls /scratch/\${DB}* 2> /dev/null | wc -l )  >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \$files                                         >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "files=\$(ls /scratch/\${DB}* 2> /dev/null | wc -l )  >> ${LAST_ALL} 2>&1",
+		    "echo \$files                                         >> ${LAST_ALL} 2>&1",
 		    "if [ \"\$files\" != \"0\" ]; then",
 		    "    echo \"Removing cache files\"",
 		    "    rm /scratch/\${DB}*",
 		    "else",
 		    "    echo \"No cache files...\"",
-		    "fi                                             >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "fi                                             >> ${LAST_ALL} 2>&1",
 		    "\n" );
     #Copy files over to the node's scratch dir
     print OUT join( "\n",
-		    "echo \"Copying dbfiles to scratch\"            >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "cp \${DBPATH}/\${DB}.gz /scratch/              >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "gunzip /scratch/\${DB}.gz                      >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"Copying input file to scratch\"         >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "cp \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "echo \"Copying dbfiles to scratch\"            >> ${LAST_ALL} 2>&1",
+		    "cp \${DBPATH}/\${DB}.gz /scratch/              >> ${LAST_ALL} 2>&1",
+		    "gunzip /scratch/\${DB}.gz                      >> ${LAST_ALL} 2>&1",
+		    "echo \"Copying input file to scratch\"         >> ${LAST_ALL} 2>&1",
+		    "cp \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> ${LAST_ALL} 2>&1",
 		    "\n");
     #RUN LAST
-    print OUT "date                                                 >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "date                                                 >> ${LAST_ALL} 2>&1\n";
     #looks like last uses only score, not evalue, so no -z like option needed
-#    print OUT "echo \"lastall -p lastp -z " . $n_searches . " -m 8 -d /scratch/\${DB} -i /scratch/\${INPUT} -o /scratch/\${OUTPUT}\" >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-#    print OUT "lastall -p lastp -z " . $n_searches . " -m 8 -d /scratch/\${DB} -i /scratch/\${INPUT} -o /scratch/\${OUTPUT} >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-    print OUT "echo \"lastal -e" . $min_aln_score . " -f" . $format . " -m" . $max_multiplicity . " /scratch/\${DB} /scratch/\${INPUT} -o /scratch/\${OUTPUT}\" >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-    print OUT "lastal -e" . $min_aln_score . " -f" . $format . " -m" . $max_multiplicity . " /scratch/\${DB} /scratch/\${INPUT} -o /scratch/\${OUTPUT} >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+#    print OUT "echo \"lastall -p lastp -z " . $n_searches . " -m 8 -d /scratch/\${DB} -i /scratch/\${INPUT} -o /scratch/\${OUTPUT}\" >> ${LAST_ALL} 2>&1\n";
+#    print OUT "lastall -p lastp -z " . $n_searches . " -m 8 -d /scratch/\${DB} -i /scratch/\${INPUT} -o /scratch/\${OUTPUT} >> ${LAST_ALL} 2>&1\n";
+    print OUT "echo \"lastal -e" . $min_aln_score . " -f" . $format . " -m" . $max_multiplicity . " /scratch/\${DB} /scratch/\${INPUT} -o /scratch/\${OUTPUT}\" >> ${LAST_ALL} 2>&1\n";
+    print OUT "lastal -e" . $min_aln_score . " -f" . $format . " -m" . $max_multiplicity . " /scratch/\${DB} /scratch/\${INPUT} -o /scratch/\${OUTPUT} >> ${LAST_ALL} 2>&1\n";
 
-    print OUT "date                                                 >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "date                                                 >> ${LAST_ALL} 2>&1\n";
     #CLEANUP
     print OUT join( "\n",
-		    "echo \"removing input and dbfiles from scratch\" >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "rm /scratch/\${INPUT}                            >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "rm /scratch/\${DB}*                              >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"moving results to netapp\"                >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "mv /scratch/\${OUTPUT} \${OUTPATH}/\${OUTPUT}    >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"moved to netapp\"                         >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "date                                             >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"RUN FINISHED\"                            >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "echo \"removing input and dbfiles from scratch\" >> ${LAST_ALL} 2>&1",
+		    "rm /scratch/\${INPUT}                            >> ${LAST_ALL} 2>&1",
+		    "rm /scratch/\${DB}*                              >> ${LAST_ALL} 2>&1",
+		    "echo \"moving results to netapp\"                >> ${LAST_ALL} 2>&1",
+		    "mv /scratch/\${OUTPUT} \${OUTPATH}/\${OUTPUT}    >> ${LAST_ALL} 2>&1",
+		    "echo \"moved to netapp\"                         >> ${LAST_ALL} 2>&1",
+		    "date                                             >> ${LAST_ALL} 2>&1",
+		    "echo \"RUN FINISHED\"                            >> ${LAST_ALL} 2>&1",
 		    "\n" );
-}
-else{
+} else {
     print( "Not using scratch\n" );
     #RUN HMMER
-    print OUT "date                                                 >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "date                                                 >> ${LAST_ALL} 2>&1\n";
     #might create switch to futz with F3 filter in the case of long reads
-    print OUT "echo \"lastal -e" . $min_aln_score . " -f" . $format . " -m" . $max_multiplicity . " \${DBPATH}/\${DB} \${INPATH}/\${INPUT} -o \${OUTPATH}/\${OUTPUT}\" >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-    print OUT "lastal -e" . $min_aln_score . " -f" . $format . " -m" . $max_multiplicity . " \${DBPATH}/\${DB} \${INPATH}/\${INPUT} -o \${OUTPATH}/\${OUTPUT} >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-    print OUT "date                                                 >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "echo \"lastal -e" . $min_aln_score . " -f" . $format . " -m" . $max_multiplicity . " \${DBPATH}/\${DB} \${INPATH}/\${INPUT} -o \${OUTPATH}/\${OUTPUT}\" >> ${LAST_ALL} 2>&1\n";
+    print OUT "lastal -e" . $min_aln_score . " -f" . $format . " -m" . $max_multiplicity . " \${DBPATH}/\${DB} \${INPATH}/\${INPUT} -o \${OUTPATH}/\${OUTPUT} >> ${LAST_ALL} 2>&1\n";
+    print OUT "date                                                 >> ${LAST_ALL} 2>&1\n";
     #CLEANUP
     print OUT join( "\n",
-		    "date                                             >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"RUN FINISHED\"                            >> \$LOGS/last/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "date                                             >> ${LAST_ALL} 2>&1",
+		    "echo \"RUN FINISHED\"                            >> ${LAST_ALL} 2>&1",
 		    "\n" );
 }
 close OUT;
