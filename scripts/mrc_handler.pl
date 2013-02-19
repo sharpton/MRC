@@ -47,6 +47,7 @@ use Getopt::Long;
 use Data::Dumper;
 use Bio::SeqIO;
 use File::Basename;
+use File::Spec;
 use IPC::System::Simple qw(capture $EXITVAL);
 use Benchmark;
 
@@ -168,7 +169,7 @@ my $multi                = 1; #should we multiload our inserts to the database?
 my $bulk_insert_count    = 1000;
 my $dbname               = undef; #"Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
 my $schema_name          = undef; #"Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
-my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
+my $should_split_orfs    = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 
 my $verbose              = 0; # Print extra diagnostic info?
 my $dryRun               = 0; # <-- (Default: disabled) If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
@@ -347,7 +348,7 @@ if ($is_remote) {
     if (!$dryRun) {
 	$analysis->build_remote_ffdb($verbose); #checks if necessary to build and then builds
     } else {
-	MRC::dryNotify("Not setting the remote credentials.");
+	MRC::dryNotify("Not setting the remote credentials!");
     }
 }
 
@@ -434,17 +435,15 @@ printBanner("TRANSLATING READS");
 if (!$dryRun) {
     if ($is_remote) {
 	#run transeq remotely, check on SGE job status, pull results back locally once job complete.
-	my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
-	if (!$dryRun) { $analysis->MRC::Run::translate_reads_remote($waittime, $remote_logs, $split_orfs);	}
-	else { MRC::dryNotify("[Dry run]: in a real run, we would have translated reads here."); }
+	my $remoteLogDir = File::Spec->catdir($analysis->get_remote_project_path(), "logs");
+	$analysis->MRC::Run::translate_reads_remote($waittime, $remoteLogDir, $should_split_orfs);
     } else {
-	my $projID = $analysis->get_project_id();
+	# local... this never actually gets called though, since we never run without $is_remote right now
 	foreach my $sampleID (@{$analysis->get_sample_ids()}){
-	    my $sample_reads = "${local_ffdb}/projects/$projID/${sampleID}/raw";
-	    my $orfs_file    = "${local_ffdb}/projects/$projID/${sampleID}/orfs";
-	    # We could potentially do some file splitting here to speed up the remote compute...
-	    if (!$dryRun) { $analysis->MRC::Run::translate_reads($sample_reads, $orfs_file); }
-	    else { MRC::dryNotify("[Dry run]: in a real run, we would have translated reads here.\n"); }
+	    my $raw_reads_dir   = File::Spec->catdir(${local_ffdb}, "projects", $analysis->get_project_id(), ${sampleID}, "raw");
+	    my $orfs_output_dir = File::Spec->catdir(${local_ffdb}, "projects", $analysis->get_project_id(), ${sampleID}, "orfs");
+	    MRC::notify("Translating reads for sample ID $sampleID from $raw_reads_dir -> $orfs_output_dir...");
+	    $analysis->MRC::Run::translate_reads($raw_reads_dir, $orfs_output_dir);
 	}
     }
 } else {
@@ -455,15 +454,15 @@ if (!$dryRun) {
 ## ================================================================================
 #LOAD ORFS: reads have been translated, now load them into the DB
 printBanner("LOADING TRANSLATED READS");
-foreach my $sample_id(@{ $analysis->get_sample_ids() }){
+foreach my $sample_id (@{ $analysis->get_sample_ids() }){
     my $projID = $analysis->get_project_id();
-    my $in_orf_dir = "$local_ffdb/projects/$projID/$sample_id/orfs/";
+    my $in_orf_dir = "$local_ffdb/projects/$projID/$sample_id/orfs";
     my $orfCount = 0;
     foreach my $in_orfs(@{ $analysis->MRC::DB::get_split_sequence_paths($in_orf_dir, 1) }){
-	print "Processing orfs in $in_orfs\n";
+	warn "Processing orfs in <$in_orfs>...";
 	my $orfs = Bio::SeqIO->new(-file => $in_orfs, -format => 'fasta');
 	if ($analysis->is_multiload()){
-	    my $trans_algo = ($split_orfs) ? "transeq_split" : "transeq";
+	    my $trans_algo = ($should_split_orfs) ? "transeq_split" : "transeq";
 	    if (!$dryRun) { $analysis->MRC::Run::load_multi_orfs($orfs, $sample_id, $trans_algo); }
 	    else { MRC::dryNotify(); }
 	} else {
@@ -654,7 +653,9 @@ if ($is_remote){
 	}
 	print "Classifying reads for sample $sample_id\n";
 	my $path_to_split_orfs = $analysis->get_sample_path($sample_id) . "/orfs";
-	foreach my $orf_split_file_name(@{ $analysis->MRC::DB::get_split_sequence_paths($path_to_split_orfs , 0) }) {
+
+	# maybe could be glob("$path_to_split_orfs/*")
+	foreach my $orf_split_file_name(@{ $analysis->MRC::DB::get_split_sequence_paths($path_to_split_orfs, 0) }) {
 	    if ($use_hmmscan){
 		my $algo = "hmmscan";
 		my $class_id = $analysis->MRC::DB::get_classification_id(

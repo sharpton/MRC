@@ -33,6 +33,7 @@ use IO::Compress::Gzip qw(gzip $GzipError);
 use Bio::SearchIO;
 use DBIx::Class::ResultClass::HashRefInflator;
 use Benchmark;
+use File::Spec;
 
 # ServerAliveInterval : in SECONDS
 # ServerAliveCountMax : number of times to keep the connection alive
@@ -47,8 +48,9 @@ sub _remote_transfer_internal($$$) {
     my ($src_path, $dest_path, $path_type) = @_;
     ($path_type eq 'directory' or $path_type eq 'file') or die "unsupported path type! must be 'file' or 'directory'. Yours was: '$path_type'.";
     my $COMPRESSION_FLAG = '-C';
+    my $PRESERVE_MODIFICATION_TIMES = '-p';
     my $RECURSIVE_FLAG = ($path_type eq 'directory') ? '-r' : ''; # only specify recursion if DIRECTORIES are being transferred!
-    my $FLAGS = "$COMPRESSION_FLAG $RECURSIVE_FLAG";
+    my $FLAGS = "$COMPRESSION_FLAG $RECURSIVE_FLAG $PRESERVE_MODIFICATION_TIMES";
     my @args = ($FLAGS, $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING, $src_path, $dest_path);
     MRC::notifyAboutScp("scp @args");
     my $results = IPC::System::Simple::capture("scp @args");
@@ -57,18 +59,6 @@ sub _remote_transfer_internal($$$) {
 }
 
 sub ends_in_a_slash($) { return ($_[0] =~ /\/$/); } # return whether or not the first (and only) argument to this function ends in a forward slash (/)
-
-sub remote_transfer_directory($$) {
-    my ($src_path, $dest_path) = @_;
-    return(_remote_transfer_internal($src_path, $dest_path, 'directory'));
-}
-
-sub remote_transfer_file($$) {
-    my ($src_path, $dest_path) = @_;
-    (!ends_in_a_slash($src_path)) or die "Since you are transferring a FILE, the source must not end in a slash (the slash indicates that the source is a DIRECTORY, which is probably incorrect). Your source file was <$src_path> and destination file was <$dest_path>.";
-    return(_remote_transfer_internal($src_path, $dest_path, 'file'));
-}
-
 
 sub transfer_file($$) {
     my ($src_path, $dest_path) = @_;
@@ -79,9 +69,13 @@ sub transfer_file($$) {
 
 sub transfer_directory($$) {
     my ($src_path, $dest_path) = @_;
+    my $src_base  = File::Basename::basename($src_path );
+    my $dest_base = File::Basename::basename($dest_path);
     (!ends_in_a_slash($src_path))  or die "Since you are transferring a DIRECTORY, the source must not end in a slash.  Your source was <$src_path>, and destination was <$dest_path>.";
     (!ends_in_a_slash($dest_path)) or die "Since you are transferring a DIRECTORY, the destination must not end in a slash. This will be the new location of the directory, NOT the name of the parent directory. Your source was <$src_path>, and destination was <$dest_path>.";
-    return(_remote_transfer_internal($src_path, $dest_path, 'directory'));
+    ($src_base eq $dest_base) or die "The ending of the \"$src_path\" must exactly match the ending of the \"$dest_path\"! Example: transferring /some/place to /other/place is OK, but transferring /some/place to /other/placeTWO is NOT OK, because the ending of the source part ('place') is different from the ending of the destination part ('placeTWO')!";
+    my $dest_parent_dir_with_slash = File::Basename::dirname($dest_path) . "/"; # include the slash so we don't actually OVERWRITE this directory if it doesn't already exist
+    return(_remote_transfer_internal($src_path, $dest_parent_dir_with_slash, 'directory'));
 }
 
 sub transfer_file_into_directory($$) {
@@ -299,14 +293,13 @@ sub back_load_samples{
 }
 
 # Note this message: "this is a compute side function. don't use db vars"
-sub translate_reads{
+sub translate_reads {
     my ($self, $input, $output) = @_;
-    my @args     = ("$input", "$output", "-frame=6");
-    # so... $input and $output should be what, directories or something?
-    warn "Should add a sanity check here to make sure $input and $output both exist I guess.";
 
-    my $results  = IPC::System::Simple::capture("transeq @args" );
-    (0 == $EXITVAL) or die("Error translating sequences in $input: $results");
+    (-d $input) or die "Unexpectedly, the input directory <$input> was NOT FOUND! Check to see if this directory really exists.";
+    (-d $output) or die "Unexpectedly, the output directory <$output> was NOT FOUND! Check to see if this directory really exists.";
+    my $results  = IPC::System::Simple::capture("transeq $input $output -frame=6");
+    (0 == $EXITVAL) or die("Error translating sequences in $input -> $output. Result was: $results ");
     return $results;
 }
 
@@ -348,7 +341,6 @@ sub load_multi_orfs{
     my %readHash      = (); #read_alt_id to read_id
     my $numOrfsLoaded = 0;
     while (my $orf = $orfsBioSeqObject->next_seq() ){
-	$numOrfsLoaded++;
 	my $orf_alt_id  = $orf->display_id();
 	my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, $algo );
 	#get the read id, but only if we haven't see this read before
@@ -356,18 +348,14 @@ sub load_multi_orfs{
 	if(defined($readHash{$read_alt_id} ) ){
 	    $read_id = $readHash{$read_alt_id};
 	} else{
-	    my $reads = $self->get_schema->resultset("Metaread")->search(
-		{
-		    read_alt_id => $read_alt_id,
-		    sample_id   => $sample_id,
-		}
-		);
+	    my $reads = $self->get_schema->resultset("Metaread")->search( { read_alt_id => $read_alt_id, sample_id   => $sample_id } ); # "search" takes some kind of anonymous hash or whatever this { } thing is
 	    if ($reads->count() > 1) { die("Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!"); }
 	    my $read = $reads->next();
 	    $read_id = $read->read_id();
 	    $readHash{ $read_alt_id } = $read_id;
 	}
 	$orfHash{ $orf_alt_id } = $read_id;
+	$numOrfsLoaded++;
     }
     $self->MRC::DB::insert_multi_orfs( $sample_id, \%orfHash );
     MRC::notify("Bulk loaded a total of <$numOrfsLoaded> orfs to the database.");
@@ -428,53 +416,46 @@ sub parse_orf_id{
 sub classify_reads{
     my $self = shift;
     my $sample_id  = shift;
-    my $orf_split  = shift; #just the file name of the split, not the full path
+    my $orf_split_filename  = shift; # just the file name of the split, NOT the full path
     my $class_id   = shift; #the classification_id
     my $algo       = shift;
     my $top_hit_type = shift;
+
+    ($orf_split_filename !~ /\//) or die "The orf split FILENAME had a slash in it (it was \"$orf_split_filename\"). But this is only allowed to be a FILENAME, not a directory! Fix this programming error.\n";
+
     #remember, each orf_split has its own search_results sub directory
-    my $search_results = $self->get_sample_path( $sample_id ) . "/search_results/$algo/$orf_split";
+    my $search_results = File::Spec->catfile($self->get_sample_path($sample_id), "search_results", $algo, $orf_split_filename);
     print "processing $search_results using best $top_hit_type\n";
-#    my $hmmdb_name     = $self->get_hmmdb_name();
-#    my $blastdb_name   = $self->get_blastdb_name();
-    my $query_seqs     = $self->get_sample_path($sample_id) . "/orfs/$orf_split";
-    #this is a hash
-    my $hit_map        = initialize_hit_map( $query_seqs );
+    my $query_seqs     = File::Spec->catfile($self->get_sample_path($sample_id), "orfs", $orf_split_filename);
+    my $hitHashPtr        = initialize_hit_map( $query_seqs );     #this is a hash POINTER apparently??
     #open search results, get all results for this split
     opendir( RES, $search_results ) || die "Can't open $search_results for read in classify_reads: $!\n";
     my @result_files = readdir( RES );
     closedir( RES );
     foreach my $result_file( @result_files ){
-	next unless( $result_file =~ m/$orf_split/ );
-	#troubleshooting
-#	next unless( $result_file =~ m/\_110\.tab/ );
+	if(not( $result_file =~ m/$orf_split_filename/ )) {
+	    warn "Skipped the file $result_file, as it did not match the name: $orf_split_filename.";
+	    next; ## skip it!
+	}
 
-	if( $algo eq "hmmscan" ){
-	    #use the database name to enable multiple searches against different databases
-	    my $database_name = $self->get_hmmdb_name();
-	    next unless( $result_file =~ m/$database_name/ );	
-	    $hit_map = $self->MRC::Run::parse_search_results("$search_results/${result_file}", "hmmscan", $hit_map );
-	}
-	elsif( $algo eq "hmmsearch" ){
-	    #use the database name to enable multiple searches against different databases
-	    my $database_name = $self->get_hmmdb_name();
-	    next unless( $result_file =~ m/$database_name/ );
-	    print "processing $result_file\n";
-	    $hit_map = $self->MRC::Run::parse_search_results("$search_results/$result_file", "hmmsearch", $hit_map );
-	}
-	elsif( $algo eq "blast" ){
-	    #use the database name to enable multiple searches against different databases
-	    my $database_name = $self->get_blastdb_name();
-	    next unless( $result_file =~ m/$database_name/ );
-	    #because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
-	    $hit_map = $self->MRC::Run::parse_search_results("$search_results/$result_file", "blast", $hit_map, $query_seqs );
-	}
-	elsif( $algo eq "last" ){
-	    #use the database name to enable multiple searches against different databases
-	    my $database_name = $self->get_blastdb_name();
-	    next unless( $result_file =~ m/$database_name/ );
-	    #because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
-	    $hit_map = $self->MRC::Run::parse_search_results("$search_results/$result_file", "last", $hit_map, $query_seqs );	    
+	my $database_name = undef;
+	my $query_seqs_for_function_call = undef;
+
+	if ($algo eq "hmmscan" or $algo eq "hmmsearch") {
+	    $database_name = $self->get_hmmdb_name();
+	} elsif ($algo eq "blast" or $algo eq "last") {
+	    $database_name = $self->get_blastdb_name();
+	    $query_seqs_for_function_call = $query_seqs; # because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
+	} else { die "Bad algorithm choice : $algo"; }
+	
+	#use the database name to enable multiple searches against different databases
+	if (not($result_file =~ m/$database_name/)) {
+	    warn "Skpping $result_file for some reason, as it did not match the name $database_name.";
+	    warn "Note that 'last' also matches in 'blast'! Not super sure this is intentional";
+	    # SKIP if the result file doesn't match this name!
+	} else {
+	    print "Processing \"$result_file\" with <$algo>...";
+	    $hitHashPtr = $self->MRC::Run::parse_search_results("$search_results/${result_file}", $algo, $hitHashPtr, $query_seqs_for_function_call );
 	}
     }
     #now insert the data into the database
@@ -487,29 +468,29 @@ sub classify_reads{
 	#dbi is needed for speed on big data sets
 #	timethese( 5000, 
 #		   { 
-#		       'Method DBIx'  =>  sub{ $hit_map = $self->MRC::Run::filter_hit_map_for_top_reads( $sample_id, $is_strict, $algo, $hit_map ) },
-#		       'Method DBI'   =>  sub{ $hit_map = $self->MRC::Run::filter_hit_map_for_top_reads_dbi( $sample_id, $is_strict, $algo, $hit_map ) },
-#		       'Method DBI_s' =>  sub{ $hit_map = $self->MRC::Run::filter_hit_map_for_top_reads_dbi_single( $sample_id, $is_strict, $algo, $hit_map ) },
+#		       'Method DBIx'  =>  sub{ $hitHashPtr = $self->MRC::Run::filter_hit_map_for_top_reads( $sample_id, $is_strict, $algo, $hitHashPtr ) },
+#		       'Method DBI'   =>  sub{ $hitHashPtr = $self->MRC::Run::filter_hit_map_for_top_reads_dbi( $sample_id, $is_strict, $algo, $hitHashPtr ) },
+#		       'Method DBI_s' =>  sub{ $hitHashPtr = $self->MRC::Run::filter_hit_map_for_top_reads_dbi_single( $sample_id, $is_strict, $algo, $hitHashPtr ) },
 #		   }
 #	    );
 
-	$hit_map = $self->MRC::Run::filter_hit_map_for_top_reads_dbi_single( $orf_split, $sample_id, $is_strict, $algo, $hit_map );
-	print "finished filtering, on " . `date`;
+	$hitHashPtr = $self->MRC::Run::filter_hit_map_for_top_reads_dbi_single( $orf_split_filename, $sample_id, $is_strict, $algo, $hitHashPtr );
+	print "Finished filtering, on " . `date`;
     }
     #dbi for speed
     my $dbh  = $self->MRC::DB::build_dbh();
-    while( my ( $orf_alt_id, $value) = each %$hit_map ){
+    while( my ( $orf_alt_id, $value) = each(%$hitHashPtr) ){
 	#note: since we know which reads don't have hits, we could, here produce a summary stat regarding unclassified reads...
 	#for now, we won't add these to the datbase
-	next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+	next unless( $hitHashPtr->{$orf_alt_id}->{"has_hit"} );
 	#how we insert into the db may change depending on whether we do strict of fuzzy clustering
 	if( $is_strict ){
 	    $n_hits++;
 	    #turn these on if you decide to add search result into the database
-#	    my $evalue   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-#	    my $coverage = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-#	    my $score    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
-	    my $hit    = $hit_map->{$orf_alt_id}->{$is_strict}->{"target"};
+#	    my $evalue   = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"};
+#	    my $coverage = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"coverage"};
+#	    my $score    = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"};
+	    my $hit    = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"target"};
 	    my $famid;
 	    #blast hits are gene_oids, which map to famids via the database (might change refdb seq headers to include famid in header
 	    #which would enable faster flatfile lookup).
@@ -552,12 +533,12 @@ sub classify_reads{
 }
 
 sub filter_hit_map_for_top_reads{
-    my ( $self, $sample_id, $is_strict, $algo, $hit_map ) = @_;
+    my ( $self, $sample_id, $is_strict, $algo, $hitHashPtr ) = @_;
 #    print "Getting top read hit from $algo\n";
     my $read_map = {}; #stores best hit data for each read
 #    print "initialized read map\n";    
     #to speed up the db interaction, we're going to grab orf_ids from disc
-    my $path_to_split_orfs = $self->get_sample_path( $sample_id ) . "/orfs";
+    my $path_to_split_orfs = $self->get_sample_path($sample_id) . "/orfs";
     foreach my $orf_split_file_name( @{ $self->MRC::DB::get_split_sequence_paths( $path_to_split_orfs , 1 ) } ) {
 	open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!\n";
 	my $count = 0;
@@ -565,7 +546,7 @@ sub filter_hit_map_for_top_reads{
 	    chomp $_;
 	    if( $_ =~ m/\>(.*?)$/ ){	     
 		my $orf_alt_id = $1;
-		next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+		next unless( $hitHashPtr->{$orf_alt_id}->{"has_hit"} );
 		my $orf        = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id );
 		my $read_id    = $orf->{"read_id"};
 #PAGER TEST HERE
@@ -584,32 +565,32 @@ sub filter_hit_map_for_top_reads{
 		if( !defined( $read_map->{$read_id} ) ){
 #		    print "adding orf $orf_alt_id\n";
 		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		    $read_map->{$read_id}->{"evalue"}   = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		    $read_map->{$read_id}->{"coverage"} = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		    $read_map->{$read_id}->{"score"}    = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"};
 		}
 		else{
 #		    print "$orf_alt_id is in our hit map...\n";
 		    #for now, we'll simply sort on evalue, since they both pass coverage threshold
-		    if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
-			( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
+		    if( ( $algo ne "last" && $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
+			( $algo eq "last" && $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
 			){
 			my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
 #			print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
-			$hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
+			$hitHashPtr->{$prior_orf_alt_id}->{"has_hit"} = 0;
 	#		print "$read_id\n";
 			$read_map->{$read_id}->{"target"}   = $orf_alt_id;
-			$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-			$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-			$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+			$read_map->{$read_id}->{"evalue"}   = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"};
+			$read_map->{$read_id}->{"coverage"} = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"coverage"};
+			$read_map->{$read_id}->{"score"}    = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"};
 		    }
 		    else{
 #			print "Canceling $orf_alt_id:\n";
 	#		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
-	#		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
-	#		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
+	#		print "..." . $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
+	#		print "..." . $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hitHashPtr->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
 			#get rid of the hit if it's not better than the current top for the read
-			$hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+			$hitHashPtr->{$orf_alt_id}->{"has_hit"} = 0;
 		    }
 		}
 	    }
@@ -619,16 +600,16 @@ sub filter_hit_map_for_top_reads{
 #    $orfs->finish;
 #    $self->MRC::DB::disconnect_dbh( $dbh );
     $read_map = {};
-    return $hit_map;
+    return $hitHashPtr;
 }
 
 sub filter_hit_map_for_top_reads_dbi{
-    my ( $self, $sample_id, $is_strict, $algo, $hit_map ) = @_;
+    my ( $self, $sample_id, $is_strict, $algo, $hitHashPtr ) = @_;
 #    print "Getting top read hit from $algo\n";
     my $read_map = {}; #stores best hit data for each read
 #    print "initialized read map\n";    
     #to speed up the db interaction, we're going to grab orf_ids from disc
-    my $path_to_split_orfs = $self->get_sample_path( $sample_id ) . "/orfs/";
+    my $path_to_split_orfs = $self->get_sample_path( $sample_id ) . "/orfs";
 #    foreach my $orf_split_file_name( @{ $self->MRC::DB::get_split_sequence_paths( $path_to_split_orfs , 1 ) } ) {
 #	open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!\n";
 #	while( <SEQS> ){
@@ -661,37 +642,37 @@ sub filter_hit_map_for_top_reads_dbi{
 	foreach my $orf( @$vals ){
 #	    print Dumper $orf;
 	    my $orf_alt_id = $orf->{"orf_alt_id"};
-	    next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+	    next unless( $hitHashPtr->{$orf_alt_id}->{"has_hit"} );
 	    my $read_id = $orf->{"read_id"};
 	    if( !defined( $read_map->{$read_id} ) ){
 #		print "adding orf $orf_alt_id\n";
 		$read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		$read_map->{$read_id}->{"evalue"}   = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		$read_map->{$read_id}->{"coverage"} = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		$read_map->{$read_id}->{"score"}    = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"};
 	    }
 	    else{
 #		print "$orf_alt_id is in our hit map...\n";
 		#for now, we'll simply sort on evalue, since they both pass coverage threshold
-		if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
-		    ( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
+		if( ( $algo ne "last" && $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
+		    ( $algo eq "last" && $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
 		    ){
 		    my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
 #		    print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
-		    $hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
+		    $hitHashPtr->{$prior_orf_alt_id}->{"has_hit"} = 0;
 #		    print "$read_id\n";
 		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		    $read_map->{$read_id}->{"evalue"}   = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		    $read_map->{$read_id}->{"coverage"} = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		    $read_map->{$read_id}->{"score"}    = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"};
 		}
 		else{
 #		    print "Canceling $orf_alt_id:\n";
 		    #		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
-		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
-		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
+		    #		print "..." . $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
+		    #		print "..." . $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hitHashPtr->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
 		    #get rid of the hit if it's not better than the current top for the read
-		    $hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+		    $hitHashPtr->{$orf_alt_id}->{"has_hit"} = 0;
 		}
 	    }
 	}
@@ -699,56 +680,56 @@ sub filter_hit_map_for_top_reads_dbi{
     $orfs->finish;
     $self->MRC::DB::disconnect_dbh( $dbh );
     $read_map = {};
-    return $hit_map;
+    return $hitHashPtr;
 }
 
 sub filter_hit_map_for_top_reads_dbi_single{
-    my ( $self, $orf_split, $sample_id, $is_strict, $algo, $hit_map ) = @_;
+    my ( $self, $orf_split, $sample_id, $is_strict, $algo, $hitHashPtr ) = @_;
 #    print "Getting top read hit from $algo\n";
     my $read_map = {}; #stores best hit data for each read
 #    print "initialized read map\n";    
     #to speed up the db interaction, we're going to grab orf_ids from disc
-    my $path_to_split_orfs = $self->get_sample_path( $sample_id ) . "/orfs/";
+    my $path_to_split_orfs = $self->get_sample_path($sample_id) . "/orfs";
     my $orf_split_file_name = "$path_to_split_orfs/$orf_split";
     my $dbh  = $self->MRC::DB::build_dbh();
-    open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!\n";
+    open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!";
     while( <SEQS> ){
 	chomp $_;
 	if( $_ =~ m/\>(.*?)$/ ){
 	    my $orf_alt_id = $1;
-	    next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );		
+	    next unless( $hitHashPtr->{$orf_alt_id}->{"has_hit"} );		
 	    my $orfs       = $self->MRC::DB::get_orf_from_alt_id_dbi( $dbh, $orf_alt_id, $sample_id );
 	    my $orf        = $orfs->fetchall_arrayref();
 	    my $read_id = $orf->[0][2];
 	    if( !defined( $read_map->{$read_id} ) ){
 #		print "adding orf $orf_alt_id\n";
 		$read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		$read_map->{$read_id}->{"evalue"}   = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		$read_map->{$read_id}->{"coverage"} = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		$read_map->{$read_id}->{"score"}    = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"};
 	    }
 	    else{
 #		print "$orf_alt_id is in our hit map...\n";
 		#for now, we'll simply sort on evalue, since they both pass coverage threshold
-		if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
-		    ( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
+		if( ( $algo ne "last" && $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
+		    ( $algo eq "last" && $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
 		    ){
 		    my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
 #		    print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
-		    $hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
+		    $hitHashPtr->{$prior_orf_alt_id}->{"has_hit"} = 0;
 #		    print "$read_id\n";
 		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+		    $read_map->{$read_id}->{"evalue"}   = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"evalue"};
+		    $read_map->{$read_id}->{"coverage"} = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"coverage"};
+		    $read_map->{$read_id}->{"score"}    = $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"};
 		}
 		else{
 #		    print "Canceling $orf_alt_id:\n";
 		    #		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
-		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
-		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
+		    #		print "..." . $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
+		    #		print "..." . $hitHashPtr->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hitHashPtr->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
 		    #get rid of the hit if it's not better than the current top for the read
-		    $hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+		    $hitHashPtr->{$orf_alt_id}->{"has_hit"} = 0;
 		}
 	    }
 	    $orfs->finish;	
@@ -757,7 +738,7 @@ sub filter_hit_map_for_top_reads_dbi_single{
     close SEQS;
     $self->MRC::DB::disconnect_dbh( $dbh );
     $read_map = {};
-    return $hit_map;
+    return $hitHashPtr;
 }
 
 
@@ -766,8 +747,8 @@ sub parse_search_results{
     my $self         = shift;
     my $file         = shift;
     my $type         = shift;
-    my $hit_map      = shift;
-    my $orfs_file    = shift; #only required for blast; used to get sequence lengths for coverage calculation
+    my $hitHashPtr      = shift;
+    my $orfs_file    = shift; # $orfs_file is only required for blast; used to get sequence lengths for coverage calculation
 #    my %hit_map      = %{ $r_hit_map };
     #define clustering thresholds
     my $t_evalue   = $self->get_evalue_threshold();   #dom-ieval threshold
@@ -779,6 +760,12 @@ sub parse_search_results{
     if( $type eq "blast" ){
 	%seqlens   = %{ _underscore_get_sequence_lengths_from_file( $orfs_file ) };
     }
+    if ($type eq "last") {
+	warn "Alex's Warning: the orfs_file variable is SPECIFIED when last is called, yet we do not call the code above! Either the call to parse_search_results with last should NOT include query_seqs, or we should change the line above to say if the string is 'blast' OR 'last' and not just blast!";
+	%seqlens   = %{ _underscore_get_sequence_lengths_from_file( $orfs_file ) };
+	warn "Alex added the line above. Not sure if it's right, but at least it's consistent...";
+    }
+
     #open the file and process each line
 #    print "classifying reads from $file\n";
     open( RES, "$file" ) || die "can't open $file for read: $!\n";    
@@ -891,30 +878,30 @@ sub parse_search_results{
 	if( ( $evalue <= $t_evalue && $coverage >= $t_coverage ) ||
 	    ( $type eq "last" && $score >= $t_score && $coverage >= $t_coverage ) ){
 	    #is this the first hit for the query?
-	    if ($hit_map->{$qid}->{"has_hit"} == 0) {
+	    if ($hitHashPtr->{$qid}->{"has_hit"} == 0) {
 		#note that we use is_strict to differentiate top hit clustering from fuzzy clustering w/in hash
-		$hit_map->{$qid}->{$is_strict}->{"target"}   = $tid;
-		$hit_map->{$qid}->{$is_strict}->{"evalue"}   = $evalue;
-		$hit_map->{$qid}->{$is_strict}->{"coverage"} = $coverage;
-		$hit_map->{$qid}->{$is_strict}->{"score"}    = $score;
-		$hit_map->{$qid}->{"has_hit"} = 1;
+		$hitHashPtr->{$qid}->{$is_strict}->{"target"}   = $tid;
+		$hitHashPtr->{$qid}->{$is_strict}->{"evalue"}   = $evalue;
+		$hitHashPtr->{$qid}->{$is_strict}->{"coverage"} = $coverage;
+		$hitHashPtr->{$qid}->{$is_strict}->{"score"}    = $score;
+		$hitHashPtr->{$qid}->{"has_hit"} = 1;
 	    } elsif ($is_strict) {
 		#only add if the current hit is better than the prior best hit. start with best evalue
 #		print "evalue: $evalue\n";
 #		print "coverage: $coverage\n";
 #		print "score: $score\n";
-#		print "stored: " . $hit_map->{$qid}->{$is_strict}->{"evalue"} . "\n";
-		if( ( $evalue < $hit_map->{$qid}->{$is_strict}->{"evalue"} ||
-		    ( $type eq "last" && $score > $hit_map->{$qid}->{$is_strict}->{"score"} ) ) ||
+#		print "stored: " . $hitHashPtr->{$qid}->{$is_strict}->{"evalue"} . "\n";
+		if( ( $evalue < $hitHashPtr->{$qid}->{$is_strict}->{"evalue"} ||
+		    ( $type eq "last" && $score > $hitHashPtr->{$qid}->{$is_strict}->{"score"} ) ) ||
 		    #if tie, use coverage to break
-		    ( $evalue == $hit_map->{$qid}->{$is_strict}->{"evalue"} &&
-		      $coverage > $hit_map->{$qid}->{$is_strict}->{"coverage"} ) 
+		    ( $evalue == $hitHashPtr->{$qid}->{$is_strict}->{"evalue"} &&
+		      $coverage > $hitHashPtr->{$qid}->{$is_strict}->{"coverage"} ) 
 		    ){
 		    #add the hits here
-		    $hit_map->{$qid}->{$is_strict}->{"target"}   = $tid;
-		    $hit_map->{$qid}->{$is_strict}->{"evalue"}   = $evalue;
-		    $hit_map->{$qid}->{$is_strict}->{"coverage"} = $coverage;
-		    $hit_map->{$qid}->{$is_strict}->{"score"}    = $score;
+		    $hitHashPtr->{$qid}->{$is_strict}->{"target"}   = $tid;
+		    $hitHashPtr->{$qid}->{$is_strict}->{"evalue"}   = $evalue;
+		    $hitHashPtr->{$qid}->{$is_strict}->{"coverage"} = $coverage;
+		    $hitHashPtr->{$qid}->{$is_strict}->{"score"}    = $score;
 		}
 	    } else {
 		#if stict clustering, we might have a pefect tie. Winner is the first one we find, so pass
@@ -924,14 +911,14 @@ sub parse_search_results{
 		}
 		#else, add every threshold passing hit to the hash
 		#since we aren't yet storing search results in db, we don't need to do this. turning off for speed and RAM
-#		$hit_map{$qid}->{$is_strict}->{$tid}->{"evalue"}   = $evalue;
-#		$hit_map{$qid}->{$is_strict}->{$tid}->{"coverage"} = $coverage;
-#		$hit_map{$qid}->{$is_strict}->{$tid}->{"score"}    = $score;
+#		$hitHashPtr{$qid}->{$is_strict}->{$tid}->{"evalue"}   = $evalue;
+#		$hitHashPtr{$qid}->{$is_strict}->{$tid}->{"coverage"} = $coverage;
+#		$hitHashPtr{$qid}->{$is_strict}->{$tid}->{"score"}    = $score;
 	    }
 	}
     }
     close RES;
-    return $hit_map;
+    return $hitHashPtr;
 }
 
 #produce a hashtab that maps sequence ids to sequence lengths
@@ -967,65 +954,65 @@ sub _underscore_get_sequence_lengths_from_file{
 sub initialize_hit_map{
     my $seq_file = shift;
 #    my $seqs     = Bio::SeqIO->new( -file => $seq_file, -format => 'fasta' );
-    my $hit_map  = {}; #a hashref
+    my $hitHashPtr  = {}; #a hashref
 #    while( my $seq = $seqs->next_seq() ){
 #	my $id = $seq->display_id();
-#	$hit_map{$id}->{"has_hit"} = 0;
+#	$hitHashPtr{$id}->{"has_hit"} = 0;
 #    }
     open( SEQS, $seq_file ) || die "can't open $seq_file in initialize_hit_map\n";
     while( <SEQS> ){
 	next unless ( $_ =~ m/^\>/ );
 	chomp $_;
 	$_ =~ s/^\>//;
-	$hit_map->{$_}->{"has_hit"} = 0;
+	$hitHashPtr->{$_}->{"has_hit"} = 0;
 	
     }
     close SEQS;
-    return $hit_map;
+    return $hitHashPtr;
 }
 
 #this is a depricated function given upstream changes in the workflow. use classify_reads instead
-sub classify_reads_depricated{
-  my $self       = shift;
-  my $sample_id  = shift;
-  my $hscresults = shift;
-  my $evalue     = shift;
-  my $coverage   = shift;
-  my $ffdb       = $self->get_ffdb();
-  my $project_id = $self->get_project_id();
-  my $results    = Bio::SearchIO->new( -file => $hscresults, -format => 'hmmer3' );
-  my $count      = 0;
-  while( my $result = $results->next_result ){
-      $count++;
-      my $qorf = $result->query_name();
-      my $qacc = $result->query_accession();
-      my $qdes = $result->query_description();
-      my $qlen = $result->query_length();
-      my $nhit = $result->num_hits();
-      if( $nhit > 0 ){
-	  while( my $hit = $result->next_hit ){
-	      my $hmm    = $hit->name();
-	      my $score  = $hit->raw_score();
-	      my $signif = $hit->significance();
-	      while( my $hsp = $hit->next_hsp ){
-		  my $hsplen = $hsp->length('total');
-		  my $hqlen  = $hsp->length('query');
-		  my $hhlen  = $hsp->length('hit');
-		  #print join ("\t", $qorf, $qacc, $qdes, $qlen, $nhit, $hmm, $score, $signif, $hqlen, "\n");
-		  #if hit passes thresholds, push orf into the family
-		  if( $signif <= $evalue && 
-		      ( $hqlen / $qlen)  >= $coverage ){
-		      my $orf = $self->MRC::DB::get_orf_from_alt_id( $qorf, $sample_id );
-		      my $orf_id = $orf->orf_id();
-		      $self->MRC::DB::insert_family_member_orf( $orf_id, $hmm );
-		  }
-	      }
-	  }
-      }
-  }
-  warn "Processed $count search results from $hscresults\n";
-  #return $self;
-}
+# sub classify_reads_depricated{
+#   my $self       = shift;
+#   my $sample_id  = shift;
+#   my $hscresults = shift;
+#   my $evalue     = shift;
+#   my $coverage   = shift;
+#   my $ffdb       = $self->get_ffdb();
+#   my $project_id = $self->get_project_id();
+#   my $results    = Bio::SearchIO->new( -file => $hscresults, -format => 'hmmer3' );
+#   my $count      = 0;
+#   while( my $result = $results->next_result ){
+#       $count++;
+#       my $qorf = $result->query_name();
+#       my $qacc = $result->query_accession();
+#       my $qdes = $result->query_description();
+#       my $qlen = $result->query_length();
+#       my $nhit = $result->num_hits();
+#       if( $nhit > 0 ){
+# 	  while( my $hit = $result->next_hit ){
+# 	      my $hmm    = $hit->name();
+# 	      my $score  = $hit->raw_score();
+# 	      my $signif = $hit->significance();
+# 	      while( my $hsp = $hit->next_hsp ){
+# 		  my $hsplen = $hsp->length('total');
+# 		  my $hqlen  = $hsp->length('query');
+# 		  my $hhlen  = $hsp->length('hit');
+# 		  #print join ("\t", $qorf, $qacc, $qdes, $qlen, $nhit, $hmm, $score, $signif, $hqlen, "\n");
+# 		  #if hit passes thresholds, push orf into the family
+# 		  if( $signif <= $evalue && 
+# 		      ( $hqlen / $qlen)  >= $coverage ){
+# 		      my $orf = $self->MRC::DB::get_orf_from_alt_id( $qorf, $sample_id );
+# 		      my $orf_id = $orf->orf_id();
+# 		      $self->MRC::DB::insert_family_member_orf( $orf_id, $hmm );
+# 		  }
+# 	      }
+# 	  }
+#       }
+#   }
+#   warn "Processed $count search results from $hscresults\n";
+#   #return $self;
+#}
 
 sub build_search_db{
     my $self        = shift;
@@ -1185,7 +1172,7 @@ sub _grab_seqs_from_lookup_list{
     my $seq_file    = shift; #compressed sequence file
     my $out_seqs    = shift; #compressed retained sequences
 
-    my $lookup      = {}; # apparently this is a hash pointer? or list or something?
+    my $lookup      = {}; # apparently this is a hash pointer? or list or something? It isn't a "%" variable for some reason.
     print "Selecting reps from $seq_file, using $seq_id_list. Results in $out_seqs\n";
     #build lookup hash
     open( LOOK, $seq_id_list ) || die "Can't open $seq_id_list for read: $!\n";
@@ -1208,34 +1195,37 @@ sub _grab_seqs_from_lookup_list{
 
 #calculates total amount of sequence in a file (looks like actually in a DIRECTORY rather than a file)
 sub calculate_blast_db_length{
-    my($self) = @_;
-    my $length  = 0;
-    my $db_name = $self->get_blastdb_name();
-    my $db_path = $self->get_ffdb() . "/$BLASTDB_DIR/$db_name";
+    my ($self) = @_;
+
+    (defined($self->get_blastdb_name())) or die "dbname was not already defined! This is a fatal error.";
+    (defined($self->get_ffdb())) or die "ffdb was not already defined! This is a fatal error.";
+
+    my $db_path = File::Spec->catdir($self->get_ffdb(), $BLASTDB_DIR, $self->get_blastdb_name());
     opendir( DIR, $db_path ) || die "Can't opendir $db_path for read: $! ";
     my @files = readdir(DIR);
     closedir DIR;
     my $numFilesRead = 0;
 
     my $PRINT_OUTPUT_EVERY_THIS_MANY_FILES = 25;
+    my $lenTotal  = 0;
     foreach my $file (@files) {
 	next unless( $file =~ m/\.fa/ ); # ONLY include files ending in .fa
-	my $lengthThisFileOnly = $self->MRC::Run::get_sequence_length_from_file("$db_path/$file");
-	$length += $lengthThisFileOnly;
+	my $lengthThisFileOnly = $self->MRC::Run::get_sequence_length_from_file( File::Spec->catfile($db_path, $file));
+	$lenTotal += $lengthThisFileOnly;
 	$numFilesRead++;
 	if ($numFilesRead == 1 or ($numFilesRead % $PRINT_OUTPUT_EVERY_THIS_MANY_FILES == 0)) {
 	    # Print diagnostic data for the FIRST entry, as well as periodically, every so often.
-	    MRC::notify("[$numFilesRead/" . scalar(@files) . "]: Got a sequence length of $lengthThisFileOnly from <$file>. Total length: $length");
+	    MRC::notify("[$numFilesRead/" . scalar(@files) . "]: Got a sequence length of $lengthThisFileOnly from <$file>. Total length: $lenTotal");
 	}
     }
-    MRC::notify("$numFilesRead files were read. Total sequence length was: $length");
-    return $length;
+    MRC::notify("$numFilesRead files were read. Total sequence length was: $lenTotal");
+    return $lenTotal;
 }
 
 sub get_sequence_length_from_file{
     my($self, $file) = @_;
     #my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
-    open(FILE, "zcat --force $file") || die "Unable to open <$file> for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
+    open(FILE, "zcat --force $file") || die "Unable to open the file \"$file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
     my $seqLength = 0;
     while(<FILE>){
 	next if ($_ =~ m/^\>/); # skip lines that start with a '>'
@@ -1331,54 +1321,58 @@ sub load_project_remote{
 
 #the qsub -sync y option keeps the connection open. lower chance of a connection failure due to a ping flood, but if connection between
 #local and remote tends to drop, this may not be foolproof
-sub translate_reads_remote{
-    my ($self, $waitTimeInSeconds, $logsdir, $split_orfs) = @_;
-    # "split_orfs" argument means "split orfs on stop?" Should be 1 or 0.
-
+sub translate_reads_remote($$$$) {
+    my ($self, $waitTimeInSeconds, $logsdir, $should_we_split_orfs) = @_;
+    ($should_we_split_orfs == 1 or $should_we_split_orfs == 0) or die "Split orf setting should either be 1 or 0! Other values NOT ALLOWED. Even 'undef' is not allowed. Fix this programming error. The value was: <$should_we_split_orfs>.";
     #push translation scripts to remote server
     my $connection = $self->get_remote_connection();
     my $remote_script_dir = $self->get_remote_script_dir();
 
-    my $remote_handler  = $self->get_scripts_dir() . "/remote/run_transeq_handler.pl";
-    my $remote_script   = $self->get_scripts_dir() . "/remote/run_transeq_array.sh"; # what is going on here
-    my $transeqPerlRemote = "$remote_script_dir/run_transeq_handler.pl";
+    my $local_copy_of_remote_handler  = File::Spec->catfile($self->get_scripts_dir(), "remote", "run_transeq_handler.pl");
+    my $local_copy_of_remote_script   = File::Spec->catfile($self->get_scripts_dir(), "remote", "run_transeq_array.sh"); # what is going on here
+    my $transeqPerlRemote = File::Spec->catfile($remote_script_dir, "run_transeq_handler.pl");
     
-    MRC::Run::transfer_file_into_directory($remote_handler, "$connection:$remote_script_dir/"); # transfer the script into the remote directory
-    MRC::Run::transfer_file_into_directory($remote_script,  "$connection:$remote_script_dir/"); # transfer the script into the remote directory
-    foreach my $sample_id( @{$self->get_sample_ids()} ) {
-	my $remote_input_dir    = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/raw";
-	my $remote_output_dir   = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs";
+    MRC::Run::transfer_file_into_directory($local_copy_of_remote_handler, "$connection:$remote_script_dir/"); # transfer the script into the remote directory
+    MRC::Run::transfer_file_into_directory($local_copy_of_remote_script,  "$connection:$remote_script_dir/"); # transfer the script into the remote directory
 
-	MRC::notify("Translating reads...");
-	if ($split_orfs) {
+    warn "About to translate reads...";
+    my $numReadsTranslated = 0;
+    foreach my $sample_id( @{$self->get_sample_ids()} ) {
+	my $remote_input_dir    = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "raw");
+	my $remote_output_dir   = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "orfs");
+	MRC::notify("Translating reads on the REMOTE machine, from $remote_input_dir to $remote_output_dir...");
+	if ($should_we_split_orfs) {
 	    # Split the ORFs!
 	    my $local_unsplit_dir  =        $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # This is where the files will be tranferred BACK to. Should NOT end in a slash!
 	    my $remote_unsplit_dir = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # Should NOT end in a slash!
-	    my $tempStdoutLocationOnRemoteMachine = "$remote_unsplit_dir/tmp.out"; # used to be "~/tmp.out"
-	    my $remote_cmd = "\'perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . " -u $remote_unsplit_dir" . " > ${tempStdoutLocationOnRemoteMachine} \'";
+	    my $remote_cmd = "\'" . "perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . " -u $remote_unsplit_dir" . "\'";
 	    execute_ssh_cmd( $connection, $remote_cmd );
 	    MRC::notify("Translation complete, Transferring split and raw translated orfs\n");
-	    MRC::Run::transfer_directory("${connection}:$remote_unsplit_dir", $local_unsplit_dir); #the unsplit orfs
+	    MRC::Run::transfer_directory("${connection}:$remote_unsplit_dir", $local_unsplit_dir); # REMOTE to LOCAL: the unsplit orfs
 	} else{ 
 	    my $remote_cmd_no_unsplit = "\'perl ${transeqPerlRemote} " . " -i $remote_input_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . "\'";
 	    execute_ssh_cmd($connection, $remote_cmd_no_unsplit);
 	}
 	MRC::notify("Translation complete, Transferring ORFs\n");
-	my $localOrfDir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/${sample_id}/orfs";
+	
+	my $theOutput = execute_ssh_cmd($connection, "ls -l $remote_output_dir/");
+	MRC::notify("Got the following files that were generated on the remote machine: $theOutput");
+
+	my $localOrfDir  = File::Spec->catdir($self->get_sample_path($sample_id), "orfs");
 	MRC::Run::transfer_directory("$connection:$remote_output_dir", $localOrfDir); # This happens in both cases, whether or not the orfs are split!
+	$numReadsTranslated++;
     }
-    MRC::notify("All reads were translated on the remote server and locally acquired.");
+    MRC::notify("All reads were translated on the remote server and locally acquired. Total number of translated reads: $numReadsTranslated");
+    ($numReadsTranslated > 0) or die "Uh oh, the number of reads translated was ZERO! This probably indicates a serious problem.";
 }
 
 #if you'd rather routinely ping the remote server to check for job completion. not default
 sub translate_reads_remote_ping{
     my ($self, $waitTimeInSeconds) = @_; # waitTimeInSeconds is the amount of time between queue checks
-
     my $connection  = $self->get_remote_connection();
     my $pid         = $self->get_project_id();
     my $remote_ffdb = $self->get_remote_ffdb();
     my $local_ffdb  = $self->get_ffdb();
-
     my %jobs = ();
     foreach my $sample_id( @{$self->get_sample_ids()} ){
 	my $remote_input  = "$remote_ffdb/projects/$pid/$sample_id/raw.fa";
@@ -1388,7 +1382,7 @@ sub translate_reads_remote_ping{
 	if ($results =~ m/^Your job (\d+) / ){
 	    my $job_id = $1;
 	    $jobs{$job_id} = $sample_id;
-	} else{
+	} else {
 	    die("Remote server did not return a properly formatted job id! The previous SSH command got the results <$results> instead!");
 	}
     }
@@ -1397,21 +1391,27 @@ sub translate_reads_remote_ping{
     my $time = $self->MRC::Run::remote_job_listener( \@job_ids, $waitTimeInSeconds );
     MRC::notify( "Reads were translated in approximately $time seconds on remote server");
     MRC::notify("Pulling translated reads from remote server"); # <-- consider that a completed job doesn't mean a *successful* run!
-    foreach my $job( keys( %jobs ) ){
-	my $sample_id = $jobs{$job};
-	my $results = MRC::Run::transfer_file("$connection:$remote_ffdb/projects/$pid/$sample_id/orfs.fa", "$local_ffdb/projects/$pid/$sample_id/orfs.fa"); # retrieve the file from remote->local
+    while (my ($jobKey, $sample_id) = each(%jobs)) {
+	MRC::Run::transfer_file("$connection:$remote_ffdb/projects/$pid/$sample_id/orfs.fa", "$local_ffdb/projects/$pid/$sample_id/orfs.fa"); # retrieve the file from remote->local
     }
 }
 
-sub remote_job_listener{
+
+sub job_listener($$$$) {
     # Note that this function is a nearly exact copy of "local_job_listener"
-    my ($self, $jobsArrayRef, $waitTimeInSeconds) = @_;
+    my ($self, $jobsArrayRef, $waitTimeInSeconds, $is_remote) = @_;
     ($waitTimeInSeconds >= 1) or die "Programming error: You can't set waitTimeInSeconds to less than 1 (but it was set to $waitTimeInSeconds)---we don't want to flood the machine with constant system requests.";
     my %statusHash             = ();
     my $startTimeInSeconds = time();
+    ($is_remote == 0 or $is_remote == 1) or die "is_remote must be 0 or 1! you passed in <$is_remote>.";
     while (scalar(keys(%statusHash)) != scalar(@{$jobsArrayRef})) { # keep checking until EVERY SINGLE job has a finished status
 	#call qstat and grab the output
-	my $results = execute_ssh_cmd( $self->get_remote_connection(), "\'qstat\'");
+	my $results = undef;
+	if ($is_remote) {
+	    $results = execute_ssh_cmd( $self->get_remote_connection(), "\'qstat\'"); # REMOTE.
+	} else { 
+	    $results = IPC::System::Simple::capture("ps"); #call ps and grab the output. LOCAL.
+	}
 	#see if any of the jobs are complete. pass on those we've already finished
 	foreach my $jobid( @{ $jobsArrayRef } ){
 	    next if( exists( $statusHash{$jobid} ) );
@@ -1419,35 +1419,26 @@ sub remote_job_listener{
 		$statusHash{$jobid}++;
 	    }
 	}
-	sleep( $waitTimeInSeconds );
+	sleep($waitTimeInSeconds);
     }
     return (time() - $startTimeInSeconds); # return amount of wall-clock time this took
 }
 
-sub local_job_listener{
-    # Note that this function is a nearly exact copy of "remote_job_listener"
+sub remote_job_listener{
     my ($self, $jobsArrayRef, $waitTimeInSeconds) = @_;
-    ($waitTimeInSeconds >= 1) or die "Programming error: You can't set waitTimeInSeconds to less than 1 (but it was set to $waitTimeInSeconds)---we don't want to flood the machine with constant requests for 'ps'.";
-    my $startTimeInSeconds = time();
-    my %statusHash   = ();
-    while (scalar(keys(%statusHash)) != scalar(@{$jobsArrayRef})) { # keep checking until EVERY SINGLE job has a finished status
-	my $results = IPC::System::Simple::capture("ps"); #call ps and grab the output
-	($EXITVAL == 0) or die("Error running ps! ");
-	foreach my $jobid(@{ $jobsArrayRef} ) { #see if any of the jobs are complete. pass on those we've already finished
-	    next if (exists( $statusHash{$jobid}) ); # Skip... for some reason
-	    if ($results !~ m/^$jobid /) {
-		$statusHash{$jobid}++;
-	    }
-	}
-	sleep( $waitTimeInSeconds ); # 'sleep' here so as not to flood the machine with requests for "ps"
-    }
-    return (time() - $startTimeInSeconds); # return amount of wall-clock time this took
+    return($self->job_listener($jobsArrayRef, $waitTimeInSeconds, 1));
 }
+
+sub local_job_listener{
+    my ($self, $jobsArrayRef, $waitTimeInSeconds) = @_;
+    return($self->job_listener($jobsArrayRef, $waitTimeInSeconds, 0));
+}
+
 
 sub remote_transfer_search_db{
     my ($self, $db_name, $type) = @_;
     my $DATABASE_PARENT_DIR = undef;
-    if ($type eq "hmm") { $DATABASE_PARENT_DIR = $HMMDB_DIR; }
+    if ($type eq "hmm")   { $DATABASE_PARENT_DIR = $HMMDB_DIR; }
     if ($type eq "blast") { $DATABASE_PARENT_DIR = $BLASTDB_DIR; }
     (defined($DATABASE_PARENT_DIR)) or die "Programming error: the 'type' in remote_transfer_search_db must be either \"hmm\" or \"blast\". Instead, it was: \"$type\". Fix this in the code!\n";
     my $db_dir     = $self->get_ffdb() . "/${DATABASE_PARENT_DIR}/${db_name}";
@@ -1531,9 +1522,9 @@ sub get_remote_search_results {
     my($self, $sample_id, $type) = @_;
     ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed into get_remote_search_results! The invalid type was: \"$type\".";
     my $remote_search_res_dir = $self->get_remote_sample_path($sample_id) .  "/search_results/$type";
-    my $local_search_res_dir  = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/search_results/$type";
+    my $local_search_res_dir  = $self->get_sample_path() . "/search_results/$type";
     # Note that every sequence split has its *own* output dir, in order to cut back on the number of files per directory.
-    my $in_orf_dir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs"; # <-- Always the same input directory (orfs) no matter what the $type is.
+    my $in_orf_dir = $self->get_sample_path() . "/orfs"; # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs( @{ $self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0) } ) {
 	my $remoteDir = $self->get_remote_connection() . ':' . "$remote_search_res_dir/$in_orfs";
 	MRC::Run::transfer_directory($remoteDir, $local_search_res_dir);
@@ -1635,8 +1626,8 @@ sub run_hmmscan_remote_ping{
 		next unless exists( $jobs{$job}{$sample_id}{$hmmdb} );
 		warn( join("\t", $job, $sample_id, $hmmdb) );
 		my $remote_src = $self->get_remote_connection() . ":" . $jobs{$job}{$sample_id}{$hmmdb};
-		my $local_dest = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/${sample_id}/search_results/${sample_id}_v_${hmmdb}.hsc";
-		my $results = MRC::Run::transfer_file( $remote_src, $local_dest);
+		my $local_dest = $self->get_sample_path() . "/search_results/${sample_id}_v_${hmmdb}.hsc";
+		MRC::Run::transfer_file( $remote_src, $local_dest);
 	    }
 	}
     }    

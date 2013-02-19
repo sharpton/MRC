@@ -18,6 +18,7 @@ use Sfams::Schema;
 use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
+use File::Spec;
 
 my $USE_COLORS_CONSTANT = 1; ## Set this to '0' to avoid printing colored output to the terminal, or '1' to print colored output.
 
@@ -47,7 +48,7 @@ sub dryNotify(;$) { # one optional argument
     my ($msg) = @_;
     $msg = (defined($msg)) ? $msg : "This was only a dry run, so we skipped executing a command.";
     chomp($msg);
-    print STDERR safeColor("[DRY RUN]: $msg\n", "black on_yellow");
+    print STDERR safeColor("[DRY RUN]: $msg\n", "black on_magenta");
 }
 
 sub notifyAboutScp($) {
@@ -131,17 +132,18 @@ sub new{
  Title   : get_sample_ids
  Function: Obtains the unique sample_ids for each sample in the project
  Example : my @sample_ids = @{ analysis->get_sample_ids() };
- Returns : A array of sample_ids (array reference)
+ Returns : A array REFERENCE of sample_ids (array reference)
 =cut
 
-sub get_sample_ids{
-    my $self = shift;
+sub get_sample_ids {
+    my ($self) = @_;
     my @sample_ids = ();
-    foreach my $sample( keys( %{ $self->{"samples"} } ) ){
-	my $sample_id = $self->{"samples"}->{$sample}->{"id"};
-	push( @sample_ids, $sample_id );
+    foreach my $samp (keys(%{$self->{"samples"}})) {
+	my $this_sample_id = $self->{"samples"}->{$samp}->{"id"};
+	(defined($this_sample_id)) or die "That's weird---the sample id for sample <$samp> was not defined! How is this even possible?";
+	push(@sample_ids, $this_sample_id);
     }
-    return \@sample_ids;
+    return \@sample_ids; # <-- array reference!
 }
 
 sub set_scripts_dir{
@@ -248,11 +250,12 @@ sub get_project_path{ my $self = shift;    return $self->{"projectpath"}; }
 
 =cut 
 
-sub get_sample_path{
-    my $self = shift;
-    my $sample_id = shift;
-    my $sample_path = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/". $sample_id . "/";
-    return $sample_path;
+sub get_sample_path($) { # note the mandatory (numeric?) argument!
+    my ($self, $sample_id) = @_;
+    (defined($self->get_ffdb())) or die "ffdb was not defined! This can't be called until AFTER you call set_ffdb.";
+    (defined($sample_id)) or die "get_sample_path has ONE MANDATORY argument! It can NOT be called with an undefined input sample_id! In this case, Sample id was not defined!";
+    (defined($self->get_project_id())) or die "Project ID was not defined!";
+    return(File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "$sample_id")); # concatenates items into a filesystem path
 }
 
 =head2 set_username 
