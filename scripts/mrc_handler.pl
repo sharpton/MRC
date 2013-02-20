@@ -126,9 +126,10 @@ my $db_hostname   = undef;
 my $is_remote        = 1; # By default, assume we ARE using a remote compute cluster
 my $stage            = 0; # By default, do NOT stage the database (this takes a long time)!
 my $remote_hostname  = undef; #"chef.compbio.ucsf.edu";
-my $remote_user      = undef; #"sharpton";
+my $remote_user      = undef; #"yourname";
 my $remoteDir        = undef;
-#my $rscripts       = "/netapp/home/sharpton/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
+my $remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set of paths to search for executables. Example: /netapp/home/yourname/bin:/somewhere/else/bin
+#my $rscripts       = "/netapp/home/yourname/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
 
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
 my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
@@ -198,6 +199,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "rhost=s"     => \$remote_hostname
 	   , "ruser=s"     => \$remote_user
 	   , "rdir=s"      => \$remoteDir
+	   , "rpath=s"     => \$remoteExePath
 
 	   ,              's=s' => \$sWasSpecified #interestingly, you can't have a "sub" here that dies, as execution continues on
 	   ,    "hmmdb|h=s"     => \$hmmdb_name
@@ -234,21 +236,22 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
 (defined($remoteDir)) or dieWithUsageError("--rdir (remote computational server scratch/flatfile location. Example: --rdir=/cluster/share/yourname/MRC). This is mandatory!");
+(defined($remoteExePath)) or warn("Note that --rpath was not defined. This is the remote computational server's \$PATH, where we find various executables like 'lastal'). Example: --rpath=/cluster/home/yourname/bin:/somewhere/else/bin:/another/place/bin). COLONS delimit separate path locations, just like in the normal UNIX path variable. This is not mandatory, but is a good idea to include.");
 
 (!$dryRun) or dieWithUsageError("Sorry, --dryrun is actually not supported, as it's a huge mess right now! My apologies.");
 (!defined($sWasSpecified) && !$sWasSpecified) or dieWithUsageError("-s is no longer a valid option. Instead, remove it from the command line and export the 'MRC_LOCAL' environment variable to point to your local MRC directory.\nExample of what you could type in bash instead of the -s option:  export MRC_LOCAL=/your/home/location/MRC");
-(defined($local_ffdb)) or dieWithUsageError("--ffdb (local flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/sharpton/MRC_ffdb");
+(defined($local_ffdb)) or dieWithUsageError("--ffdb (local flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/yourname/MRC_ffdb");
 (-d $local_ffdb)       or dieWithUsageError("--ffdb (local flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Note that Perl does NOT UNDERSTAND the tilde (~) expansion for home directories, so please specify the full path in that case. You must specify a directory that already exists.");
 
-(defined($local_reference_ffdb)) or dieWithUsageError("--refdb (local REFERENCE flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/sharpton/sifting_families");
+(defined($local_reference_ffdb)) or dieWithUsageError("--refdb (local REFERENCE flat-file database directory path) must be specified! Example: --ffdb=/some/local/path/MRC_ffdb (or use the shorter '-d' option to specify it. This used to be hard-coded as being in /bueno_not_backed_up/yourname/sifting_families");
 (-d $local_reference_ffdb)       or dieWithUsageError("--refdb (local REFERENCE flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Note that Perl does NOT UNDERSTAND the tilde (~) expansion for home directories, so please specify the full path in that case. Specify a directory that exists.");
+(defined($db_hostname))          or dieWithUsageError("--dbhost (remote database hostname: example --dbhost='data.youruniversity.edu') MUST be specified!");
+(defined($db_username))          or dieWithUsageError("--dbuser (remote database mysql username: example --dbuser='dataperson') MUST be specified!");
+(defined($db_pass))              or dieWithUsageError("--dbpass (remote database mysql password for user --dbpass='$db_username') MUST be specified here in super-insecure plaintext,\nunless your database does not require a password, which is unusual. If it really is the case that you require NO password, you should specify --dbpass='' . ...");
+(defined($remote_hostname))      or dieWithUsageError("--rhost (remote computational cluster primary note) must be specified. Example --rhost='main.cluster.youruniversity.edu')!");
+(defined($remote_user))          or dieWithUsageError("--ruser (remote computational cluster username) must be specified. Example username: --ruser='someguy'!");
 
-(defined($db_hostname)) or dieWithUsageError("--dbhost (remote database hostname: example --dbhost='data.youruniversity.edu') MUST be specified!");
-(defined($db_username)) or dieWithUsageError("--dbuser (remote database mysql username: example --dbuser='dataperson') MUST be specified!");
-(defined($db_pass))     or dieWithUsageError("--dbpass (remote database mysql password for user --dbpass='$db_username') MUST be specified here in super-insecure plaintext,\nunless your database does not require a password, which is unusual. If it really is the case that you require NO password, you should specify --dbpass='' . ...");
-
-(defined($remote_hostname)) or dieWithUsageError("--rhost (remote computational cluster primary note) must be specified. Example --rhost='main.cluster.youruniversity.edu')!");
-(defined($remote_user))     or dieWithUsageError("--ruser (remote computational cluster username) must be specified. Example username: --ruser='someguy'!");
+($coverage >= 0.0 && $coverage <= 1.0) or dieWithUsageError("Coverage must be between 0.0 and 1.0 (inclusive). You specified: $coverage.");
 
 if ((defined($goto) && $goto) && !defined($input_pid)) { dieWithUsageError("If you specify --goto=SOMETHING, you must ALSO specify the --pid to goto!"); }
 
@@ -299,7 +302,7 @@ if (!defined($hmmdb_name)) {
 }
 
 my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
-my $remote_ffdb_dir     = "${remoteDir}/MRC_ffdb"; #  used to be = "/scrapp2/sharpton/MRC/MRC_ffdb/";
+my $remote_ffdb_dir     = "${remoteDir}/MRC_ffdb"; #  used to be = "/scrapp2/yourname/MRC/MRC_ffdb/";
 ### =========== Automatic setting of default parameters ========
 
 
@@ -318,6 +321,7 @@ printBanner("Starting classification run, processing $project_dir\n");
 my $analysis = MRC->new();  #Initialize the project
 
 $analysis->set_scripts_dir($localScriptDir);
+$analysis->set_remote_exe_path($remoteExePath);
 $analysis->set_dbi_connection("DBI:mysql:$dbname:$db_hostname", $dbname, $db_hostname); $analysis->set_username($db_username); $analysis->set_password($db_pass); $analysis->set_schema_name($schema_name);
 $analysis->build_schema();
 $analysis->set_multiload($multi);
@@ -326,9 +330,7 @@ $analysis->set_ffdb($local_ffdb); $analysis->set_ref_ffdb($local_reference_ffdb)
 $analysis->set_family_subset($family_subset_list, $check); #constrain analysis to a set of families of interest
 $analysis->set_hmmdb_name($hmmdb_name); # always set it; why not, right?
 $analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right?
-$analysis->is_strict_clustering($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score); 
-
-
+$analysis->set_clustering_strictness($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score); $analysis->set_remote_status($is_remote);
 
 ### =========== NOW THAT THE MRC OBJECT "Analysis" HAS BEEN CREATED, DO SOME SANITY CHECKING ON THE FINAL PARAMETERS =============================
 if (!$hmmdb_build && !(-d $analysis->MRC::DB::get_hmmdb_path())) {
@@ -343,8 +345,6 @@ if (!$blastdb_build && !(-d $analysis->MRC::DB::get_blastdb_path())) {
 ### =========== END OF SANITY CHECKING FOR "Analaysis" ===========================================================================================
 
 #if using a remote server for compute, set vars here
-
-$analysis->is_remote($is_remote);
 $analysis->{"clobber"} = $extraBrutalClobberingOfDirectories; # Set a local variable in this "MRC" object
 
 if ($is_remote) {
@@ -622,14 +622,12 @@ if ($is_remote){
     printBanner("RUNNING LOCAL SEARCH");
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){
 	#my $sample_path = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/" . $sample_id . "/";
-	my $orfs        = "orfs.fa";
-	my $results_dir = "search_results";
 	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs($hmmdb_name) };
 	warn "Running hmmscan for sample ID ${sample_id}...";
 	foreach my $hmmdb(keys(%hmmdbs)){
-	    my $results_full_path = "${results_dir}/${sample_id}_v_${hmmdb}.hsc";
+	    my $results_full_path = "search_results/${sample_id}_v_${hmmdb}.hsc";
 	    #run with tblast output format (e.g., --domtblout)
-	    $analysis->MRC::Run::run_hmmscan($orfs, $hmmdbs{$hmmdb}, $results_full_path, 1);
+	    $analysis->MRC::Run::run_hmmscan("orfs.fa", $hmmdbs{$hmmdb}, $results_full_path, 1);
 	}
     }
 }
@@ -830,8 +828,13 @@ REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
     Remote username for logging into the remote computational cluster / machine.
     Note that you have to set up passphrase-less SSH for this to work. Google it!
 
---rdir=/PATH/ON/REMOTE/SERVER
+--rdir=/PATH/ON/REMOTE/SERVER          (REQUIRED, no default)
     Remote path where we will save results
+
+--rpath=COLON_DELIMITED_STRING         (optional, default assumes that the executables will just be on your user path)
+    Example: --rpath=/remote/exe/path/bin:/somewhere/else/bin:/another/place/bin
+    The PATH on the remote computational server, where we find various executables like 'lastal'.
+    COLONS delimit separate path locations, just like in the normal UNIX path variable.
 
 --remote  (Default: ENABLED)
     (or --noremote to disable it)

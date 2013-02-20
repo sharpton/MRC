@@ -1,11 +1,17 @@
 #!/usr/bin/perl -w
 
+## ====================================================================================
+# Note: the script 'lastal' must be ON YOUR PATH on the REMOTE CLUSTER MACHINE in order for this script to work!
+## ====================================================================================
+
 use strict;
 use Getopt::Long;
 
 #my @args = ( "build_remote_last_script.pl", "-o $b_script_path", "-d $fin_blastdb_dir", "-n $blast_db_size" );
 
-my ( $outfile, $in_split_db_dir, $n_seqs_per_db_split );
+my ($outfile);
+#my ($in_split_db_dir);
+#my ($n_seqs_per_db_split);
 my $n_searches     = 1;
 my $n_splits       = 1;
 my $use_bigmen         = 0; #should this select a big memory machine or not?

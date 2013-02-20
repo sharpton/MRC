@@ -340,7 +340,9 @@ sub run_hmmscan{
     my @args = ($tblout) # ternary operator
 	? ( "--domE 0.001", "--domtblout $output", "$hmmdb", "$inseqs" ) # YES, $tblout
 	: ("$hmmdb", "$inseqs", "> $output"); # NO, no $tblout
-    my $results  = IPC::System::Simple::capture( "hmmscan @args" );
+    
+    # I hope hmmscan is installed!
+    my $results  = IPC::System::Simple::capture("hmmscan @args" );
     (0 == $EXITVAL) or die("Error translating sequences in $inseqs: $results");
 }
 
@@ -1316,16 +1318,17 @@ sub calculate_blast_db_length{
 sub compress_hmmdb{
     my ($file, $force) = @_;
     my @args = ($force) ? ("-f", "$file") : ("$file"); # if we have FORCE on, then add "-f" to the options for hmmpress
+    warn "I hope 'hmmpress' is installed on this machine already!";
     my $results  = IPC::System::Simple::capture( "hmmpress " . "@args" );
     (0 == $EXITVAL) or die("Error translating sequences in $file: $results ");
     return $results;
 }
 
 #copy a project's ffdb over to the remote server
-sub load_project_remote{
+sub load_project_remote {
     my ($self) = @_;
-    my $project_dir_local = $self->get_ffdb() . "/projects/" . $self->get_project_id();
-    my $remote_dir  = $self->get_remote_connection() . ":" . $self->get_remote_ffdb() . "/projects/" . $self->get_project_id();
+    my $project_dir_local = File::Spec->catdir($self->get_ffdb(), "projects", $self->get_project_id());
+    my $remote_dir  = $self->get_remote_connection() . ":" . File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id());
     warn("Pushing $project_dir_local to the remote (" . $self->get_remote_server() . ") server's ffdb location in <$remote_dir>\n");
     my $results = MRC::Run::transfer_directory($project_dir_local, $remote_dir);
     return $results;
@@ -1502,15 +1505,13 @@ sub gunzip_remote_dbs{
 
 sub format_remote_blast_dbs{
     my( $self, $remote_script_path ) = @_;
-    my $ffdb       = $self->get_ffdb();
-    my $remote_database_dir   = $self->get_remote_ffdb() . "/$BLASTDB_DIR/" . $self->get_blastdb_name();
+    my $remote_database_dir   = File::Spec->catdir($self->get_remote_ffdb(), $BLASTDB_DIR, $self->get_blastdb_name());
     my $results    = execute_ssh_cmd($self->get_remote_connection(), "qsub -sync y $remote_script_path $remote_database_dir");
 }
 
 sub run_search_remote {
     my ($self, $sample_id, $type, $waitTimeInSeconds, $verbose) = @_;
     ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed in! The invalid type was: \"$type\".";
-
     my $remote_orf_dir         = File::Spec->catdir($self->get_remote_sample_path($sample_id), "orfs");
     my $log_file_prefix       = File::Spec->catfile($self->get_remote_project_log_dir(), "${type}_handler");
     my $remote_search_res_dir  = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", ${type});
@@ -1524,20 +1525,18 @@ sub run_search_remote {
 
     if (($type eq "hmmsearch") or ($type eq "hmmscan")) {
 	$db_name               = $self->get_hmmdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb() . "/$HMMDB_DIR/$db_name";
+	$remote_db_dir         = File::Spec->catdir($self->get_remote_ffdb(), $HMMDB_DIR, $db_name);
 	if ($type eq "hmmsearch") { $remote_script_path = $self->get_remote_hmmsearch_script(); } # HMM *SEARCH*
 	if ($type eq "hmmscan")   { $remote_script_path = $self->get_remote_hmmscan_script();   } # HMM *SCAN*
     }
 
     # Transfer the required scripts, such as "run_remote_search_handler.pl", to the remote server. For some reason, these don't get sent over otherwise!
-    my @scriptsToTransfer = (File::Spec->catfile($self->get_scripts_dir(), "remote", "run_remote_search_handler.pl"));
-			     #, File::Spec->catfile($self->get_scripts_dir(), "remote", "split_orf_on_stops.pl"));
+    my @scriptsToTransfer = (File::Spec->catfile($self->get_scripts_dir(), "remote", "run_remote_search_handler.pl")); # just one file for now
     foreach my $transferMe (@scriptsToTransfer) {
 	MRC::Run::transfer_file_into_directory($transferMe, ($self->get_remote_connection() . ':' . $self->get_remote_script_dir() . '/')); # transfer the script into the remote directory
     }
 
-    my $perl_script_handler_remote_path = $self->get_remote_script_dir() . "/run_remote_search_handler.pl";
-    my $remote_cmd  = "\'perl $perl_script_handler_remote_path -h $remote_db_dir -o $remote_search_res_dir -i $remote_orf_dir -n $db_name -s $remote_script_path -w $waitTimeInSeconds > ${log_file_prefix}.out 2> ${log_file_prefix}.err \'";
+    my $remote_cmd  = "\'perl " . File::Spec->catfile($self->get_remote_script_dir(), "run_remote_search_handler.pl") . " --dbdir=$remote_db_dir --resultdir=$remote_search_res_dir --querydir=$remote_orf_dir --dbname=$db_name --scriptpath=${remote_script_path} -w $waitTimeInSeconds > ${log_file_prefix}.out 2> ${log_file_prefix}.err \'";
     my $results     = execute_ssh_cmd($self->get_remote_connection(), $remote_cmd, $verbose);
     (0 == $EXITVAL) or warn("Execution of command <$remote_cmd> returned non-zero exit code $EXITVAL. The remote reponse was: $results.");
     return $results;
@@ -1549,6 +1548,7 @@ sub get_remote_search_results {
     # Note that every sequence split has its *own* output dir, in order to cut back on the number of files per directory.
     my $in_orf_dir = File::Spec->catdir($self->get_sample_path($sample_id), "orfs"); # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs(@{$self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0)}) { # get_split_sequence_paths is a like a custom version of "glob(...)". It may be eventually replaced by "glob."
+	warn "Handling <$in_orfs>...";
 	my $remote_search_res_dir = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", $type);
 	my $local_search_res_dir  = File::Spec->catdir(       $self->get_sample_path($sample_id), "search_results", $type);
 	my $remoteFile = $self->get_remote_connection() . ':' . "$remote_search_res_dir/$in_orfs";
@@ -1581,106 +1581,106 @@ sub get_remote_search_results {
 #     return $results;
 # }
 
-#not used in mrc_handler.pl
-sub run_blast_remote{
-    warn "Note that this function is never called and thus may be either redundant or untested";
-    my ( $self, $inseq, $db, $output, $closed ) = @_;
-    my $remoteScriptDir = $self->get_remote_script_dir();
+# #not used in mrc_handler.pl
+# sub run_blast_remote {
+#     warn "Note that this function is never called and thus may be either redundant or untested";
+#     my ( $self, $inseq, $db, $output, $closed ) = @_;
+#     my $remoteScriptDir = $self->get_remote_script_dir();
 
-    my $SINGLE_QUOTE = "\'";
-    my $sync_parameter = (!defined($closed) || !$closed) ? ' -sync y ' : ''; # if "closed" is false or unspecified, then add "-sync y" to the parameter list
-    my $remote_cmd = $SINGLE_QUOTE . "qsub $sync_parameter $remoteScriptDir/run_blast.sh  $inseq  $db  $output " . $SINGLE_QUOTE;
-    return(execute_ssh_cmd($self->get_remote_connection(), $remote_cmd));
-}
+#     my $SINGLE_QUOTE = "\'";
+#     my $sync_parameter = (!defined($closed) || !$closed) ? ' -sync y ' : ''; # if "closed" is false or unspecified, then add "-sync y" to the parameter list
+#     my $remote_cmd = $SINGLE_QUOTE . "qsub $sync_parameter $remoteScriptDir/run_blast.sh  $inseq  $db  $output " . $SINGLE_QUOTE;
+#     return(execute_ssh_cmd($self->get_remote_connection(), $remote_cmd));
+# }
 
-sub transfer_hmmsearch_remote_results{
-    warn "Note that this function is never called and thus may be either redundant or untested";
-    my ($self, $hmmdb_name) = @_;
-    my $ffdb = $self->get_ffdb();
-    my $remote_file  = $self->get_remote_connection() . ":" . $self->get_remote_ffdb() . "/hmmsearch/$hmmdb_name";
-    my $local_file = "$ffdb/hmmsearch/$hmmdb_name";
-    return(MRC::Run::transfer_file($remote_file, $local_file));
-}
+# sub transfer_hmmsearch_remote_results{
+#     warn "Note that this function is never called and thus may be either redundant or untested";
+#     my ($self, $hmmdb_name) = @_;
+#     my $ffdb = $self->get_ffdb();
+#     my $remote_file  = $self->get_remote_connection() . ":" . $self->get_remote_ffdb() . "/hmmsearch/$hmmdb_name";
+#     my $local_file = "$ffdb/hmmsearch/$hmmdb_name";
+#     return(MRC::Run::transfer_file($remote_file, $local_file));
+# }
 
-sub remove_remote_file {
-    warn "Note that this function is never called and thus may be either redundant or untested";
-    my($self, $file) = @_;
-    return(execute_ssh_cmd($self->get_remote_connection(), "/bin/rm $file"));
-}
+# sub remove_remote_file {
+#     warn "Note that this function is never called and thus may be either redundant or untested";
+#     my($self, $file) = @_;
+#     return(execute_ssh_cmd($self->get_remote_connection(), "/bin/rm $file"));
+# }
 
-sub remove_hmmsearch_remote_results{
-    warn "Note that this function is never called and thus may be either redundant or untested";
-    my ($self, $search_outfile) = @_;
-    my $remote_file = $self->get_remote_ffdb() . "/hmmsearch/$search_outfile"; # is this a file or a directory? I guess it's a file.
-    return(execute_ssh_cmd($self->get_remote_connection(), "/bin/rm $remote_file"));
-}
+# sub remove_hmmsearch_remote_results{
+#     warn "Note that this function is never called and thus may be either redundant or untested";
+#     my ($self, $search_outfile) = @_;
+#     my $remote_file = $self->get_remote_ffdb() . "/hmmsearch/$search_outfile"; # is this a file or a directory? I guess it's a file.
+#     return(execute_ssh_cmd($self->get_remote_connection(), "/bin/rm $remote_file"));
+# }
 
-sub run_hmmscan_remote_ping{
-    # note that this is NEVER CALLED ever!
-    warn "Note that this function is never called and thus may be either redundant or untested";
+# sub run_hmmscan_remote_ping{
+#     # note that this is NEVER CALLED ever!
+#     warn "Note that this function is never called and thus may be either redundant or untested";
 
-    my ($self, $hmmdb_name, $waitTimeInSeconds) = @_;  # waitTimeInSeconds is amount of time between queue checks
-    my @sample_ids = @{$self->get_sample_ids()};
-    my %jobs = ();
-    my %hmmdbs =  %{ $self->MRC::DB::get_hmmdbs( $hmmdb_name, 1 ) };     #use get_hmmdbs with the 1 flag to indicate remote server file paths
-    foreach my $sample_id( @sample_ids ){ #search each sample against each hmmdb split
-	my $projID = $self->get_project_id();
-	my $ff = $self->get_remote_ffdb();
-	my $thisSampleDir = "$ff/projects/${projID}/${sample_id}";
-	my $remote_input = "${thisSampleDir}/orfs.fa";
-	foreach my $hmmdb( keys( %hmmdbs ) ){
-	    my $remote_hmmdb_path = $hmmdbs{$hmmdb};
-	    my $remote_output = "${thisSampleDir}/search_results/${sample_id}_v_${hmmdb}.hsc";
+#     my ($self, $hmmdb_name, $waitTimeInSeconds) = @_;  # waitTimeInSeconds is amount of time between queue checks
+#     my @sample_ids = @{$self->get_sample_ids()};
+#     my %jobs = ();
+#     my %hmmdbs =  %{ $self->MRC::DB::get_hmmdbs( $hmmdb_name, 1 ) };     #use get_hmmdbs with the 1 flag to indicate remote server file paths
+#     foreach my $sample_id( @sample_ids ){ #search each sample against each hmmdb split
+# 	my $projID = $self->get_project_id();
+# 	my $ff = $self->get_remote_ffdb();
+# 	my $thisSampleDir = "$ff/projects/${projID}/${sample_id}";
+# 	my $remote_input = "${thisSampleDir}/orfs.fa";
+# 	foreach my $hmmdb( keys( %hmmdbs ) ){
+# 	    my $remote_hmmdb_path = $hmmdbs{$hmmdb};
+# 	    my $remote_output = "${thisSampleDir}/search_results/${sample_id}_v_${hmmdb}.hsc";
 
-	    my $runHmmScanShRemoteLocation =  $self->get_remote_script_dir() . "/run_hmmscan.sh";
-	    my $remote_cmd = "\'qsub $runHmmScanShRemoteLocation -o $remote_output $remote_hmmdb_path $remote_input \'";
-	    my $results = execute_ssh_cmd( $self->get_remote_connection(), $remote_cmd );
-	    if ($results =~ m/^Your job (\d+) /) {
-		my $job_id = $1;
-		$jobs{$job_id}{$sample_id}{$hmmdb} = $remote_output;
-	    } else {
-		die("Remote server did not return a properly formatted job id when running $remote_cmd. Got $results instead!. Exiting.");
-	    }
+# 	    my $runHmmScanShRemoteLocation =  $self->get_remote_script_dir() . "/run_hmmscan.sh";
+# 	    my $remote_cmd = "\'qsub $runHmmScanShRemoteLocation -o $remote_output $remote_hmmdb_path $remote_input \'";
+# 	    my $results = execute_ssh_cmd( $self->get_remote_connection(), $remote_cmd );
+# 	    if ($results =~ m/^Your job (\d+) /) {
+# 		my $job_id = $1;
+# 		$jobs{$job_id}{$sample_id}{$hmmdb} = $remote_output;
+# 	    } else {
+# 		die("Remote server did not return a properly formatted job id when running $remote_cmd. Got $results instead!. Exiting.");
+# 	    }
 
-	    MRC::notify("Sleeping for 10 seconds here to avoid flooding the remote server...");
-	    sleep(10); # sleep for ten seconds -- add a sleep so that we don't flood the remote server
-	}
-    }
-    #check the jobs until they are all complete
-    my @job_ids = keys( %jobs );
-    my $time = $self->MRC::Run::remote_job_listener(\@job_ids, $waitTimeInSeconds);
-    MRC::notify("Hmmscan was conducted: translation finished (hopefully it was successful) on " . $self->get_remote_server() . " in approximately $time seconds.");
-    #consider that a completed job doesn't *necessarily* mean a successful run!
-    MRC::notify("Pulling hmmscan reads from remote server.");
-    foreach my $job (keys(%jobs)){
-	foreach my $sample_id( @sample_ids ){
-	    foreach my $hmmdb( keys( %hmmdbs ) ){
-		if (not exists($jobs{$job}{$sample_id}{$hmmdb})) { next; } #um... if it DOESN'T exist, then skip to the next one!
-		warn( join("\t", $job, $sample_id, $hmmdb) );
-		my $remote_src = $self->get_remote_connection() . ":" . $jobs{$job}{$sample_id}{$hmmdb};
-		my $local_dest = File::Spec->catfile($self->get_sample_path($sample_id), "search_results", "${sample_id}_v_${hmmdb}.hsc");
-		MRC::Run::transfer_file($remote_src, $local_dest);
-	    }
-	}
-    }    
-}
+# 	    MRC::notify("Sleeping for 10 seconds here to avoid flooding the remote server...");
+# 	    sleep(10); # sleep for ten seconds -- add a sleep so that we don't flood the remote server
+# 	}
+#     }
+#     #check the jobs until they are all complete
+#     my @job_ids = keys( %jobs );
+#     my $time = $self->MRC::Run::remote_job_listener(\@job_ids, $waitTimeInSeconds);
+#     MRC::notify("Hmmscan was conducted: translation finished (hopefully it was successful) on " . $self->get_remote_server() . " in approximately $time seconds.");
+#     #consider that a completed job doesn't *necessarily* mean a successful run!
+#     MRC::notify("Pulling hmmscan reads from remote server.");
+#     foreach my $job (keys(%jobs)){
+# 	foreach my $sample_id( @sample_ids ){
+# 	    foreach my $hmmdb( keys( %hmmdbs ) ){
+# 		if (not exists($jobs{$job}{$sample_id}{$hmmdb})) { next; } #um... if it DOESN'T exist, then skip to the next one!
+# 		warn( join("\t", $job, $sample_id, $hmmdb) );
+# 		my $remote_src = $self->get_remote_connection() . ":" . $jobs{$job}{$sample_id}{$hmmdb};
+# 		my $local_dest = File::Spec->catfile($self->get_sample_path($sample_id), "search_results", "${sample_id}_v_${hmmdb}.hsc");
+# 		MRC::Run::transfer_file($remote_src, $local_dest);
+# 	    }
+# 	}
+#     }    
+# }
 
-sub get_family_size_by_id{
-    warn "Note that this function is never called and thus may be either redundant or untested";
-    my ($self, $famid, $should_count_ref_only) = @_;  # $should_count_ref_only: only count reference family members?
-    my $fam_mems = $self->MRC::DB::get_family_members_by_famid( $famid );
-    my $size = 0;
-    if(defined($should_count_ref_only) && $should_count_ref_only ){
-	while(my $member = $fam_mems->next() ){
-	    if($member->gene_oid()) {
-		$size++;
-	    }
-	}
-    } else {
-	$size = $fam_mems->count();
-    }
-    return $size;
-}
+# sub get_family_size_by_id{
+#     warn "Note that this function is never called and thus may be either redundant or untested";
+#     my ($self, $famid, $should_count_ref_only) = @_;  # $should_count_ref_only: only count reference family members?
+#     my $fam_mems = $self->MRC::DB::get_family_members_by_famid( $famid );
+#     my $size = 0;
+#     if(defined($should_count_ref_only) && $should_count_ref_only ){
+# 	while(my $member = $fam_mems->next() ){
+# 	    if($member->gene_oid()) {
+# 		$size++;
+# 	    }
+# 	}
+#     } else {
+# 	$size = $fam_mems->count();
+#     }
+#     return $size;
+# }
 
 
 

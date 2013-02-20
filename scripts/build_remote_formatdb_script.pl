@@ -83,7 +83,6 @@ print OUT join( "\n",
 
 # Alex removed the .bash_profile sourcing here!
 
-
 if( $scratch ){
     #DO SOME ACTUAL WORK: Clean old files
     print OUT join( "\n",

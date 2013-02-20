@@ -556,6 +556,9 @@ sub set_blastdb_name {
 sub get_blastdb_name {   my $self = shift;  return $self->{"blastdb"}; }
 
 
+# Remote EXE path
+sub set_remote_exe_path($$) { my ($self, $newPath) = @_; $self->{"remote_exe_path"} = $newPath; }
+sub get_remote_exe_path($)  { my ($self) = @_; return($self->{"remote_exe_path"}); }
 
 
 =head2 set_remote_server
@@ -850,6 +853,12 @@ sub get_remote_project_log_dir{
 
 =cut 
 
+sub set_remote_status($$) { 
+    my ($self, $remStatus) = @_;
+    ($remStatus == 0 or $remStatus == 1) or die "Remote status must be 1 or 0, no other values are allowed!";
+    $self->{"is_remote"} = $remStatus;
+}
+
 sub is_remote{
     my $self = shift;
     my $switch = shift;
@@ -870,6 +879,13 @@ sub is_remote{
  Args    : A binary of whether the project uses strict clusterting (binary)
 
 =cut 
+
+sub set_clustering_strictness($$) {
+    my ($self, $strictness) = @_;
+    ($strictness == 0 or $strictness == 1) or die "Bad value for is_strict!";
+    $self->{"is_strict"} = $strictness;
+}
+
 
 sub is_strict_clustering{
     my $self = shift;
