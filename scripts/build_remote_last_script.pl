@@ -14,12 +14,10 @@ my ($outfile);
 #my ($n_seqs_per_db_split);
 my $n_searches     = 1;
 my $n_splits       = 1;
-my $use_bigmen         = 0; #should this select a big memory machine or not?
-my $use_array          = 1; #should this use array jobs or not?
-#might need to tune this variable
+my $use_bigmem         = 0; #should this select a big memory machine or not? NEVER SET ANYWHERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+my $use_array          = 1; #should this use array jobs or not? . NEVER SET ANYWHERE!!!!!!!!!!!!!!!!!
 my $memory         = "5G"; #include units in this string, G for Gigabytes, K for Kilobytes
-#my $walltime       = "336:00:0";
-my $walltime       = "0:30:0";
+my $walltime       = "0:30:0"; #my $walltime       = "336:00:0";
 my $projectdir     = ""; #what is the top level project dir on the remote server?
 my $db_name_stem   = ""; #what is the basename of the db splits, ignoring the arrayjob split number?
 my $use_scratch        = 0; #should we use the local scratch directory?
@@ -37,11 +35,11 @@ GetOptions(
 #    "n=i"    => \$n_seqs_per_db_split,
     "n=s"    => \$n_splits,
     "name=s" => \$db_name_stem,
-    "z:s"    => \$n_searches,
+    "z=s"    => \$n_searches,
     "p=s"    => \$projectdir,
-    "s:i"    => \$use_scratch,
-    "m:i"    => \$max_multiplicity,
-    "e:i"    => \$min_aln_score,
+    "s=i"    => \$use_scratch,
+    "m=i"    => \$max_multiplicity,
+    "e=i"    => \$min_aln_score,
     );
 
 #prep the outfile for write
@@ -70,7 +68,7 @@ if( $use_array ){
     print OUT "#\$ -t 1-" . $n_splits . "\n";
 }
 #MEMORY USAGE
-if( $use_bigmen ){
+if( $use_bigmem ){
     print OUT "#\$ -l xe5520=true\n";
 } else {
     print OUT "#\$ -l mem_free=${memory}\n";

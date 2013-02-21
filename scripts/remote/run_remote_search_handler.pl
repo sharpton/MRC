@@ -71,27 +71,19 @@ my $time = remote_job_listener(\@job_ids, $waitTimeInSeconds);
 
 sub run_remote_search {
     my($scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $result_dir) = @_;
-    print "Processing $query_seq_file\n";
-    print "Running with array jobs....\n";
-    #need to make it so that these are passed in through the function...
-    my $results = run_search( $scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $result_dir);
-    (0 == $EXITVAL) or die "Error running remote search on remote server: $results";
-    return $results;
-
-}
-
-sub run_search{
-    my($scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $result_dir) = @_;
+    warn "Processing <$query_seq_file>. Running with array jobs...";
     my $out_stem = "${query_seq_file}-${db_name}";
+
+    # Arg names as seen in "run_last.sh", below in all-caps:
+    #                          INPATH         INPUT           DBPATH     OUTPATH     OUTSTEM
     my @args = ($scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $result_dir, $out_stem );
     warn("We will attempt to execute the following job: qsub @args");
-
 
     (-d $query_seq_dir) or die "Query seq dir $query_seq_dir did not already exist on the REMOTE CLUSTER machine! It must be a DIRECTORY that already exists.";
     (-f $scriptpath) or die "Script $scriptpath did not already exist on the REMOTE CLUSTER machine! It must already exist.";
 
     my $results = capture("qsub @args");
-    (0 == $EXITVAL) or die "Error running the script on remote server: $results ";
+    (0 == $EXITVAL) or die "Error running the script: $results ";
     return $results;
 }
 

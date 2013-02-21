@@ -75,7 +75,7 @@ sub calculate_diversity($$) {
     print "Building PCA dataframe...\n";       $analysis->MRC::Run::build_PCA_data_frame($class_id);
 }
 
-sub build_remote_script_generic($) {
+sub exec_and_die_on_nonzero($) {
     my ($cmd) = @_;
     my $results = IPC::System::Simple::capture($cmd);
     (0 == $EXITVAL) or die "Error:  non-zero exit value: $results";
@@ -95,16 +95,6 @@ sub printBanner($) {
 
 #### ==================== BELOW: Code that gets run DIRECTLY at the main level (not inside a function or anything!) ======================
 
-
-
-
-
-print STDERR ">> ARGUMENTS TO mrc_handler.pl: perl mrc_handler.pl @ARGV\n";
-
-## "ffdb" = "flat file data base"
-my $local_ffdb           = undef; #/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
-my $local_reference_ffdb = "/bueno_not_backed_up/sharpton/sifting_families/"; # Location of the reference flatfile data (HMMs, aligns, seqs for each family). The subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir. Below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
-
 if (!exists($ENV{'MRC_LOCAL'})) {
     print STDOUT ("[ERROR]: The MRC_LOCAL environment variable was NOT EXPORTED and is UNDEFINED.\n");
     print STDOUT ("[ERROR]: MRC_LOCAL needs to be defined as the local code directory where the MRC files are located.\n");
@@ -113,7 +103,11 @@ if (!exists($ENV{'MRC_LOCAL'})) {
     die "Environment variable MRC_LOCAL must be EXPORTED. Example: export MRC_LOCAL='/path/to/your/directory/for/MRC'\n";
 }
 
-my $localScriptDir   = $ENV{'MRC_LOCAL'} . "/scripts" ; # <-- point to the location of the MRC scripts. Auto-detected from MRC_LOCAL variable.
+print STDERR ">> ARGUMENTS TO mrc_handler.pl: perl mrc_handler.pl @ARGV\n";
+
+my $local_ffdb           = undef; #/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
+my $local_reference_ffdb = undef; #"/bueno_not_backed_up/sharpton/sifting_families/"; # Location of the reference flatfile data (HMMs, aligns, seqs for each family). The subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir. Below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
+my $localScriptDir       = $ENV{'MRC_LOCAL'} . "/scripts" ; # <-- point to the location of the MRC scripts. Auto-detected from MRC_LOCAL variable.
 
 my $project_dir   = ""; #where are the project files to be processed?
 my $family_subset_list; # path to a file that lists (one per line) which family ids you want to include. Defaults to all. Will probably come back and make this a seperate familyconstruction, e.g. /home/sharpton/projects/MRC/data/subset_perfect_famids.txt
@@ -526,28 +520,21 @@ if ($is_remote && $stage){
 	$analysis->MRC::Run::remote_transfer_search_db($blastdb_name, "blast");
 	#should do optimization here. Also, should roll over to blast+
 	$analysis->MRC::Run::gunzip_remote_dbs($blastdb_name, "blast");
-
 	my $project_path = $analysis->get_remote_project_path();
-	my $nsplits  = $analysis->MRC::DB::get_number_db_splits("blast");
-
+	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
 	if ($use_blast){
 	    print "Building remote formatdb script...\n";
 	    my $formatdb_script_path = "$local_ffdb/projects/$projID/run_formatdb.sh";
-	    my $remote_script_path   = $analysis->get_remote_formatdb_script(); # a file and not a directory!
-	    #build_remote_formatdb_script($formatdb_script_path, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $use_scratch);
-	    #my @args = ("build_remote_lastdb_script.pl", "-o $script_path", "-n $n_splits", "--name $blastdb_basename", "-p $project_path", "-s $use_scratch");
-	    build_remote_script_generic("perl $localScriptDir/build_remote_formatdb_script.pl -o $formatdb_script_path -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
-	    MRC::Run::transfer_file($formatdb_script_path, $analysis->get_remote_connection() . ":" . $remote_script_path);
-	    $analysis->MRC::Run::format_remote_blast_dbs($remote_script_path);
+	    exec_and_die_on_nonzero("perl $localScriptDir/build_remote_formatdb_script.pl -o $formatdb_script_path -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
+	    MRC::Run::transfer_file($formatdb_script_path, ($analysis->get_remote_connection() . ":" . $analysis->get_remote_formatdb_script()));
+	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_formatdb_script() );
 	}
 	if ($use_last){
 	    print "Building remote lastdb script...\n";
 	    my $lastdb_script       = "$local_ffdb/projects/$projID/run_lastdb.sh";
-	    my $remote_script_path  = $analysis->get_remote_lastdb_script(); # a file and not a directory!
-	    #build_remote_lastdb_script($lastdb_script, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $use_scratch);
-	    build_remote_script_generic("perl $localScriptDir/build_remote_lastdb_script.pl -o $lastdb_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
-	    MRC::Run::transfer_file($lastdb_script, $analysis->get_remote_connection() . ":" . $remote_script_path);
-	    $analysis->MRC::Run::format_remote_blast_dbs($remote_script_path);
+	    exec_and_die_on_nonzero("perl $localScriptDir/build_remote_lastdb_script.pl -o $lastdb_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
+	    MRC::Run::transfer_file($lastdb_script, ($analysis->get_remote_connection() . ":" . $analysis->get_remote_lastdb_script()));
+	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_lastdb_script() );
 	}
     }
 }
@@ -564,9 +551,7 @@ if ($is_remote) {
 	my $nsplits        = $analysis->MRC::DB::get_number_db_splits("hmm");
 	print "number of hmm searches: $n_hmm_searches\n";
 	print "number of hmm splits: $nsplits\n";
-
-	build_remote_script_generic("perl $localScriptDir/build_remote_hmmscan_script.pl -z $n_hmm_searches -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $use_scratch");
-	#build_remote_hmmscan_script($h_script, $n_hmm_searches, $hmmdb_name, $nsplits, $analysis->get_remote_project_path());
+	exec_and_die_on_nonzero("perl $localScriptDir/build_remote_hmmscan_script.pl -z $n_hmm_searches -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $use_scratch");
 	MRC::Run::transfer_file($h_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_hmmscan_script());
     }
     if ($use_hmmsearch){
@@ -577,8 +562,7 @@ if ($is_remote) {
 	my $nsplits     = $analysis->MRC::DB::get_number_db_splits("hmm");
 	print "number of searches: $n_sequences\n";
 	print "number of hmmdb splits: $nsplits\n";
-	#build_remote_hmmsearch_script($h_script, $n_sequences, $hmmdb_name, $nsplits, $analysis->get_remote_project_path(), $use_scratch);
-	build_remote_script_generic("perl $localScriptDir/build_remote_hmmsearch_script.pl -z $n_sequences -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $use_scratch");
+	exec_and_die_on_nonzero("perl $localScriptDir/build_remote_hmmsearch_script.pl -z $n_sequences -o $h_script -n $nsplits --name $hmmdb_name -p $project_path -s $use_scratch");
 	MRC::Run::transfer_file($h_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_hmmsearch_script());
     }
     if ($use_blast){
@@ -588,8 +572,7 @@ if ($is_remote) {
 	my $nsplits    = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
 	print "number of blast db splits: $nsplits\n";
-	#build_remote_blastsearch_script($b_script, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $use_scratch);
-	build_remote_script_generic("perl $localScriptDir/build_remote_blast_script.pl -z $db_length -o $b_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
+	exec_and_die_on_nonzero("perl $localScriptDir/build_remote_blast_script.pl -z $db_length -o $b_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	MRC::Run::transfer_file($b_script, $analysis->get_remote_connection() . ":" . $analysis->get_remote_blast_script());
     }
     if ($use_last){
@@ -600,8 +583,7 @@ if ($is_remote) {
 	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
 	print "number of last db splits: $nsplits\n";
-	build_remote_script_generic("perl $localScriptDir/build_remote_last_script.pl -z $db_length -o $last_local -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
-	#build_remote_lastsearch_script($last_local, $db_length, $blastdb_name, $n_blastdb_splits, $analysis->get_remote_project_path(), $use_scratch);
+	exec_and_die_on_nonzero("perl $localScriptDir/build_remote_last_script.pl -z $db_length -o $last_local -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	MRC::Run::transfer_file($last_local, $analysis->get_remote_connection() . ":" . $analysis->get_remote_last_script());
     }
 }
@@ -611,12 +593,12 @@ if ($is_remote) {
 HMMSCAN:
 if ($is_remote){
     printBanner("RUNNING REMOTE SEARCH");
-    foreach my $sample_id(@{ $analysis->get_sample_ids() }){
+    foreach my $sample_id(@{ $analysis->get_sample_ids() }) {
 	($use_hmmscan)   && $analysis->MRC::Run::run_search_remote($sample_id, "hmmscan",   $waittime, $verbose);
 	($use_blast)     && $analysis->MRC::Run::run_search_remote($sample_id, "blast",     $waittime, $verbose);
 	($use_hmmsearch) && $analysis->MRC::Run::run_search_remote($sample_id, "hmmsearch", $waittime, $verbose);
 	($use_last)      && $analysis->MRC::Run::run_search_remote($sample_id, "last",      $waittime, $verbose);
-	print "Progress report: finished ${sample_id} on " . `date` . "\n";
+	print "Progress report: finished ${sample_id} on " . `date` . "";
     }  
 } else {
     printBanner("RUNNING LOCAL SEARCH");
@@ -624,7 +606,7 @@ if ($is_remote){
 	#my $sample_path = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/" . $sample_id . "/";
 	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs($hmmdb_name) };
 	warn "Running hmmscan for sample ID ${sample_id}...";
-	foreach my $hmmdb(keys(%hmmdbs)){
+	foreach my $hmmdb(keys(%hmmdbs)) {
 	    my $results_full_path = "search_results/${sample_id}_v_${hmmdb}.hsc";
 	    #run with tblast output format (e.g., --domtblout)
 	    $analysis->MRC::Run::run_hmmscan("orfs.fa", $hmmdbs{$hmmdb}, $results_full_path, 1);
@@ -642,6 +624,7 @@ if ($is_remote){
 	($use_blast)     && $analysis->MRC::Run::get_remote_search_results($sample_id, "blast");
 	($use_hmmsearch) && $analysis->MRC::Run::get_remote_search_results($sample_id, "hmmsearch");
 	($use_last)      && $analysis->MRC::Run::get_remote_search_results($sample_id, "last");
+	print "Progress report: finished ${sample_id} on " . `date` . "";
     }
 }
 
@@ -652,51 +635,29 @@ if ($is_remote){
     printBanner("CLASSIFYING REMOTE SEARCH RESULTS");
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){
 	if (defined($skip_samps{ $sample_id })){
-	    print("skipping $sample_id because it has been processed\n");
+	    warn("skipping $sample_id because it has apparently been processed already.");
 	    next;
 	}
 	print "Classifying reads for sample $sample_id\n";
-	my $path_to_split_orfs = $analysis->get_sample_path($sample_id) . "/orfs";
+	my $path_to_split_orfs = File::Spec->catdir($analysis->get_sample_path($sample_id), "orfs");
 
-	# maybe could be glob("$path_to_split_orfs/*")
-	foreach my $orf_split_file_name(@{ $analysis->MRC::DB::get_split_sequence_paths($path_to_split_orfs, 0) }) {
-	    if ($use_hmmscan){
-		my $algo = "hmmscan";
+	my @algosToRun = ();
+	if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
+	if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
+	if ($use_blast)     { push(@algosToRun, "blast"); }
+	if ($use_last)      { push(@algosToRun, "last"); }
+	foreach my $orf_split_file_name(@{ $analysis->MRC::DB::get_split_sequence_paths($path_to_split_orfs, 0) }) { # maybe could be glob("$path_to_split_orfs/*")
+	    foreach my $algo (@algosToRun) {
 		my $class_id = $analysis->MRC::DB::get_classification_id(
 		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
-		)->classification_id();
-		print "Classification_id for this run using $algo is $class_id\n";
+		    )->classification_id();
+		print "Classification_id for this run using $algo is $class_id\n";    
 		$analysis->MRC::Run::classify_reads($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
 	    }
-	    if ($use_hmmsearch){
-		my $algo = "hmmsearch";
-		my $class_id = $analysis->MRC::DB::get_classification_id(
-		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
-		)->classification_id();
-		print "Classification_id for this run using $algo is $class_id\n";
-		$analysis->MRC::Run::classify_reads($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
-	    }
-	    if ($use_blast){
-		my $algo = "blast";
-		my $class_id = $analysis->MRC::DB::get_classification_id(
-		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $blastdb_name, $algo, $top_hit_type,
-		)->classification_id();
-		print "Classification_id for this run using $algo is $class_id\n";
-		$analysis->MRC::Run::classify_reads($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
-	    }	    
-	    if ($use_last){
-		my $algo = "last";
-		my $class_id = $analysis->MRC::DB::get_classification_id(
-		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $blastdb_name, $algo, $top_hit_type,
-		)->classification_id();
-		print "Classification_id for this run using $algo is $class_id\n";
-		#build this routine
-		$analysis->MRC::Run::classify_reads($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
-	    }	    
 	}
    }
 } else{
-    printBanner("CLASSIFYING LOCAL SEARCH RESULTS ?? This is 'deprecated' apparently and maybe hasn't been tested recently?");
+    printBanner("RUNNING LOCALLY ----- This is 'deprecated' apparently and maybe hasn't been tested recently?");
     #this block is deprecated...
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){
 	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs($hmmdb_name) };

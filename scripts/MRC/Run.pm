@@ -1504,7 +1504,7 @@ sub gunzip_remote_dbs{
 }
 
 sub format_remote_blast_dbs{
-    my( $self, $remote_script_path ) = @_;
+    my($self, $remote_script_path) = @_;
     my $remote_database_dir   = File::Spec->catdir($self->get_remote_ffdb(), $BLASTDB_DIR, $self->get_blastdb_name());
     my $results    = execute_ssh_cmd($self->get_remote_connection(), "qsub -sync y $remote_script_path $remote_database_dir");
 }
@@ -1514,15 +1514,15 @@ sub run_search_remote {
     ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed in! The invalid type was: \"$type\".";
     my $remote_orf_dir         = File::Spec->catdir($self->get_remote_sample_path($sample_id), "orfs");
     my $log_file_prefix       = File::Spec->catfile($self->get_remote_project_log_dir(), "${type}_handler");
-    my $remote_search_res_dir  = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", ${type});
+    my $remote_results_output_dir  = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", ${type});
     my ($remote_script_path, $db_name, $remote_db_dir);
+
     if (($type eq "blast") or ($type eq "last")) {
 	$db_name               = $self->get_blastdb_name();
-	$remote_db_dir         = $self->get_remote_ffdb() . "/$BLASTDB_DIR/$db_name";
+	$remote_db_dir         = File::Spec->catdir($self->get_remote_ffdb(), $BLASTDB_DIR, $db_name);
 	if ($type eq "last" ) { $remote_script_path  = $self->get_remote_last_script();  } # LAST
 	if ($type eq "blast") { $remote_script_path  = $self->get_remote_blast_script(); } # BLAST
     }
-
     if (($type eq "hmmsearch") or ($type eq "hmmscan")) {
 	$db_name               = $self->get_hmmdb_name();
 	$remote_db_dir         = File::Spec->catdir($self->get_remote_ffdb(), $HMMDB_DIR, $db_name);
@@ -1536,7 +1536,7 @@ sub run_search_remote {
 	MRC::Run::transfer_file_into_directory($transferMe, ($self->get_remote_connection() . ':' . $self->get_remote_script_dir() . '/')); # transfer the script into the remote directory
     }
 
-    my $remote_cmd  = "\'perl " . File::Spec->catfile($self->get_remote_script_dir(), "run_remote_search_handler.pl") . " --dbdir=$remote_db_dir --resultdir=$remote_search_res_dir --querydir=$remote_orf_dir --dbname=$db_name --scriptpath=${remote_script_path} -w $waitTimeInSeconds > ${log_file_prefix}.out 2> ${log_file_prefix}.err \'";
+    my $remote_cmd  = "\'perl " . File::Spec->catfile($self->get_remote_script_dir(), "run_remote_search_handler.pl") . " --dbdir=$remote_db_dir --resultdir=$remote_results_output_dir --querydir=$remote_orf_dir --dbname=$db_name --scriptpath=${remote_script_path} -w $waitTimeInSeconds > ${log_file_prefix}.out 2> ${log_file_prefix}.err \'";
     my $results     = execute_ssh_cmd($self->get_remote_connection(), $remote_cmd, $verbose);
     (0 == $EXITVAL) or warn("Execution of command <$remote_cmd> returned non-zero exit code $EXITVAL. The remote reponse was: $results.");
     return $results;
@@ -1549,9 +1549,9 @@ sub get_remote_search_results {
     my $in_orf_dir = File::Spec->catdir($self->get_sample_path($sample_id), "orfs"); # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs(@{$self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0)}) { # get_split_sequence_paths is a like a custom version of "glob(...)". It may be eventually replaced by "glob."
 	warn "Handling <$in_orfs>...";
-	my $remote_search_res_dir = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", $type);
+	my $remote_results_output_dir = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", $type);
 	my $local_search_res_dir  = File::Spec->catdir(       $self->get_sample_path($sample_id), "search_results", $type);
-	my $remoteFile = $self->get_remote_connection() . ':' . "$remote_search_res_dir/$in_orfs";
+	my $remoteFile = $self->get_remote_connection() . ':' . "$remote_results_output_dir/$in_orfs";
 	MRC::Run::transfer_file_into_directory($remoteFile, "$local_search_res_dir/");
     }
 }
