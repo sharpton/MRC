@@ -17,6 +17,7 @@ LOGS=/netapp/home/sharpton/projects/MRC/scripts/logs
 INPUT=$1
 RAWOUT=$2
 SPLITOUT=$3
+FILTERLENGTH=$4
 
 qstat -f -j ${JOB_ID}                              > $LOGS/transeq/${JOB_ID}.all 2>&1
 echo "****************************"               >> $LOGS/transeq/${JOB_ID}.all 2>&1
@@ -24,14 +25,14 @@ echo "RUNNING TRANSEQ WITH $*"                    >> $LOGS/transeq/${JOB_ID}.all
 source /netapp/home/sharpton/.bash_profile        >> $LOGS/transeq/${JOB_ID}.all 2>&1
 date                                              >> $LOGS/transeq/${JOB_ID}.all 2>&1
 #transeq -frame=6 input.fa output.fa
-transeq -frame=6 $INPUT $OUTPUT                   >> $LOGS/transeq/${JOB_ID}.all 2>&1
+transeq -trim -frame=6 -sformat1 pearson -osformat2 pearson $INPUT $OUTPUT                   >> $LOGS/transeq/${JOB_ID}.all 2>&1
 date                                              >> $LOGS/transeq/${JOB_ID}.all 2>&1
 if[ -z "${SPLITOUT}" ]{
 	date                                              >> $LOGS/transeq/${JOB_ID}.all 2>&1
 	echo "RUN FINISHED"                               >> $LOGS/transeq/${JOB_ID}.all 2>&1
 
 } else {
-	perl split_orf_on_stops.pl -i $OUTPUT -o $RAWOUT  >> $LOGS/transeq/${JOB_ID}.all 2>&1
+	perl split_orf_on_stops.pl -i $OUTPUT -o $RAWOUT -l $FILTERLENGTH  >> $LOGS/transeq/${JOB_ID}.all 2>&1
 	date                                              >> $LOGS/transeq/${JOB_ID}.all 2>&1
 	echo "RUN FINISHED"                               >> $LOGS/transeq/${JOB_ID}.all 2>&1
 } fi

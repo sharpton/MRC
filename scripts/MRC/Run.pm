@@ -115,29 +115,61 @@ sub load_samples{
 	my $insert  = $self->MRC::DB::create_sample( $sample, $self->get_project_id() );    
 	my $sid     = $insert->sample_id();
 	$samples{$sample}->{"id"} = $sid;
-	my $seqs    = Bio::SeqIO->new( -file => $samples{$sample}->{"path"}, -format => 'fasta' );
-	my $count   = 0;
-	if( $self->multi_load() ){
-	    my @read_names = ();
-	    while( my $read = $seqs->next_seq() ){
-		my $read_name = $read->display_id();
-		
-		push( @read_names, $read_name );
-		$count++;
-	    }
-	    $self->MRC::DB::create_multi_metareads( $sid, \@read_names );
-	}
-	else{
-	    while( my $read = $seqs->next_seq() ){
-		my $read_name = $read->display_id();
-		$self->MRC::DB::create_metaread( $read_name, $sid );
-		$count++;
+	#test importing data
+	if( $self->bulk_load() ){
+	    my $tmp    = "/tmp/" . $sid . ".sql";	    
+	    my $table  = "metareads";
+	    my $nrows  = 10000;
+	    my @fields = ( "sample_id", "read_alt_id" );
+	    my $fks    = { "sample_id" => $sid }; #foreign keys and fields not in file 
+	    unless( $self->is_slim() ){
+		$self->MRC::DB::bulk_import( $table, $samples{$sample}->{"path"}, $tmp, $nrows, $fks, \@fields );
 	    }
 	}
-	warn("Loaded $count reads into DB for sample $sid\n");
-    }
+	else{ #turn this off of the above doesn't work!
+	    my $seqs    = Bio::SeqIO->new( -file => $samples{$sample}->{"path"}, -format => 'fasta' );
+	    my $count   = 0;
+	    unless( $self->is_slim() ){
+		if( $self->multi_load() ){
+		    my @read_names = ();
+		    while( my $read = $seqs->next_seq() ){
+			my $read_name = $read->display_id();
+			
+			push( @read_names, $read_name );
+			$count++;
+		    }
+		    $self->MRC::DB::create_multi_metareads( $sid, \@read_names );
+		}
+		else{
+		    while( my $read = $seqs->next_seq() ){
+			my $read_name = $read->display_id();
+			$self->MRC::DB::create_metaread( $read_name, $sid );
+			$count++;
+		    }
+		}
+		warn("Loaded $count reads into DB for sample $sid\n");
+	    }
+	}
+    }	
     $self->set_samples( \%samples ); #uncertain if this is necessary
     warn( "All samples associated with project " . $self->get_project_id() . " are loaded\n" );
+    return $self;
+}
+
+sub build_read_import_file{
+    my $self      = shift;
+    my $seqs      = shift;
+    my $sample_id = shift;
+    my $out       = shift;
+    open( SEQS, "$seqs" ) || die "Can't open $seqs for read in MRC::Run::build_read_import_file\n";
+    open( OUT,  ">$out" ) || die "Can't open $out for write in MRC::Run::build_read_import_file\n";
+    while( <SEQS> ){
+	chomp $_;
+	if( $_ =~ m/^\>(.*)(\s|$)/ ){
+	    my $read_alt_id = $1;
+	    print OUT "$sample_id,$read_alt_id\n";
+	}
+    }
     return $self;
 }
 
@@ -252,6 +284,8 @@ sub load_orf{
     return $self;
 }
 
+
+
 sub load_multi_orfs{
     my $self       = shift;
     my $orfs       = shift; #a Bio::Seq object
@@ -263,7 +297,7 @@ sub load_multi_orfs{
     while( my $orf = $orfs->next_seq() ){
 	$count++;
 	my $orf_alt_id  = $orf->display_id();
-	my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, $algo );
+	my $read_alt_id = $self->MRC::Run::parse_orf_id( $orf_alt_id, $algo );
 	#get the read id, but only if we haven't see this read before
 	my $read_id;
 	if( defined( $read_map{ $read_alt_id } ) ){
@@ -291,6 +325,49 @@ sub load_multi_orfs{
     return $self;
 }
 
+sub bulk_load_orf{
+    my $self    = shift;
+    my $seqfile = shift;
+    my $sid     = shift;
+    my $method  = shift;
+    print $method . "\n";
+    my $tmp    = "/tmp/" . $sid . ".sql";	    
+    my $table  = "orfs";
+    my $nrows  = 10000;
+    my @fields = ( "sample_id", "read_alt_id" );
+    my $fks    = { "sample_id" => $sid,
+		   "method" => $method,
+                 }; 
+    $self->MRC::DB::bulk_import( $table, $seqfile, $tmp, $nrows, $fks, \@fields );
+    return $self;
+}
+
+sub read_alt_id_to_read_id{
+    my $self        = shift;
+    my $read_alt_id = shift;
+    my $sample_id   = shift;
+    my $read_map    = shift; #hashref
+    my $read_id;
+    if( defined( $read_map->{ $read_alt_id } ) ){
+	$read_id = $read_map->{ $read_alt_id };
+    }
+    else{
+	my $reads = $self->get_schema->resultset("Metaread")->search(
+	    {
+		read_alt_id => $read_alt_id,
+		sample_id   => $sample_id,
+	    }
+	    );
+	if( $reads->count() > 1 ){
+	    warn "Found multiple reads that match read_alt_id: $read_alt_id and sample_id: $sample_id in load_orf. Cannot continue!\n";
+	    die;
+	}
+	my $read = $reads->next();
+	$read_id = $read->read_id();
+    }
+    return $read_id;
+}
+
 
 #the efficiency of this method could be improved!
 sub load_orf_old{
@@ -316,6 +393,7 @@ sub load_orf_old{
 }
 
 sub parse_orf_id{
+    my $self   = shift;
     my $orfid  = shift;
     my $method = shift;
     my $read_id = ();
@@ -335,7 +413,6 @@ sub parse_orf_id{
 	    die "Can't parse read_id from $orfid\n";
 	}
     }
-
     return $read_id;
 }
 
@@ -397,11 +474,35 @@ sub classify_reads{
     #now insert the data into the database
     my $is_strict = $self->is_strict_clustering();
     my $n_hits    = 0;
-    my %orf_hits   = (); #a hash for bulk loading hits: orf_id -> famid, only works for strict clustering!
+    my %orf_hits   = (); #a hash for multi-insert loading hits: orf_id -> famid, only works for strict clustering!
     #if we want best hit per metaread, use this block
     if( $top_hit_type eq "read" ){
 	print "Filtering hits to identify top hit per read\n";
 	system( "date" );
+	###
+	#THIS ISN'T CORRECT. YOU'VE GONE AND SCREWED IT ALL UP.
+	if( $self->is_slim ){
+	    my $read_map = {};
+	    foreach my $orf_split_file_name( @{ $self->MRC::DB::get_split_sequence_paths( $self->get_sample_path( $sample_id ) . "/orfs/" , 1 ) } ) {
+		my @orfs = ();
+		open( SEQS, $orf_split_file_name ) || die "Can't open $orf_split_file_name for read: $!\n";
+		while( <SEQS> ){
+		    chomp $_;
+		    if( $_ =~ m/\>(.*?)$/ ){
+			my $orf_alt_id = $1;
+			next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+			my $orf;
+			$orf = $orf_alt_id;
+			my $read_id = $self->MRC::Run::parse_orf_id( $orf, $self->trans_method );
+			my @results = @{ $self->MRC::Run::read_map_process_orfs( $hit_map, $read_map, $read_id, $orf_alt_id, $algo ) };
+			$hit_map  = $results[0];
+			$read_map = $results[1]; 
+		    }
+		}
+	    }
+	    $read_map = {};
+	}
+	else{
 	#dbi is needed for speed on big data sets
 #	timethese( 5000, 
 #		   { 
@@ -411,9 +512,10 @@ sub classify_reads{
 #		   }
 #	    );
 
-	$hit_map = $self->MRC::Run::filter_hit_map_for_top_reads_dbi_single( $orf_split, $sample_id, $is_strict, $algo, $hit_map );
-	print "finished filtering\n";
-	system( "date" );
+	    $hit_map = $self->MRC::Run::filter_hit_map_for_top_reads_dbi_single( $orf_split, $sample_id, $is_strict, $algo, $hit_map );
+	    print "finished filtering\n";
+	    system( "date" );
+	}
     }
     #dbi for speed
     my $dbh  = $self->MRC::DB::build_dbh();
@@ -430,47 +532,86 @@ sub classify_reads{
 #	    my $score    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
 	    my $hit    = $hit_map->{$orf_alt_id}->{$is_strict}->{"target"};
 	    my $famid;
+
 	    #blast hits are gene_oids, which map to famids via the database (might change refdb seq headers to include famid in header
 	    #which would enable faster flatfile lookup).
+	    ##should probably do the above for the _slim option so that DB can remain light
 	    if( $algo eq "blast" || $algo eq "last" ){
-		my $family = $self->MRC::DB::get_family_from_geneoid( $hit );
-		$family->result_class('DBIx::Class::ResultClass::HashRefInflator');
+#		my $family = $self->MRC::DB::get_family_from_geneoid( $hit );
+#		$family->result_class('DBIx::Class::ResultClass::HashRefInflator');
                 #if multiple fams, taking the first that's found. 
-		my $first = $family->first;
-		$famid    = $first->{"famid"};			  
+#		my $first = $family->first;
+#		$famid    = $first->{"famid"};			  
+		$famid = _parse_famid_from_ffdb_seqid( $hit );
 	    }
 	    else{
 		$famid = $hit;
 	    }	
-	    #because we have an index on sample_id and orf_alt_id, we can speed this up by passing sample id
-	    #my $orf_id = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id )->orf_id(); 
-	    #use DBI for speed
-	    my $orfs       = $self->MRC::DB::get_orf_from_alt_id_dbi( $dbh, $orf_alt_id, $sample_id );
-	    my $orf        = $orfs->fetchall_arrayref();
-	    my $orf_id     = $orf->[0][0];
-	    $orfs->finish;
-	    #need to ensure that this stores the raw values, need some upper limit thresholds, so maybe we need classification_id here. simpler to store anything with evalue < 1. Still not sure I want to store this in the DB.
-	    #$self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
-	    
-	    #let's try bulk loading to speed things up....
-	    if( $self->multi_load() ){
-		$orf_hits{$orf_id} = $famid; #currently only works for strict clustering!
+	    if( $self->is_slim() ){
+		if( $self->bulk_load ){
+		    $orf_hits{$orf_alt_id} = $famid; #currently only works for strict clustering!
+		}
+		else{
+		    #will load famid_slim, orf_alt_id_slim, sample_id, classification_id
+		    #There are no foreign keys on this table, so we should be careful when loading the data
+		    ###do we need sampleid,orf_alt_id unique key?
+		    $self->MRC::DB::insert_familymember_slim( $famid, $orf_alt_id, $sample_id, $class_id );
+		}
 	    }
-	    #otherwise, the slow way...
 	    else{
-		$self->MRC::DB::insert_familymember_orf( $orf_id, $famid, $class_id );
+		#because we have an index on sample_id and orf_alt_id, we can speed this up by passing sample id
+		#my $orf_id = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id )->orf_id(); 
+		#use DBI for speed
+		my $orfs       = $self->MRC::DB::get_orf_from_alt_id_dbi( $dbh, $orf_alt_id, $sample_id );
+		my $orf        = $orfs->fetchall_arrayref();
+		my $orf_id     = $orf->[0][0];
+		$orfs->finish;
+		#need to ensure that this stores the raw values, need some upper limit thresholds, so maybe we need classification_id here. simpler to store anything with evalue < 1. Still not sure I want to store this in the DB.
+		#$self->MRC::DB::insert_search_result( $orf_id, $famid, $evalue, $score, $coverage );
+	    
+		#let's try multi-row insert loading to speed things up....
+		if( $self->multi_load() ){
+		    $orf_hits{$orf_id} = $famid; #currently only works for strict clustering!
+		}
+		#otherwise, the slow way...
+		else{
+		    $self->MRC::DB::insert_familymember_orf( $orf_id, $famid, $class_id );
+		}
 	    }
 	}
     }
     $self->MRC::DB::disconnect_dbh( $dbh );
-    #bulk load here:
+    if( $self->is_slim && $self->bulk_load ){
+	#build this...
+	my $tmp    = "/tmp/" . $sample_id . ".sql";	    
+	my $table  = "familymembers_slim";
+	my $nrows  = 10000;
+	my @fields = ( "famid_slim", "orf_alt_id_slim", "sample_id", "classification_id" );
+	my $fks    = { "sample_id"         => $sample_id,
+		       "classification_id" => $class_id,
+	};
+	$self->MRC::DB::bulk_import( $table, \%orf_hits, $tmp, $nrows, $fks );
+    }
+    #multi-row insert here:
     if( $self->multi_load() ){
-	print "Bulk loading classified reads into database\n";
-	$self->MRC::DB::create_multi_familymemberss( $class_id, \%orf_hits);
+	print "Multi-loading classified reads into database\n";
+	$self->MRC::DB::create_multi_familymembers( $class_id, \%orf_hits);
     }
     print "Found and inserted $n_hits threshold passing search results into the database\n";
 }
 
+sub _parse_famid_from_ffdb_seqid {
+    my $hit = shift;
+    my $famid;
+    if( $hit =~ m/^(.*?)\_(\d+)$/ ){
+	$famid = $2;
+    }
+    else{
+	warn( "Can't parse famid from $hit in _parse_famid_from_ffdb_seqid!\n" );
+	die;
+    }
+    return $famid;
+}
 sub filter_hit_map_for_top_reads{
     my ( $self, $sample_id, $is_strict, $algo, $hit_map ) = @_;
 #    print "Getting top read hit from $algo\n";
@@ -487,51 +628,10 @@ sub filter_hit_map_for_top_reads{
 		my $orf_alt_id = $1;
 		next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
 		my $orf        = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id );
-		my $read_id    = $orf->{"read_id"};
-#PAGER TEST HERE
-#    my $page = 1;
-#    while( my $orfs = $self->MRC::DB::get_orfs_by_sample( $sample_id, $page ) ){
-#	print "getting page $page\n";
-#	if( $orfs->all == 0 ){
-#	    last;
-#	}
-#	$page++;
-#	for( $orfs->all ){
-#	    my $orf = $_;
-#	    my $orf_alt_id = $orf->orf_alt_id();
-#	    print $orf_alt_id . "\n";
-#    }
-		if( !defined( $read_map->{$read_id} ) ){
-#		    print "adding orf $orf_alt_id\n";
-		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
-		}
-		else{
-#		    print "$orf_alt_id is in our hit map...\n";
-		    #for now, we'll simply sort on evalue, since they both pass coverage threshold
-		    if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
-			( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
-			){
-			my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
-#			print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
-			$hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
-	#		print "$read_id\n";
-			$read_map->{$read_id}->{"target"}   = $orf_alt_id;
-			$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-			$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-			$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
-		    }
-		    else{
-#			print "Canceling $orf_alt_id:\n";
-	#		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
-	#		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
-	#		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
-			#get rid of the hit if it's not better than the current top for the read
-			$hit_map->{$orf_alt_id}->{"has_hit"} = 0;
-		    }
-		}
+		my $read_id    = $orf->{"read_id"};		
+		my @results = @{ $self->MRC::Run::read_map_process_orfs( $hit_map, $read_map, $read_id, $orf_alt_id, $algo ) };
+		$hit_map  = $results[0];
+		$read_map = $results[1]; 
 	    }
 	}
 	close SEQS;
@@ -576,46 +676,17 @@ sub filter_hit_map_for_top_reads_dbi{
     my $orfs = $self->MRC::DB::get_orfs_by_sample_dbi( $dbh, $sample_id );
     my $max_rows = 10000;
     while( my $vals = $orfs->fetchall_arrayref( {}, $max_rows ) ){
+	foreach my $orf( @$vals ){
 #	print "grabbing rows\n";
 #	system( "date" );
-	foreach my $orf( @$vals ){
-#	    print Dumper $orf;
 	    my $orf_alt_id = $orf->{"orf_alt_id"};
 	    next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
-	    my $read_id = $orf->{"read_id"};
-	    if( !defined( $read_map->{$read_id} ) ){
-#		print "adding orf $orf_alt_id\n";
-		$read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
-	    }
-	    else{
-#		print "$orf_alt_id is in our hit map...\n";
-		#for now, we'll simply sort on evalue, since they both pass coverage threshold
-		if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
-		    ( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
-		    ){
-		    my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
-#		    print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
-		    $hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
-#		    print "$read_id\n";
-		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
-		}
-		else{
-#		    print "Canceling $orf_alt_id:\n";
-		    #		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
-		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
-		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
-		    #get rid of the hit if it's not better than the current top for the read
-		    $hit_map->{$orf_alt_id}->{"has_hit"} = 0;
-		}
-	    }
-	}
-    } 
+	    my $read_id = $orf->{"read_id"};	    
+	    my @results = @{ $self->MRC::Run::read_map_process_orfs( $hit_map, $read_map, $read_id, $orf_alt_id, $algo ) };
+	    $hit_map  = $results[0];
+	    $read_map = $results[1]; 
+	} 
+    }
     $orfs->finish;
     $self->MRC::DB::disconnect_dbh( $dbh );
     $read_map = {};
@@ -640,37 +711,9 @@ sub filter_hit_map_for_top_reads_dbi_single{
 	    my $orfs       = $self->MRC::DB::get_orf_from_alt_id_dbi( $dbh, $orf_alt_id, $sample_id );
 	    my $orf        = $orfs->fetchall_arrayref();
 	    my $read_id = $orf->[0][2];
-	    if( !defined( $read_map->{$read_id} ) ){
-#		print "adding orf $orf_alt_id\n";
-		$read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
-	    }
-	    else{
-#		print "$orf_alt_id is in our hit map...\n";
-		#for now, we'll simply sort on evalue, since they both pass coverage threshold
-		if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
-		    ( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
-		    ){
-		    my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
-#		    print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
-		    $hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
-#		    print "$read_id\n";
-		    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
-		    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
-		    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
-		    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
-		}
-		else{
-#		    print "Canceling $orf_alt_id:\n";
-		    #		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
-		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
-		    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
-		    #get rid of the hit if it's not better than the current top for the read
-		    $hit_map->{$orf_alt_id}->{"has_hit"} = 0;
-		}
-	    }
+	    my @results = @{ $self->MRC::Run::read_map_process_orfs( $hit_map, $read_map, $read_id, $orf_alt_id, $algo ) };
+	    $hit_map  = $results[0];
+	    $read_map = $results[1]; 
 	    $orfs->finish;	
 	}
     }
@@ -680,7 +723,53 @@ sub filter_hit_map_for_top_reads_dbi_single{
     return $hit_map;
 }
 
-
+sub read_map_process_orfs{
+    my $self       = shift;
+    my $hit_map    = shift; #hashref
+    my $read_map   = shift; #hashref
+    my $read_id    = shift;
+    my $orf_alt_id = shift;
+    my $algo       = shift;
+    my $is_strict  = $self->is_strict_clustering;
+    
+#	my $orf_alt_id = $orf->{"orf_alt_id"};
+    next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+#	my $read_id = $orf->{"read_id"};
+    if( !defined( $read_map->{$read_id} ) ){
+#		print "adding orf $orf_alt_id\n";
+	$read_map->{$read_id}->{"target"}   = $orf_alt_id;
+	$read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+	$read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+	$read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+    }
+    else{
+#		print "$orf_alt_id is in our hit map...\n";
+	#for now, we'll simply sort on evalue, since they both pass coverage threshold
+	if( ( $algo ne "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"} < $read_map->{$read_id}->{"evalue"} ) ||
+	    ( $algo eq "last" && $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} > $read_map->{$read_id}->{"score"}   )
+	    ){
+	    my $prior_orf_alt_id = $read_map->{$read_id}->{"target"};
+#		    print "Canceling prior hit: " . $prior_orf_alt_id . "\n";
+	    $hit_map->{$prior_orf_alt_id}->{"has_hit"} = 0;
+#		    print "$read_id\n";
+	    $read_map->{$read_id}->{"target"}   = $orf_alt_id;
+	    $read_map->{$read_id}->{"evalue"}   = $hit_map->{$orf_alt_id}->{$is_strict}->{"evalue"};
+	    $read_map->{$read_id}->{"coverage"} = $hit_map->{$orf_alt_id}->{$is_strict}->{"coverage"};
+	    $read_map->{$read_id}->{"score"}    = $hit_map->{$orf_alt_id}->{$is_strict}->{"score"};
+	}
+	else{
+#		    print "Canceling $orf_alt_id:\n";
+	    #		print "..." . $orf_alt_id . " v " . $read_map->{$read_id}->{"target"} . "\n";
+	    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"score"} . " v " . $read_map->{$read_id}->{"score"} . "\n";
+	    #		print "..." . $hit_map->{$orf_alt_id}->{$is_strict}->{"target"} . " v " . $hit_map->{ $read_map->{$read_id}->{"target"} }->{$is_strict}->{"target"} . "\n";
+	    #get rid of the hit if it's not better than the current top for the read
+	    $hit_map->{$orf_alt_id}->{"has_hit"} = 0;
+	}
+    }
+    my @results = ( $hit_map, $read_map );
+    return \@results;
+}
+    
 
 sub parse_search_results{
     my $self         = shift;
@@ -1050,10 +1139,10 @@ sub build_search_db{
 	    my $split_db_path;
 	    if( $type eq "hmm" ){
 		$nr_db = 0; #Makes no sense to build a NR HMM DB
-		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".hmm", \@split, $nr_db );
+		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".hmm", \@split, $type, $nr_db );
 	    }
 	    elsif( $type eq "blast" ){
-		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".fa", \@split, $nr_db );
+		$split_db_path = cat_db_split( $db_path, $n_proc, $ffdb, ".fa", \@split, $type, $nr_db );
 	    }
 	    #we do want DBs to be gzipped 
 	    gzip_file( $split_db_path );
@@ -1078,7 +1167,9 @@ sub cat_db_split{
     my $ffdb         = shift;
     my $suffix       = shift;
     my $ra_families  = shift;
+    my $type         = shift;
     my $nr_db        = shift;
+
     my @families     = @{ $ra_families };
 
     my $split_db_path = $db_path . "_" . $n_proc . $suffix;
@@ -1088,7 +1179,14 @@ sub cat_db_split{
 	#do we want a nonredundant version of the DB? 
 	if( $nr_db ){
 	    #make a temp file for the nr 
-	    my $tmp = _build_nr_seq_db( $family );
+	    #append famids to seqids within this routine
+	    my $tmp = _build_nr_seq_db( $family, $suffix );
+	    cat( $tmp, $fh );
+	    unlink( $tmp );
+	}
+	#append famids to seqids
+	elsif( $type eq "blast" ){
+	    my $tmp = _append_famids_to_seqids( $family, $suffix );
 	    cat( $tmp, $fh );
 	    unlink( $tmp );
 	}
@@ -1100,16 +1198,36 @@ sub cat_db_split{
     return $split_db_path;
 }
 
+sub _append_famids_to_seqids{
+    my $family = shift;
+    my $suffix = shift;
+    my $family_tmp = $family . "_tmp";
+    my $seqin  = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
+    my $seqout = Bio::SeqIO->new( -file => ">$family_tmp", -format => 'fasta' );
+    my $dict   = {};
+    my $famid =  _get_famid_from_familydb_path( $family, $suffix );
+    while( my $seq = $seqin->next_seq ){
+	my $id       = $seq->display_id();
+	$seq->display_id( $id . "_" . $famid );
+	$seqout->write_seq( $seq );
+    }
+    return $family_tmp;    
+}
+
 #Note heuristic here: builiding an NR version of each family_db rather than across the complete DB. 
 #Assumes identical sequences are in same family, decreases RAM requirement. First copy of seq is retained
 sub _build_nr_seq_db{
     my $family    = shift;
+    my $suffix    = shift;
     my $family_nr = $family . "_nr";
     my $seqin  = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
     my $seqout = Bio::SeqIO->new( -file => ">$family_nr", -format => 'fasta' );
     my $dict   = {};
+    my $famid =  _get_famid_from_familydb_path( $family, $suffix );
+    my $baseid  = basename( $family, $suffix );
     while( my $seq = $seqin->next_seq ){
 	my $id       = $seq->display_id();
+	$seq->display_id( $id . "_" . $famid );
 	my $sequence = $seq->seq();
 	#if we haven't seen this seq before, print it out
 	if( !defined( $dict->{$sequence} ) ){
@@ -1123,6 +1241,14 @@ sub _build_nr_seq_db{
     return $family_nr;
 }
 
+#i'm worried that this might break any families that are not formatted ala SFam famids (e.g., Pfam ids)
+sub _get_famid_from_familydb_path{
+    my $path = shift;
+    my $suffix = shift;
+    $suffix    = $suffix . ".gz";
+    my $famid  = basename( $path, $suffix );
+    return $famid;
+}
 
 sub _grab_seqs_from_lookup_list{
     my $seq_id_list = shift; #list of sequence ids to retain
@@ -1282,10 +1408,11 @@ sub load_project_remote{
 #the qsub -sync y option keeps the connection open. lower chance of a connection failure due to a ping flood, but if connection between
 #local and remote tends to drop, this may not be foolproof
 sub translate_reads_remote{
-    my $self       = shift;
-    my $waittime   = shift;
-    my $logsdir    = shift;
-    my $split_orfs = shift; #split orfs on stop? 1/0    
+    my $self          = shift;
+    my $waittime      = shift;
+    my $logsdir       = shift;
+    my $split_orfs    = shift; #split orfs on stop? 1/0    
+    my $filter_length = shift;
     my @sample_ids = @{ $self->get_sample_ids() };
     my $connection = $self->get_remote_username . "@" . $self->get_remote_server;
     my @job_ids = ();
@@ -1304,7 +1431,7 @@ sub translate_reads_remote{
 	    my $local_unsplit_orfs = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
 	    my $remote_unsplit_orfs = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/unsplit_orfs/";
 	    my $remote_cmd   = "\'perl " . $self->get_remote_scripts() . "run_transeq_handler.pl -i " . $remote_input_dir . " -o " . $remote_output_dir . " -w " . $waittime . 
-		" -l " . $logsdir . " -s " . $self->get_remote_scripts() . " -u " . $remote_unsplit_orfs . " > ~/tmp.out\'";	
+		" -l " . $logsdir . " -s " . $self->get_remote_scripts() . " -u " . $remote_unsplit_orfs . " -f " . $filter_length . " > ~/tmp.out\'";	
 	    print( "translating reads, splitting orfs on stop codon\n" );       
 	    $self->MRC::Run::execute_ssh_cmd( $connection, $remote_cmd );
 	    print( "translation complete, Transferring split and raw translated orfs\n" );

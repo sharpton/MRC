@@ -4,7 +4,7 @@ use strict;
 use Getopt::Long;
 
 my( $inseqs, $outseqs );
-my $seq_len_min = 0; #in AA length; 
+my $seq_len_min = 0; #in AA length, filter is inclusive; 
 GetOptions(
     "i=s" => \$inseqs,
     "o=s" => \$outseqs,
@@ -53,7 +53,7 @@ sub process_seq{
     if( $sequence =~ m/\*/ ){
 	my @seqs  = split( "\\*", $sequence );
 	foreach my $seq( @seqs ){
-	    if( length( $seq ) < $seq_len_min ){
+	    if( length( $seq ) =< $seq_len_min ){
 		next;
 	    }
 	    my $id = $header . "_" . $count;

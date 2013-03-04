@@ -4,7 +4,7 @@ use strict;
 use Getopt::Long;
 use IPC::System::Simple qw(capture $EXITVAL);
 
-my( $indir, $outdir, $waittime, $unsplit_orfs_dir, $logsdir );
+my( $indir, $outdir, $waittime, $unsplit_orfs_dir, $logsdir, $filter_length );
 my $remote_scripts_path = "/netapp/home/sharpton/projects/MRC/scripts/";
 my $array = 1;
 
@@ -15,6 +15,7 @@ GetOptions(
     "s:s" => \$remote_scripts_path,
     "u:s" => \$unsplit_orfs_dir, #if defined, we will split translated reads on stop. put unsplit data here.
     "l=s" => \$logsdir,
+    "f=i" => \$filter_length,
 );
 
 my $split_orfs = 0;
@@ -70,7 +71,7 @@ foreach my $file( @infiles ){
 	my $results;
 	if( $split_orfs ){
 	    my $split_output = $split_outdir . "/" . $outfile;
-	    $results = run_transeq( $input, $output, $remote_scripts_path, $logsdir, $split_output );
+	    $results = run_transeq( $input, $output, $remote_scripts_path, $logsdir, $split_output, $filter_length );
 	}
 	else{
 	    $results = run_transeq( $input, $output, $remote_scripts_path, $logsdir );
@@ -90,7 +91,7 @@ foreach my $file( @infiles ){
 if( $array ){
     my $results;
     if( $split_orfs ){
-	$results = run_transeq_array( $indir, $inbasename, $outdir, $outbasename, $array_length, $remote_scripts_path, $logsdir, $split_outdir );
+	$results = run_transeq_array( $indir, $inbasename, $outdir, $outbasename, $array_length, $remote_scripts_path, $logsdir, $split_outdir, $filter_length );
     }
     else{
 	$results = run_transeq_array( $indir, $inbasename, $outdir, $outbasename, $array_length, $remote_scripts_path, $logsdir );
@@ -115,11 +116,11 @@ my $time = remote_job_listener( \@job_ids, $waittime );
 # SUBROUTINES #
 ###############
 sub run_transeq_array{
-    my( $indir, $inbasename, $outdir, $outbasename, $array_length, $remote_scripts_path, $logsdir, $split_outdir ) = @_;
+    my( $indir, $inbasename, $outdir, $outbasename, $array_length, $remote_scripts_path, $logsdir, $split_outdir, $filter_length ) = @_;
     my $script = $remote_scripts_path . "/run_transeq_array.sh";
     my @args = ();
     if( defined( $split_outdir ) ){
-    	@args = ( "-t 1-" . $array_length, $script, $indir, $inbasename, $outdir, $outbasename, $remote_scripts_path, $logsdir, $split_outdir);
+    	@args = ( "-t 1-" . $array_length, $script, $indir, $inbasename, $outdir, $outbasename, $remote_scripts_path, $logsdir, $split_outdir, $filter_length);
     }
     else{
 	@args = ( "-t 1-" . $array_length, $script, $indir, $inbasename, $outdir, $outbasename, $remote_scripts_path, $logsdir );
@@ -135,11 +136,11 @@ sub run_transeq_array{
 
 
 sub run_transeq{
-    my ( $input, $output, $remote_scripts_path, $logsdir, $split_output ) = @_;
+    my ( $input, $output, $remote_scripts_path, $logsdir, $split_output, $filter_length ) = @_;
     my $script = $remote_scripts_path . "/run_transeq.sh";
     my @args   = ();
     if( defined( $split_output ) ){
-	@args = ( $script, $input, $output, $logsdir, $split_output);
+	@args = ( $script, $input, $output, $logsdir, $split_output, $filter_length);
     }
     else{
 	@args = ( $script, $input, $output, $logsdir );

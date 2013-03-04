@@ -20,50 +20,32 @@ use Benchmark;
 
 print "perl mrc_handler.pl @ARGV\n";
  
-my $ffdb           = "/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
-my $ref_ffdb       = "/bueno_not_backed_up/sharpton/sifting_families/"; #where is the reference flatfile data (HMMs, aligns, seqs for each family)?
+my $ffdb           = "/mnt/data/home/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
+my $ref_ffdb       = "/mnt/data/home/sharpton/sifting_families/"; #where is the reference flatfile data (HMMs, aligns, seqs for each family)?
 #the subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir.
 #below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
 
-my $scripts_path   = "/home/sharpton/projects/MRC/scripts/"; #point to the location of the MRC scripts
+my $scripts_path   = "/mnt/data/home/sharpton//projects/MRC/scripts/"; #point to the location of the MRC scripts
 my $project_file   = ""; #where is the project files to be processed?
 my $family_subset_list; #path to a file that lists (one per line) which family ids you want to include. Defaults to all. Will probably come back and make this a seperate familyconstruction, e.g. /home/sharpton/projects/MRC/data/subset_perfect_famids.txt
 my $username       = "";
 my $password       = "";
-my $db_hostname    = "lighthouse.ucsf.edu";
+my $db_hostname    = "localhost";
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
 my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
 my $nseqs_per_samp_split = 100000; #how many seqs should each sample split file contain?
-my @fcis                 = ( 0, 1 ); #what family construction ids are allowed to be processed?
-my $db_basename          = "SFams_all_v0"; #set the basename of your database here.
-my $hmmdb_name           = $db_basename . "_" . $hmm_db_split_size;
-#"SFams_all_v1.03_500"; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/HMMdbs/ Might change how this works. If you don't want to use an hmmdb, leave undefined
+my @fcis                 = ( 0, 1, 2 ); #what family construction ids are allowed to be processed?
+
+#flat file database parameter settings
+my $db_basename          = "SFams_all_v1.03"; #set the basename of your flatfile HMM/sequence database here. 
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
 my $nr_db                = 1; #should we build a non-redundant version of the sequence database?
-my $blastdb_name; #e.g., "perfect_fams", what is the name of the hmmdb we'll search against? look in $ffdb/BLASTdbs/ Might change how this works. If you don't want to use a blastdb, leave undefined
-if( $reps_only ){
-    if( $nr_db ){
-	$blastdb_name = $db_basename . "_reps_nr_" . $blast_db_split_size; 
-    }
-    else{
-	$blastdb_name = $db_basename . "_reps_" . $blast_db_split_size; 
-    }
-}
-else{
-    if( $nr_db ){
-	$blastdb_name = $db_basename . "_nr_" . $blast_db_split_size; 
-    }
-    else{
-	$blastdb_name = $db_basename . "_" . $blast_db_split_size; 
-    }
-}
 my $hmmdb_build    = 0;
 my $blastdb_build  = 0;
 my $force_db_build = 0;
 my $check          = 0;
 
 #Right now, a single evalue, coverage threshold and strict/tophit are applied to both algorithms
-
 my $evalue         = 0.001; #a float
 #my $coverage       = 0.8;
 my $coverage       = 0; #between 0-1
@@ -83,18 +65,33 @@ my $stage          = 0;
 my $remote_ip      = "chef.compbio.ucsf.edu";
 my $remote_user    = "sharpton";
 #my $rffdb          = "/netapp/home/sharpton/projects/MRC/MRC_ffdb/";
-my $rffdb          = "/scrapp2/sharpton/MRC/MRC_ffdb/";
+my $rffdb          = "/scrapp2/sharpton3/MRC/MRC_ffdb/";
 my $rscripts       = "/netapp/home/sharpton/projects/MRC/scripts/";
 my $waittime       = 30;
 my $input_pid      = "";
 my $goto           = ""; #B=Build HMMdb
 my $verbose              = 0;
 my $scratch              = 0; #should we use scratch space on remote machine?
-my $multi                = 1; #should we multiload our inserts to the database?
 my $bulk_insert_count    = 1000;
-my $database_name        = "Sfams_lite";   #might have multiple DBs with same schema.  Which do you want to use here
-my $schema_name          = "Sfams"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
+my $database_name        = "SFams";   #might have multiple DBs with same schema.  Which do you want to use here
+my $schema_name          = "SFams"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
+
+#Translation settings
+my $trans_method         = "transeq";
 my $split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
+if( $split_orfs ){
+    $trans_method = $trans_method . "_split";
+}
+my $filter_length        = 14; #filters out orfs of this size or smaller
+
+#Don't turn on both this AND (slim + bulk).
+my $multi                = 1; #should we multiload our inserts to the database?
+#for REALLY big data sets, we streamline inserts into the DB by using bulk loading scripts. Note that this isn't as "safe" as traditional inserts
+my $bulk = 0;
+#for REALLY, REALLY big data sets, we improve streamlining by only writing familymembers to the database in a standalone familymembers_slim table. 
+#No foreign keys on the table, so could have empty version of database except for these results. 
+#Note that no metareads or orfs will write to DB w/ this option
+my $slim = 0;
 
 #hacky hardcoding on mh_scaffold pilot 2 to test random die bug...
 my %skip_samps = ();
@@ -107,27 +104,51 @@ GetOptions(
     "i=s"   => \$project_file,
     "u=s"   => \$username,
     "p=s"   => \$password,
-    "h:s"   => \$hmmdb_name,
-    "b:s"   => \$blastdb_name,
+    "n:s"   => \$db_basename,
     "sub:s" => \$family_subset_list,
     "hdb"   => \$hmmdb_build,
     "bdb"   => \$blastdb_build,
     "f"     => \$force_db_build,
-    "n:i"   => \$hmm_db_split_size,
-    "w:i"   => \$waittime, #in seconds
-    "r"     => \$remote,
-    "pid:i"      => \$input_pid,
-    "goto|g:s"   => \$goto,
-    "z"          => \$nseqs_per_samp_split,
-    "v"          => \$verbose,
-    "stage"      => \$stage,
-    "e:f"  => \$evalue,
-    "c:f"  => \$coverage,
+    "hmmsplit:i"   => \$hmm_db_split_size,
+    "blastsplit:i" => \$blast_db_split_size,
+    "w:i"          => \$waittime, #in seconds
+    "r"            => \$remote,
+    "pid:i"        => \$input_pid,
+    "goto|g:s"     => \$goto,
+    "z"            => \$nseqs_per_samp_split,
+    "v"            => \$verbose,
+    "stage"        => \$stage,
+    "e:f"          => \$evalue,
+    "c:f"          => \$coverage,
     );
 
 #try to detect if we need to stage the database or not on the remote server based on runtime options
 if( ( $hmmdb_build || $blastdb_build ) && $remote ){
     $stage = 1;
+}
+
+#set ffdb search database naming parameters
+if( defined( $family_subset_list ) ){
+    my $subset_name = basename( $family_subset_list ); 
+    $db_basename    = "SFams_all_v1.03" . "_" . $subset_name; #set the basename of your flatfile HMM/sequence database here. 
+}
+my $hmmdb_name      = $db_basename . "_" . $hmm_db_split_size;
+my $blastdb_name;
+if( $reps_only ){
+    if( $nr_db ){
+	$blastdb_name = $db_basename . "_reps_nr_" . $blast_db_split_size; 
+    }
+    else{
+	$blastdb_name = $db_basename . "_reps_" . $blast_db_split_size; 
+    }
+}
+else{
+    if( $nr_db ){
+	$blastdb_name = $db_basename . "_nr_" . $blast_db_split_size; 
+    }
+    else{
+	$blastdb_name = $db_basename . "_" . $blast_db_split_size; 
+    }
 }
 
 print "Starting classification run, processing $project_file\n";
@@ -162,6 +183,10 @@ $analysis->is_strict_clustering( $is_strict );
 $analysis->set_evalue_threshold( $evalue );
 $analysis->set_coverage_threshold( $coverage );
 $analysis->set_score_threshold( $score );
+#set some processing type information here
+$analysis->trans_method( $trans_method );
+$analysis->is_slim( $slim );
+$analysis->bulk_load( $bulk );
 #if using a remote server for compute, set vars here
 if( $remote ){
     $analysis->set_remote_server( $remote_ip );
@@ -193,6 +218,7 @@ if( $input_pid && $goto ){
     #this is a little hacky...come clean this up!
     #$analysis->MRC::Run::get_part_samples( $project_file );
     $analysis->MRC::Run::back_load_samples();
+    if( $goto eq "L" ){ warn "Skipping to HMMdb building step!\n"; goto LOADORFS; }
     if( $goto eq "B" ){ warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
     if( $goto eq "R" ){ warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
     if( $goto eq "S" ){ warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
@@ -241,7 +267,7 @@ if( $remote ){
     system( "date" );
     #run transeq remotely, check on SGE job status, pull results back locally once job complete.
     my $remote_logs = $analysis->get_remote_project_path() . "/logs/";
-    $analysis->MRC::Run::translate_reads_remote( $waittime, $remote_logs, $split_orfs );	
+    $analysis->MRC::Run::translate_reads_remote( $waittime, $remote_logs, $split_orfs, $filter_length );	
 }
 else{
     foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
@@ -254,28 +280,32 @@ else{
 
 #LOAD ORFS
 #reads are translated, now load them into the DB
-print printhead( "LOADING TRANSLATED READS" );
-system( "date" );
-foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-    my $in_orf_dir = $ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/orfs/";
-    my $count = 0;
-    foreach my $in_orfs( @{ $analysis->MRC::DB::get_split_sequence_paths( $in_orf_dir, 1 ) } ){
-	print "Processing orfs in $in_orfs\n";
-	my $orfs = Bio::SeqIO->new( -file => $in_orfs, -format => 'fasta' );
-	if( $analysis->multi_load ){
-	    my $trans_algo = "transeq";
-	    if( $split_orfs ){
-		$trans_algo = "transeq_split";
+LOADORFS: 
+unless( $slim ){
+    print printhead( "LOADING TRANSLATED READS" );
+    system( "date" );
+    foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
+	my $in_orf_dir = $ffdb . "projects/" . $analysis->get_project_id() . "/" . $sample_id . "/orfs/";
+	my $count = 0;
+	foreach my $in_orfs( @{ $analysis->MRC::DB::get_split_sequence_paths( $in_orf_dir, 1 ) } ){
+	    print "Processing orfs in $in_orfs\n";
+	    my $orfs = Bio::SeqIO->new( -file => $in_orfs, -format => 'fasta' );
+	    if( $analysis->multi_load ){
+		if( $bulk ){
+		    $analysis->MRC::Run::bulk_load_orf( $in_orfs, $sample_id, $analysis->trans_method );
+		}
+		else{
+		    $analysis->MRC::Run::load_multi_orfs( $orfs, $sample_id, $analysis->trans_method );
+		}
 	    }
-	    $analysis->MRC::Run::load_multi_orfs( $orfs, $sample_id, $trans_algo );
-	}
-	else{
-	    while( my $orf = $orfs->next_seq() ){
-		my $orf_alt_id  = $orf->display_id();
-		my $read_alt_id = MRC::Run::parse_orf_id( $orf_alt_id, "transeq" );
-		$analysis->MRC::Run::load_orf( $orf_alt_id, $read_alt_id, $sample_id );
-		$count++;			
-		print "Added $count orfs to the DB\n";
+	    else{
+		while( my $orf = $orfs->next_seq() ){
+		    my $orf_alt_id  = $orf->display_id();
+		    my $read_alt_id = $analysis->MRC::Run::parse_orf_id( $orf_alt_id, $analysis->trans_method() );
+		    $analysis->MRC::Run::load_orf( $orf_alt_id, $read_alt_id, $sample_id );
+		    $count++;			
+		    print "Added $count orfs to the DB\n";
+		}
 	    }
 	}
     }
@@ -285,6 +315,7 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 BUILDHMMDB:
 if( ! -d $analysis->MRC::DB::get_hmmdb_path() ){
     $hmmdb_build = 1;
+    $stage       = 1;
 }	
 if( $hmmdb_build ){
     if( !$use_hmmscan && !$use_hmmsearch ){
@@ -297,6 +328,7 @@ if( $hmmdb_build ){
 
 if( ! -d $analysis->MRC::DB::get_blastdb_path() ){
     $blastdb_build = 1;
+    $stage         = 1;
 }	
 if( $blastdb_build ){
     if( !$use_blast && !$use_last){

@@ -23,10 +23,10 @@ package MRC;
 use strict;
 use MRC::DB;
 use MRC::Run;
-use Sfams::Schema;
-use IMG::Schema;
+use SFams::Schema;
 use Data::Dumper;
 use File::Basename;
+use File::Path;
 
 =head2 new
 
@@ -77,6 +77,9 @@ sub new{
     $self->{"multiload"}          = 0; #should we multiload our insert statements?
     $self->{"bulk_insert_count"}  = undef; #how many rows should be added at a time when using multi_load?
     $self->{"schema_name"}        = undef; #stores the schema module name, e.g., Sfams::Schema
+    $self->{"slim"}               = 0; #are we processing a VERY, VERY large data set that requires a slim database?
+    $self->{"bulk"}               = 0; #are we processing a VERY large data set that requires mysql data imports over inserts?
+    $self->{"trans_method"}       = undef; #how are we translating the sequences?
     bless($self);
     return $self;
 }
@@ -148,12 +151,15 @@ sub set_ffdb{
     my $self = shift;
     my $path = shift;
     if( !defined( $path ) ){
-      warn "No ffdb path specified for set_flat_file_db in MRC.pm. Cannot continue!\n";
+      warn "No ffdb path specified for set_ffdb in MRC.pm. Cannot continue!\n";
       die;
     }
     if( !( -e $path ) ){
-      warn "The method set_flat_file_db cannot access ffdb path $path. Cannot continue!\n";
-    die;
+#      warn "The method set_ffdb cannot access ffdb path $path. Cannot continue!\n";
+#      die;
+#changed
+	warn "In set_ffdb, $path does not exist, so I'll create it\n";
+	mkpath( $path );
     }
     $self->{"ffdb"} = $path;
     return $self->{"ffdb"};
@@ -239,6 +245,33 @@ sub bulk_insert_count{
 	$self->{"bulk_insert_count"} = $count;
     }
     return $self->{"bulk_insert_count"};
+}
+
+sub is_slim{
+    my $self = shift;
+    my $slim = shift;
+    if( defined( $slim ) ){
+	$self->{"slim"} = $slim;
+    }
+    return $self->{"slim"};
+}
+
+sub bulk_load{
+    my $self = shift;
+    my $bulk = shift;
+    if( defined( $bulk ) ){
+	$self->{"bulk"} = $bulk;
+    }
+    return $self->{"bulk"};
+}
+
+sub trans_method{
+   my $self = shift;
+   my $method = shift;
+   if( defined( $method ) ){
+       $self->{"trans_method"} = $method;
+   }
+   return $self->{"trans_method"};
 }
 
 =head2 set_project_path
@@ -344,9 +377,9 @@ sub get_password{
 
 sub schema_name{
     my $self = shift;
-    my $database_name = shift;
-    if( defined( $database_name ) ){
-	$self->{"schema_name"} = $database_name . "::Schema";
+    my $schema_name = shift;
+    if( defined( $schema_name ) ){
+	$self->{"schema_name"} = $schema_name . "::Schema";
     }
     if( !defined( $self->{"schema_name"} ) ){
 	warn( "You must define the schema name via MRC::schema_name() to connect to the DBIx engine! Defaulting to database Sfams\n" );

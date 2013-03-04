@@ -212,6 +212,119 @@ sub create_metaread{
     return $inserted;
 }
 
+#note, must have local import permissions in mysql. 
+#also, server AND client must have local_infile=1
+sub bulk_import{
+    my $self   = shift;
+    my $table  = shift;
+    my $file   = shift;
+    my $out    = shift;
+    my $nrows  = shift;
+    my $fks    = shift; #hash ref of foreign keys
+    #get a connection
+    my $dbh  = DBI->connect( $self->get_dbi_connection() . ";mysql_local_infile=1", $self->get_username, $self->get_password )
+	|| die "Couldn't connect to the database: " . DBI->errstr;
+
+    #split the file into batches of $nrow and insert
+    if( $table eq "metareads" ){
+	my $sample_id = $fks->{"sample_id"};
+	my $count = 0;
+	my $inserts = 0;
+	my @rows  = ();
+	open( SEQS, "$file" ) || die "Can't open $file for read in MRC::Run::bulk_import\n";
+	my $run = 0;
+	while( <SEQS> ){
+	    chomp $_;
+	    if( $_ =~ m/^\>(.*?)(\s|$)/ ){
+		my $read_alt_id = $1;
+		push ( @rows, "$sample_id,$read_alt_id" );
+		$count++;
+	    }
+	    if( eof || $count == $nrows ){
+		$run++;
+		open( OUT,  ">$out" ) || die "Can't open $out for write in MRC::Run::bulk_import\n";
+		print OUT join( "\n", @rows );
+		close OUT;
+		my $sql = "LOAD DATA LOCAL INFILE '" . $out . "' INTO TABLE " . $table . " FIELDS TERMINATED BY ',' " . 
+		    "LINES TERMINATED BY '\\n' ( sample_id, read_alt_id )";
+		#join(",", @fields) . ")";
+		my $sth = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
+		$inserts = $inserts + $sth;
+		$count = 0;
+		@rows  = ();
+		unlink( $out );
+	    }
+	}
+	close SEQS;
+	print $inserts . " records inserted\n";
+    }	
+    if( $table eq "orfs" ){
+	my $sample_id = $fks->{"sample_id"};
+	my $count = 0;
+	my $inserts = 0;
+	my @rows  = ();
+	open( SEQS, "$file" ) || die "Can't open $file for read in MRC::Run::bulk_import\n";
+	my $run = 0;
+	my $read_map = {}; #use to decrease the number of DB lookups
+	while( <SEQS> ){
+	    chomp $_;
+	    if( $_ =~ m/^\>(.*)(\s|$)/ ){ 
+		my $orf_alt_id = $1;
+		my $read_alt_id = $self->MRC::Run::parse_orf_id( $orf_alt_id, $fks->{"method"} );
+		my $read_id     = $self->MRC::Run::read_alt_id_to_read_id( $read_alt_id, $sample_id, $read_map ); 
+		$read_map->{ $read_alt_id } = $read_id;
+		push ( @rows, "$sample_id,$read_id,$orf_alt_id" );
+		$count++;
+	    }
+	    if( eof || $count == $nrows ){
+		$run++;
+		open( OUT,  ">$out" ) || die "Can't open $out for write in MRC::Run::bulk_import\n";
+		print OUT join( "\n", @rows );
+		close OUT;
+		my $sql = "LOAD DATA LOCAL INFILE '" . $out . "' INTO TABLE " . $table . " FIELDS TERMINATED BY ',' " . 
+		    "LINES TERMINATED BY '\\n' ( sample_id, read_id, orf_alt_id )";
+		my $sth = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
+		$inserts = $inserts + $sth;
+		$count = 0;
+		@rows  = ();
+		unlink( $out );
+	    }
+	}
+	close SEQS;
+	print $inserts . " records inserted\n";
+    }    
+    if( $table eq "familymembers_slim" ){
+	#here, $file is actually the hit_map hashref from 
+	my $orf_hits          = $file;
+	my $sample_id         = $fks->{"sample_id"};
+	my $classification_id = $fks->{"classification_id"};
+	my $count = 0;
+	my $inserts = 0;
+	my @rows  = ();
+	foreach my $orf_alt_id( keys( %$orf_hits ) ){
+	    my $famid = $orf_hits->{$orf_alt_id};
+	    push ( @rows, "$famid,$orf_alt_id,$sample_id,$classification_id" );
+	    $count++;
+	    
+	    if( eof || $count == $nrows ){
+		open( OUT,  ">$out" ) || die "Can't open $out for write in MRC::Run::bulk_import\n";
+		print OUT join( "\n", @rows );
+		close OUT;
+		my $sql = "LOAD DATA LOCAL INFILE '" . $out . "' INTO TABLE " . $table . " FIELDS TERMINATED BY ',' " . 
+		    "LINES TERMINATED BY '\\n' ( famid_slim, orf_alt_id_slim, sample_id, classification_id )";
+		my $sth = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
+		$inserts = $inserts + $sth;
+		$count = 0;
+		@rows  = ();
+		unlink( $out );
+	    }
+	}
+    }
+    #disconnect
+    $dbh->disconnect;
+    return $self;
+}
+
 sub create_multi_metareads{
     my $self          = shift;
     my $sample_id     = shift;
@@ -239,7 +352,7 @@ sub create_multi_metareads{
     return $self;
 }
 
-sub create_multi_familymemberss{
+sub create_multi_familymembers{
     my $self         = shift;
     my $class_id     = shift;
     my $rh_orf_hits  = shift;
@@ -508,7 +621,9 @@ sub build_sample_ffdb{
 	    make_path( $raw_sample_dir );
 	    #copy( $self->get_samples->{$sample}->{"path"}, $raw_sample ) || die "Copy of $sample failed in build_project_ffdb: $!\n";
 	    my $basename = $sample . "_raw_split_";
-	    my @split_names = @{ $self->MRC::DB::split_sequence_file( $self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $basename, $nseqs_per_samp_split ) };
+#	    my @split_names = @{ $self->MRC::DB::split_sequence_file( $self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $basename, $nseqs_per_samp_split ) };
+	    #this is faster, but less flexible to future input file types.
+	    my @split_names = @{ $self->MRC::DB::split_sequence_file_no_bp( $self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $basename, $nseqs_per_samp_split ) };
 	    #because search results may be large in volume, we will break each set of search results into the corresponding search_dir
 	    #for each split. We don't do this here anymore. Instead, we have the directory created as part of run_hmmscan. Provides more flexibility and 
 	    #enables more consistency (these will be named *raw*, but the file used in hmmscan is *orf*, so it is screwy if we use method below)
@@ -575,6 +690,61 @@ sub split_sequence_file{
     }    
     return \@output_names;
 }
+
+sub split_sequence_file_no_bp{
+    my $self             = shift;
+    my $full_seq_file    = shift;
+    my $split_dir        = shift;
+    my $basename         = shift;
+    my $nseqs_per_split  = shift;
+    #a list of filenames
+    my @output_names = ();
+    open( SEQS, $full_seq_file ) || die "Can't open $full_seq_file for read in MRC::DB::split_sequence_file_no_bp\n";
+    my $counter  = 1;
+    my $outname  = $basename . $counter . ".fa";
+    my $splitout = $split_dir . "/" . $outname;
+    open( OUT, ">$splitout" ) || die "Can't open $splitout for write in MRC::DB::split_sequence_file_no_bp\n";
+    my $output   = Bio::SeqIO->new( -file => ">$splitout", -format => "fasta" );
+    push( @output_names, $outname );
+    print "Will dump to split $splitout\n";
+    my $seq_ct   = 0;
+    my $header   = ();
+    my $sequence = ();
+    while( <SEQS> ){
+	chomp $_;
+	if( $_ =~ m/^(\>.*?)\s/ ){
+	    if( defined( $header ) ){
+		print OUT "$header\n$sequence\n";
+		$seq_ct++;
+		$sequence = ();
+	    }
+	    $header = $1;
+	}
+	else{
+	    $sequence = $sequence . $_;
+	}
+	if( eof ) {
+	    print OUT "$header\n$sequence\n";	    
+	}
+	if( $seq_ct == $nseqs_per_split ){	
+	    close OUT;
+	    $counter++;
+	    my $outname  = $basename . $counter . ".fa";
+	    my $splitout = $split_dir . "/" . $outname;
+	    unless( eof ){
+		open( OUT, ">$splitout" ) || die "Can't open $splitout for write in MRC::DB::split_sequence_file_no_bp\n";
+		push( @output_names, $outname );
+		print "Will dump to split $splitout\n";
+		$seq_ct = 0;
+	    }
+	}
+    }    
+    close OUT;
+    close SEQS;
+    return \@output_names;
+}
+
+
 
 sub get_split_sequence_paths{
     my $self      = shift;
@@ -863,6 +1033,24 @@ sub insert_familymember_orf{
 	);    
     return $inserted;
 }
+
+sub insert_familymember_slim{
+    my $self            = shift;
+    my $famid_slim      = shift;
+    my $orf_alt_id_slim = shift;
+    my $sample_id       = shift;
+    my $class_id        = shift;
+    my $inserted = $self->get_schema->resultset("Familymembers_slim")->create(
+	{
+	    famid_slim        => $famid_slim,
+	    orf_alt_id_slim   => $orf_alt_id_slim,
+	    sample_id         => $sample_id,
+	    classification_id => $class_id,
+	}
+	);    
+    return $inserted;
+}
+
 
 sub get_genomes_by_domain{
     my $self = shift;

@@ -7,10 +7,10 @@ use MRC::DB;
 use Getopt::Long;
 
 my( $project_id, $username, $password, $ffdb );
-$ffdb             = "/bueno_not_backed_up/sharpton/MRC_ffdb/";
-my $db_hostname   = "lighthouse.ucsf.edu";
-my $database_name = "Sfams_lite";
-my $schema_name   = "Sfams";
+$ffdb             = "/mnt/data/home/sharpton/MRC_ffdb/";
+my $db_hostname   = "localhost";
+my $database_name = "SFams";
+my $schema_name   = "SFams";
 GetOptions(
     "i=i" => \$project_id,
     "u=s" => \$username,

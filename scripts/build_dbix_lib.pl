@@ -4,11 +4,11 @@ use Getopt::Long;
 use DBIx::Class::Schema::Loader qw/ make_schema_at /;
 
 #build a DBIx::Class module for a given database.
-#Setting username and password is required. Everything else defaults to mysql IMG.
+#Setting username and password is required.
 
 my ( $username, $password );
 my $dumppath = "./lib";
-my $dbname   = "IMG";
+my $dbname   = "SFams";
 my $hostname = "localhost";
 
 GetOptions(
