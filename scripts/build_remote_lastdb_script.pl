@@ -3,6 +3,8 @@
 use strict;
 use Getopt::Long;
 
+# Appears to require that 'lastdb' is installed on the remote machine.
+
 #my @args = ( "build_remote_lastdb_script.pl", "-o $b_script_path", "-n $n_splits" );
 
 my ( $outfile, $in_split_db_dir, $n_seqs_per_db_split );

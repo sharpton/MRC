@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Note for lines below: these weird "#" and "$" lines here are SUPER IMPORTANT and are used by the queue somehow. DO NOT REMOVE THEM!
+# THESE LINES BELOW ARE NOT COMMENTS, EVEN THOUGH THEY LOOK LIKE COMMENTS!!!!!!!!!!!!!!
+
 #
 #$ -S /bin/bash
 #$ -l arch=lx24-amd64

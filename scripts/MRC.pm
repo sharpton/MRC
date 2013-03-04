@@ -23,6 +23,7 @@ use File::Spec;
 my $USE_COLORS_CONSTANT = 1; ## Set this to '0' to avoid printing colored output to the terminal, or '1' to print colored output.
 
 sub tryToLoadModule($) {
+    # Tries to load a module. Returns a true value (1) if it succeeds. Otherwise, returns a false value (0).
     my $x = eval("require $_[0]");
     if ((defined($@) && $@)) {
 	warn "Module loading of $_[0] FAILED. Skipping this module.";
@@ -34,7 +35,7 @@ sub tryToLoadModule($) {
 }
 
 if (!tryToLoadModule("Term::ANSIColor")) {
-    $USE_COLORS_CONSTANT = 0; # Failed to load the ANSI color terminal, so don't use colors!
+    $USE_COLORS_CONSTANT = 0; # Failed to load the ANSI color terminal, so don't use colors! Not sure how reliable this actually is.
 }
 
 sub safeColor($;$) { # one required and one optional argument
@@ -91,7 +92,6 @@ sub new{
     $self->{"is_remote"}   = 0;     # does analysis include remote compute? 0 = no, 1 = yes
     $self->{"is_strict"}   = 1;     # strict (top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
     $self->{"multiload"}   = 0;     # should we multiload our insert statements?
-
     # $self->{"fci"}                = undef; #family construction ids that are allowed to be processed. array reference
     # $self->{"scripts_dir"}        = undef; #master path to MRC scripts
     # $self->{"ffdb"}               = undef; #master path to the flat file database
@@ -751,7 +751,7 @@ sub build_remote_ffdb {
  Usage   : $analysis->set_remote_hmmscan_script();
  Function: Set the location of the script that is located on the remote server that runs the hmmscan jobs
  Example : my $filepath = $analysis->set_remote_hmmscan_script( "~/projects/MRC/scripts/run_hmmscan.sh" )
- Returns : A filepath to the script (string)
+ Returns : nothing
  Args    : A filepath to the script (string)
 
 =cut 
@@ -760,14 +760,12 @@ sub set_remote_hmmscan_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_hmmscan_script"} = $filepath;
-    return $self;
 }
 
 sub set_remote_hmmsearch_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_hmmsearch_script"} = $filepath;
-    return $self;
 }
 
 
@@ -775,14 +773,12 @@ sub set_remote_blast_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_blast_script"} = $filepath;
-    return $self;
 }
 
 sub set_remote_last_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_last_script"} = $filepath;
-    return $self;
 }
 
 
@@ -790,14 +786,12 @@ sub set_remote_formatdb_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_formatdb_script"} = $filepath;
-    return $self;
 }
 
 sub set_remote_lastdb_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_lastdb_script"} = $filepath;
-    return $self;
 }
 
 # Function: Get the location of the script that is located on the remote server
@@ -823,24 +817,8 @@ sub set_remote_project_log_dir{
     my $self     = shift;
     my $filepath = shift;
     $self->{"r_project_logs"} = $filepath;
-    return $self;
 }
-
-=head get_remote_project_log_dir
-
- Title   : get_remote_project_log_dir
- Usage   : $analysis->get_remote_project_log_dir();
- Function: Get the location of the directory that is located on the remote server that will contain the run logs
- Example : my $filepath = $analysis->get_remote_project_log_dir();
- Returns : A filepath to the directory (string)
- Args    : None
-
-=cut 
-
-sub get_remote_project_log_dir{
-    my $self = shift;
-    return $self->{"r_project_logs"};
-}
+sub get_remote_project_log_dir{    my $self = shift;    return $self->{"r_project_logs"}; }
 
 =head is_remote
 
@@ -858,14 +836,9 @@ sub set_remote_status($$) {
     ($remStatus == 0 or $remStatus == 1) or die "Remote status must be 1 or 0, no other values are allowed!";
     $self->{"is_remote"} = $remStatus;
 }
-
-sub is_remote{
+sub is_remote {
     my $self = shift;
-    my $switch = shift;
-    if( defined( $switch ) ){
-	$self->{"is_remote"} = $switch;
-    }
-    return $self->{"is_remote"};
+    return ($self->{"is_remote"}); # I guess this can be used as true/false!
 }
 
 =head is_strict_clustering
@@ -889,10 +862,6 @@ sub set_clustering_strictness($$) {
 
 sub is_strict_clustering{
     my $self = shift;
-    my $switch = shift;
-    if( defined( $switch ) ){
-	$self->{"is_strict"} = $switch;
-    }
     return $self->{"is_strict"};
 }
 

@@ -376,15 +376,14 @@ if (defined($goto) && $goto) {
     } else {
 	MRC::dryNotify("Skipped loading samples.");
     }
-
     $goto = uc($goto); ## upper case it
-    if ($goto eq "B" or $goto eq "BUILD"){ warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
-    if ($goto eq "R" or $goto eq "REMOTE"){ warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
-    if ($goto eq "S" or $goto eq "SCRIPT"){ warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
-    if ($goto eq "H" or $goto eq "HMM"){ warn "Skipping to hmmscan step!\n"; goto HMMSCAN; }
-    if ($goto eq "G" or $goto eq "GET"){ warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
+    if ($goto eq "B" or $goto eq "BUILD")   { warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
+    if ($goto eq "R" or $goto eq "REMOTE")  { warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
+    if ($goto eq "S" or $goto eq "SCRIPT")  { warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
+    if ($goto eq "H" or $goto eq "HMM")     { warn "Skipping to hmmscan step!\n"; goto HMMSCAN; }
+    if ($goto eq "G" or $goto eq "GET")     { warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
     if ($goto eq "C" or $goto eq "CLASSIFY"){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
-    if ($goto eq "O" or $goto eq "OUTPUT"){ warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
+    if ($goto eq "O" or $goto eq "OUTPUT")  { warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
     die "QUITTING DUE TO INVALID --goto OPTION: (specifically, the option was \"$goto\"). If we got to here in the code, it means there was an INVALID FLAG PASSED TO THE GOTO OPTION.";
 }
 
@@ -405,7 +404,7 @@ else { MRC::dryNotify("Skipped getting the partitioned samples for $project_dir.
 ############
 #Load Data. Project id becomes a project var in load_project
 
-if (!$dryRun) {
+*if (!$dryRun) {
     $analysis->MRC::Run::load_project($project_dir, $nseqs_per_samp_split);
 } else {
     $analysis->set_project_id(-99); # Dummy project ID
@@ -531,7 +530,7 @@ if ($is_remote && $stage){
 	}
 	if ($use_last){
 	    print "Building remote lastdb script...\n";
-	    my $lastdb_script       = "$local_ffdb/projects/$projID/run_lastdb.sh";
+	    my $lastdb_script = "$local_ffdb/projects/$projID/run_lastdb.sh";
 	    exec_and_die_on_nonzero("perl $localScriptDir/build_remote_lastdb_script.pl -o $lastdb_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	    MRC::Run::transfer_file($lastdb_script, ($analysis->get_remote_connection() . ":" . $analysis->get_remote_lastdb_script()));
 	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_lastdb_script() );

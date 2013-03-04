@@ -16,8 +16,8 @@ GetOptions("resultdir|o=s"  => \$result_dir,
 	   "dbdir|h=s"      => \$db_dir,
 	   "querydir|i=s"   => \$query_seq_dir,	  
 	   "dbname|n=s"     => \$db_name,
-	   "w=i"            => \$waitTimeInSeconds,  # between 1 and 60. More than 60 is too long! Check more frequently than that. 1 is a good value.
 	   "scriptpath|s=s" => \$scriptpath,
+	   "w=i"            => \$waitTimeInSeconds,  # between 1 and 60. More than 60 is too long! Check more frequently than that. 1 is a good value.
     );
 
 (defined($result_dir) && (-d $result_dir)) or die "The result directory <$result_dir> was not valid on the REMOTE SERVER! Double check it.";
@@ -39,6 +39,11 @@ foreach my $query_seq_file( @query_files ){
     next if( $query_seq_file =~ m/^\./ ); # skip the '.' and '..' and other dot files
     #modify result_dir here such that the output is placed into each split's subdir w/in $result_dir
     my $split_sub_result_dir = File::Spec->catdir($result_dir, $query_seq_file);
+
+    warn "Making a subdirectory with the name <${split_sub_result_dir}/> . Note that it is INTENTIONAL that this actually has a file extension as if it is a filename and not a directory!";
+    # Surprisingly, we appear to actually MAKE a new directory with a name like "somewhere/someplace/thing.fasta/"
+    # Here is the original line from Tom's code: note that there was previously expected to be a '/' integrated with the results_dir: my $split_sub_results_dir = $results_dir . $query_seq_file . "/";
+
     #now let's see if that directory exists. If not, create it.
     check_and_make_path($split_sub_result_dir, 0);
     #run the jobs!
@@ -72,7 +77,19 @@ my $time = remote_job_listener(\@job_ids, $waitTimeInSeconds);
 sub run_remote_search {
     my($scriptpath, $query_seq_dir, $query_seq_file, $db_dir, $db_name, $result_dir) = @_;
     warn "Processing <$query_seq_file>. Running with array jobs...";
-    my $out_stem = "${query_seq_file}-${db_name}";
+
+    (defined($scriptpath) && (length($scriptpath) > 0)) or die "Script path ($scriptpath) was undefined or zero-len!";
+    (defined($query_seq_dir) && (length($query_seq_dir) > 0)) or die "Query seq dir ($query_seq_dir) was undefined or zero-len!";
+    (defined($query_seq_file) && (length($query_seq_file) > 0)) or die "Query seq file ($query_seq_file) was undefined or zero-len!";
+    (defined($db_dir) && (length($db_dir) > 0)) or die "DB dir ($db_dir) was undefined or zero-len!";
+    (defined($db_name) && (length($db_name) > 0)) or die "DB name ($db_name) was undefined or zero-len!";
+    (defined($result_dir) && (length($result_dir) > 0)) or die "Result dir ($result_dir) was undefined or zero-len!";
+
+    my $out_stem = "${query_seq_file}-${db_name}"; # <-- this really better not have any whitespace in it!!!
+
+
+    # Interestingly, we give "$scriptpath" as just a path, no need to say "perl ____" or anything.
+    # I guess 'qsub' is able to figure it out.
 
     # Arg names as seen in "run_last.sh", below in all-caps:
     #                          INPATH         INPUT           DBPATH     OUTPATH     OUTSTEM
@@ -80,6 +97,7 @@ sub run_remote_search {
     warn("We will attempt to execute the following job: qsub @args");
 
     (-d $query_seq_dir) or die "Query seq dir $query_seq_dir did not already exist on the REMOTE CLUSTER machine! It must be a DIRECTORY that already exists.";
+    (-f "${query_seq_dir}/${query_seq_file}") or die "Query seq file in ${query_seq_dir}/${query_seq_file} did not already exist on the REMOTE CLUSTER machine!";
     (-f $scriptpath) or die "Script $scriptpath did not already exist on the REMOTE CLUSTER machine! It must already exist.";
 
     my $results = capture("qsub @args");
