@@ -82,80 +82,82 @@ print OUT join( "\n",
 		"fi",
 		"\n" );
 
+my $SCAN_ALL_FILE = "\$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all";
+
 #GET METADATA ASSOCIATED WITH JOB
 print OUT join( "\n", 
-		"qstat -f -j \${JOB_ID}                             > \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"uname -a                                          >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"echo \"****************************\"             >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"echo \"RUNNING HMMSCAN WITH \$*\"                 >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"source /netapp/home/sharpton/.bash_profile        >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"date                                              >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		"qstat -f -j \${JOB_ID}                             > ${SCAN_ALL_FILE} 2>&1",
+		"uname -a                                          >> ${SCAN_ALL_FILE} 2>&1",
+		"echo \"****************************\"             >> ${SCAN_ALL_FILE} 2>&1",
+		"echo \"RUNNING HMMSCAN WITH \$*\"                 >> ${SCAN_ALL_FILE} 2>&1",
+#		"source /netapp/home/sharpton/.bash_profile        >> ${SCAN_ALL_FILE} 2>&1",
+		"date                                              >> ${SCAN_ALL_FILE} 2>&1",
 		"\n" );
 #DO SOME ACTUAL WORK: Clean old files
 if( $scratch ){
     print OUT join( "\n",
-		    "files=\$(ls /scratch/\${DB}* 2> /dev/null | wc -l )  >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \$files                                         >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "files=\$(ls /scratch/\${DB}* 2> /dev/null | wc -l )  >> ${SCAN_ALL_FILE} 2>&1",
+		    "echo \$files                                         >> ${SCAN_ALL_FILE} 2>&1",
 		    "if [ \"\$files\" != \"0\" ]; then",
 		    "    echo \"Removing cache files\"",
 		    "    rm /scratch/\${DB}*",
 		    "else",
 		    "    echo \"No cache files...\"",
-		    "fi                                             >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "fi                                             >> ${SCAN_ALL_FILE} 2>&1",
 		    "\n" );
     #Copy files over to the node's scratch dir
     print OUT join( "\n",
-		    "echo \"Copying dbfiles to scratch\"            >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "cp \${DBPATH}/\${DB}.gz /scratch/              >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "gunzip /scratch/\${DB}.gz                      >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"Running hmmpress\"                      >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "hmmpress -f /scratch/\${DB}                    >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"Copying input file to scratch\"         >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "cp \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "echo \"Copying dbfiles to scratch\"            >> ${SCAN_ALL_FILE} 2>&1",
+		    "cp \${DBPATH}/\${DB}.gz /scratch/              >> ${SCAN_ALL_FILE} 2>&1",
+		    "gunzip /scratch/\${DB}.gz                      >> ${SCAN_ALL_FILE} 2>&1",
+		    "echo \"Running hmmpress\"                      >> ${SCAN_ALL_FILE} 2>&1",
+		    "hmmpress -f /scratch/\${DB}                    >> ${SCAN_ALL_FILE} 2>&1",
+		    "echo \"Copying input file to scratch\"         >> ${SCAN_ALL_FILE} 2>&1",
+		    "cp \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> ${SCAN_ALL_FILE} 2>&1",
 		    "\n");
     #RUN HMMER
-    print OUT "date                                                 >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "date                                                 >> ${SCAN_ALL_FILE} 2>&1\n";
     #might create switch to futz with F3 filter in the case of long reads
     if( $forward_filter ){
-	print OUT "echo \"hmmscan -Z " . $n_searches . " --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\"   >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-	print OUT "hmmscan -Z " . $n_searches . " --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\n";
+	print OUT "echo \"hmmscan -Z $n_searches --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\"   >> ${SCAN_ALL_FILE} 2>&1\n";
+	print OUT "hmmscan -Z $n_searches --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\n";
     }
     else{
-	print OUT "echo \"hmmscan -Z " . $n_searches . " --F3 1 --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\"   >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-	print OUT "hmmscan -Z " . $n_searches . " --F3 1 --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\n";
+	print OUT "echo \"hmmscan -Z $n_searches --F3 1 --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\"   >> ${SCAN_ALL_FILE} 2>&1\n";
+	print OUT "hmmscan -Z $n_searches --F3 1 --noali --cpu \$NSLOTS --domtblout /scratch/\${OUTPUT} /scratch/\${DB} /scratch/\${INPUT}\n";
     }
-    print OUT "date                                                 >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "date                                                 >> ${SCAN_ALL_FILE} 2>&1\n";
     #CLEANUP
     print OUT join( "\n",
-		    "echo \"removing input and dbfiles from scratch\" >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "rm /scratch/\${INPUT}                            >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "rm /scratch/\${DB}*                              >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"moving results to netapp\"                >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "mv /scratch/\${OUTPUT} \${OUTPATH}/\${OUTPUT}    >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"moved to netapp\"                         >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "date                                             >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"RUN FINISHED\"                            >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "echo \"removing input and dbfiles from scratch\" >> ${SCAN_ALL_FILE} 2>&1",
+		    "/bin/rm /scratch/\${INPUT}                       >> ${SCAN_ALL_FILE} 2>&1",
+		    "/bin/rm /scratch/\${DB}*                         >> ${SCAN_ALL_FILE} 2>&1",
+		    "echo \"moving results to netapp\"                >> ${SCAN_ALL_FILE} 2>&1",
+		    "mv /scratch/\${OUTPUT} \${OUTPATH}/\${OUTPUT}    >> ${SCAN_ALL_FILE} 2>&1",
+		    "echo \"moved to netapp\"                         >> ${SCAN_ALL_FILE} 2>&1",
+		    "date                                             >> ${SCAN_ALL_FILE} 2>&1",
+		    "echo \"RUN FINISHED\"                            >> ${SCAN_ALL_FILE} 2>&1",
 		    "\n" );
     close OUT;
 }
 else{
     print( "Not using scratch\n" );
     #RUN HMMER
-    print OUT "date                                                 >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "date                                                 >> ${SCAN_ALL_FILE} 2>&1\n";
     #might create switch to futz with F3 filter in the case of long reads
     if( $forward_filter ){
-	print OUT "echo \"hmmscan -Z " . $n_searches . " --noali --cpu \$NSLOTS --domtblout \${OUTPATH}/\${OUTPUT} \${DBPATH}/\${DB} \${INPATH}/\${INPUT}\"   >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-	print OUT "hmmscan -Z " . $n_searches . " --noali --cpu \$NSLOTS --domtblout \${OUTPATH}/\${OUTPUT} \${DBPATH}/\${DB} \${INPATH}/\${INPUT}\n";
+	print OUT "echo \"hmmscan -Z $n_searches --noali --cpu \$NSLOTS --domtblout \${OUTPATH}/\${OUTPUT} \${DBPATH}/\${DB} \${INPATH}/\${INPUT}\"   >> ${SCAN_ALL_FILE} 2>&1\n";
+	print OUT "hmmscan -Z $n_searches --noali --cpu \$NSLOTS --domtblout \${OUTPATH}/\${OUTPUT} \${DBPATH}/\${DB} \${INPATH}/\${INPUT}\n";
     }
     else{
-	print OUT "echo \"hmmscan -Z " . $n_searches . " --F3 1 --noali --cpu \$NSLOTS --domtblout \${OUTPATH}/\${OUTPUT} \${DBPATH}/\${DB} \${INPATH}/\${INPUT}\"   >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
-	print OUT "hmmscan -Z " . $n_searches . " --F3 1 --noali --cpu \$NSLOTS --domtblout \${OUTPATH}/\${OUTPUT} \${DBPATH}/\${DB} \${INPATH}/\${INPUT}\n";
+	print OUT "echo \"hmmscan -Z $n_searches --F3 1 --noali --cpu \$NSLOTS --domtblout \${OUTPATH}/\${OUTPUT} \${DBPATH}/\${DB} \${INPATH}/\${INPUT}\"   >> ${SCAN_ALL_FILE} 2>&1\n";
+	print OUT "hmmscan -Z $n_searches --F3 1 --noali --cpu \$NSLOTS --domtblout \${OUTPATH}/\${OUTPUT} \${DBPATH}/\${DB} \${INPATH}/\${INPUT}\n";
     }
-    print OUT "date                                                 >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";
+    print OUT "date                                                   >> ${SCAN_ALL_FILE} 2>&1\n";
     #CLEANUP
     print OUT join( "\n",
-		    "date                                             >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "echo \"RUN FINISHED\"                            >> \$LOGS/hmmscan/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "date                                             >> ${SCAN_ALL_FILE} 2>&1",
+		    "echo \"RUN FINISHED\"                            >> ${SCAN_ALL_FILE} 2>&1",
 		    "\n" );
     close OUT;
 }

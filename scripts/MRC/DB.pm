@@ -21,6 +21,7 @@
 package MRC::DB;
 
 use strict;
+
 use Sfams::Schema;
 use Data::Dumper;
 use File::Basename;
@@ -39,7 +40,7 @@ sub get_samples_by_project_id{
 	    project_id => $self->get_project_id(),
 	}
     );
-    return $samples;
+    return $samples; # <-- what the heck kind of data type is this, anyway?
 }
 
 sub get_family_members_by_famid{
@@ -160,7 +161,6 @@ sub delete_reads_by_sample_id{
 	}
     );
     $reads->delete();
-    return $self;
 }
 
 sub delete_sample{
@@ -172,16 +172,14 @@ sub delete_sample{
 	}
 	);
     $sample->delete();
-    return $self;
 }
 
 sub delete_ffdb_project{
     my $self       = shift;
     my $project_id = shift;
     my $ffdb = $self->get_ffdb();
-    my $project_ffdb = $ffdb . "projects/" . $project_id;
-    rmtree( $project_ffdb );
-    return $self;
+    my $project_ffdb = "$ffdb/projects/$project_id";
+    File::Path::rmtree($project_ffdb);
 }
 
 sub create_sample{
@@ -333,7 +331,6 @@ sub create_multi_metareads{
     my @read_names    = @{ $ra_read_names };
     my $sql_insert    = 'INSERT INTO metareads ( sample_id, read_alt_id ) values ';
     my $placeholders  = '(?,?)';
-    my $bulk_insert_count = $self->bulk_insert_count();
     my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
     my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
 	dbh          => $dbh,
@@ -345,10 +342,7 @@ sub create_multi_metareads{
 	$bulk->insert( $sample_id, $read_name );
     }
     $bulk->flush();
-    if( defined $dbh->errstr ){
-	warn(  $dbh->errstr );
-	exit;
-    }
+    if (defined $dbh->errstr) { die($dbh->errstr . " "); }
     return $self;
 }
 
@@ -359,7 +353,6 @@ sub create_multi_familymembers{
     my %orf_hits     = %{ $rh_orf_hits };
     my $sql_insert   = 'INSERT INTO familymembers ( famid, classification_id, orf_id ) values ';
     my $placeholders = '(?,?,?)';
-    my $bulk_insert_count = $self->bulk_insert_count();
     my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
     my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
 	dbh          => $dbh,
@@ -372,10 +365,7 @@ sub create_multi_familymembers{
 	$bulk->insert( $famid, $class_id, $orf_id );
     }
     $bulk->flush();
-    if( defined $dbh->errstr ){
-	warn(  $dbh->errstr );
-	exit;
-    }
+    if (defined $dbh->errstr) { die($dbh->errstr . " "); }
     return $self;
 }
 
@@ -391,34 +381,32 @@ sub insert_orf{
 	    orf_alt_id => $orf_alt_id,
 	}
     );
-    return $orf;
 }
 
 sub insert_multi_orfs{
     my $self          = shift;
     my $sample_id     = shift;
     my $rh_orf_map    = shift; #orf_alt_id -> read_id
-    print "Bulk loading orfs from sample $sample_id\n";
+    MRC::notify("Bulk loading orfs from sample ID $sample_id");
     my %orf_map       = %{ $rh_orf_map };
     my $sql_insert    = 'INSERT INTO orfs ( sample_id, read_id, orf_alt_id ) values ';
     my $placeholders  = '(?,?,?)';
-    my $bulk_insert_count = $self->bulk_insert_count();
     my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password );
     my( $bulk, $error ) = DBIx::BulkLoader::Mysql->new(
 	dbh          => $dbh,
 	sql_insert   => $sql_insert,
 	placeholders => $placeholders
 	);
-    die $error unless $bulk;
+    
+    if (!$bulk) { die $error; }
+
     foreach my $orf_alt_id( keys( %orf_map ) ){
 	$bulk->insert( $sample_id, $orf_map{ $orf_alt_id }, $orf_alt_id );
     }
     $bulk->flush();
-    if( defined $dbh->errstr ){
-	warn( $dbh->errstr );
-	exit;
+    if (defined($dbh->errstr)) {
+	die($dbh->errstr . " ");
     }    
-    return $self;
 }
 
 sub get_gene_by_id{
@@ -427,44 +415,45 @@ sub get_gene_by_id{
     return $gene;
 }
 
-sub build_db_ffdb{
-    my $self = shift;
-    my $path = shift;
-    if( -d $path ){
-	rmtree( $path ) || die "Can't remove $path in build_db_ffdb: $!\n";
+sub build_db_ffdb {    # This appears not to actually BUILD anything, it just makes a directory.
+    my ($self, $path) = @_;
+    if (-d $path){
+	MRC::notify("For whatever reason, we are removing the entire directory in <$path>, in build_db_ffdb.");
+	File::Path::rmtree( $path );
     }
-    make_path( $path ) || die "Can't create directory $path in build_db_ffdb: $!\n";
-    return $self;       
+    File::Path::make_path( $path );
 }
 
 sub get_hmmdb_path{
-    my $self = shift;
-    my $hmmdb_path = $self->get_ffdb() . "HMMdbs/" . $self->get_hmmdb_name() . "/";
-    return $hmmdb_path;
+    my ($self) = @_;
+    (defined($self->get_ffdb())) or die("ffdb was not defined!");
+    (defined($self->get_hmmdb_name())) or die("hmmdb name was not defined!");
+    return($self->get_ffdb() . "/HMMdbs/" . $self->get_hmmdb_name());
 }
 
 sub get_blastdb_path{
     my $self = shift;
-    my $blastdb_path = $self->get_ffdb() . "BLASTdbs/" . $self->get_blastdb_name() . "/";
-    return $blastdb_path;
+    (defined($self->get_ffdb())) or die("ffdb was not defined!");
+    (defined($self->get_blastdb_name())) or die("blastdb name was not defined!");
+    return($self->get_ffdb() . "/BLASTdbs/" . $self->get_blastdb_name());
 }
 
 sub get_number_db_splits{
     my ( $self, $type ) = @_;
     my $n_splits = 0;
     my $db_path;
-    if( $type eq "hmm" ){
-	$db_path = $self->MRC::DB::get_hmmdb_path; 
-    }
-    elsif( $type eq "blast" ){
-	$db_path = $self->MRC::DB::get_blastdb_path;
-    }
-    opendir( DIR, $db_path ) || die "Can't opendir " . $db_path . " for read: $!\n";
+    if( $type eq "hmm" ) {       $db_path = $self->MRC::DB::get_hmmdb_path();
+    } elsif( $type eq "blast" ){ $db_path = $self->MRC::DB::get_blastdb_path();
+    } else { die "invalid $type"; }
+
+    opendir( DIR, $db_path ) || die "Can't opendir <$db_path> for readng: $! ";
     my @files = readdir( DIR );
     closedir( DIR );
+
+    # Note that "@files" also includes the "fake" files '.' and '..'
     foreach my $file( @files ){
 	#don't want to count both the uncompressed and the compressed, so look for the .gz ending on file name
-	next unless( $file =~ m/\.gz$/ );
+	next unless($file =~ m/\.gz$/); # ONLY look for files that end in '.gz'
 	$n_splits++;
     }
     #total number of sequences/models across the entire database (to correctly scale evalue)
@@ -475,8 +464,8 @@ sub get_number_db_splits{
 sub get_number_hmmdb_scans{
     my ( $self, $n_seqs_per_db_split ) = @_;
     my $n_splits = 0;
-    opendir( DIR, $self->MRC::DB::get_hmmdb_path ) || die "Can't opendir " . $self->get_hmmdb_path . " for read: $!\n";
-    my @files = readdir( DIR );
+    opendir( DIR, $self->MRC::DB::get_hmmdb_path ) || die "Can't opendir " . $self->get_hmmdb_path() . " for read: $! ";
+    my @files = readdir( DIR );  # <-- Note that "@files" also includes the "fake" files '.' and '..'
     closedir( DIR );
     foreach my $file( @files ){
 	#don't want to count both the uncompressed and the compressed, so look for the .gz ending on file name
@@ -495,198 +484,139 @@ sub get_number_sequences{
     my $n_splits = 0;
     my $last_split_counts = 0;
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
-	my $orfs_path = $self->get_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/orfs/";
-	opendir( DIR, $orfs_path ) || die "Can't opendir " . $orfs_path . " for read: $!\n";
-	my @files = readdir( DIR );
+	my $orfDir = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/orfs";
+	opendir( DIR, $orfDir ) || die "Can't opendir $orfDir for read: $! ";
+	my @files = readdir( DIR );  # <-- Note that "@files" also includes the "fake" files '.' and '..'
 	closedir( DIR );	
-	my $max_split; #points to last split's file name
-	my $max_splitnum = 0; #split counter
+	my $max_split_filename; #points to last split's file name
+	my $max_splitnum = 0; # no idea why this starts at zero
 	foreach my $file( @files ){
-	    next unless( $file =~ m/split_(\d+)\.fa/ );
-	    #need to find the last split's file name
-	    my $splitnum      = $1;
-	    if( $splitnum > $max_splitnum ){
-		$max_split    = $file;
-		$max_splitnum = $splitnum;
+	    next unless($file =~ m/split_(\d+)\.fa/); # only count things that match a very specific file pattern
+	    my $splitnum      = $1; 	    #need to find the last split's file name
+	    if($splitnum > $max_splitnum){
+		$max_split_filename    = $file;
+		$max_splitnum = $splitnum; # this is a weird way to do it but I guess it works!
 	    }
 	    $n_splits++;
 	}
-	open( MAX, $orfs_path . $max_split ) || die "Can't read max split $max_split for read in get_number_sequences: $!\n";
-	my $count = 0;
-	while(<MAX>){
-	    if( $_ =~ m/\>/ ){
-		$count++;
-	    }
+	open(MAX, "$orfDir/$max_split_filename") || die "Can't read max split file ${max_split_filename} for reading in get_number_sequences: $! ";
+	my $caretCount = 0;
+	while(<MAX>) {
+	    if($_ =~ m/\>/) { $caretCount++; } # count number of lines with a > on them. Apparently not just ones that START with a >! Possibly should change this to require STARTING with a >, but maybe it doesn't actually matter.
 	}
 	close MAX;
-	$last_split_counts = $last_split_counts + $count;
+	$last_split_counts = $last_split_counts + $caretCount;
     }
     #want orfs, so multiply by 6 if using "transeq". Last split needs to be counted for accuracy (may not have full split size).
     #the last split issue happens for each sample, so it is a sum of the number of seqs in each sample's last split. 
     my $n_samples = @{ $self->get_sample_ids() };
-    my $n_seqs =  ( ( ( $n_splits - ( 1 * $n_samples ) ) * $n_sequences_per_split )  * 6 ) + $last_split_counts;
+    my $n_seqs = ( ( ( $n_splits - ( 1 * $n_samples ) ) * $n_sequences_per_split )  * 6 ) + $last_split_counts; # what is up here
     return $n_seqs;
 }
 
 #for blast
 sub get_blast_db_length{
-    my( $self, $db_name ) = @_;
+    my($self, $db_name) = @_;
     my $length  = 0;
     my $db_path = $self->MRC::DB::get_blastdb_path();
-    if( -e $db_path . "/database_length.txt" ){
-	open( IN, $db_path . "/database_length.txt" ) || 
-	    die "Can't open " . $db_path . "/database_length.txt for read: $!\n";
-	while( <IN> ){
-	    chomp $_;
+    my $db_length_filename = "$db_path/database_length.txt";
+    if( -e $db_length_filename ){
+	open( IN, $db_length_filename ) or die "Can't open ${db_length_filename} for reading: $! ";
+	while(<IN>) {
+	    chomp $_; ## mysterious
 	    $length = $_;
 	}
 	close IN;
-	return $length;
-    }
-    else{
+    } else {
 	$length = $self->MRC::Run::calculate_blast_db_length();
     }
     return $length;
 }
 
-sub build_project_ffdb{
-    my $self = shift;
+sub build_project_ffdb {
+    my ($self) = @_;
     my $ffdb = $self->{"ffdb"};
-    my $proj_dir = $ffdb . "/projects/" . $self->{"project_id"} . "/";
-    unless( -d $proj_dir ){ 
-	make_path( $proj_dir ) || die "Can't create directory $proj_dir in build_project_ffdb: $!\n";
-    }
-    else{
-	warn "Project directory already exists at $proj_dir. Will not overwrite!\n";
-	die;
-    }    
-    return $self;
+    my $pid  = $self->{"project_id"};
+    my $proj_dir = "$ffdb/projects/$pid";
+    File::Path::make_path($proj_dir); # make_path ALREADY dies on "severe" errors. See http://search.cpan.org/~dland/File-Path-2.09/Path.pm#ERROR_HANDLING
+    #or die "Can't create new directory <$proj_dir> in build_project_ffdb: $! ";
 }
 
 sub build_sample_ffdb{
-    my $self = shift;
-    my $nseqs_per_samp_split = shift;
-    my $ffdb = $self->get_ffdb;
-    my $proj_dir = $ffdb . "/projects/" . $self->get_project_id . "/";
-    my $logs     = $proj_dir . "/logs/";
-    my $hmmscanlogs   = $logs . "/hmmscan/";
-    my $hmmsearchlogs = $logs . "/hmmsearch/";
-    my $blastlogs     = $logs . "/blast/";
-    my $lastlogs      = $logs . "/last/";
-    my $formatdblogs  = $logs . "/formatdb/";
-    my $lastdblogs    = $logs . "/lastdb/";
-    my $transeqlogs   = $logs . "/transeq/";
-    my $output        = $proj_dir . "/output/";
-    my @paths = ( $output, $logs, $hmmscanlogs, $hmmsearchlogs, $blastlogs, $lastlogs, $formatdblogs, $lastdblogs, $transeqlogs );
-    foreach my $path( @paths ){
-	if( -d $path){
-	    warn( "Directory already exists at $path. Will not overwrite!\n");
-	}
-	else{
-	    make_path( $path ) || die "Can't create directory $path in build_sample_ffdb: $!\n";
-	}
+    my ($self, $nseqs_per_samp_split) = @_;
+    my $ffdb = $self->get_ffdb();
+    my $pid = $self->get_project_id();
+    my $projDir = "$ffdb/projects/$pid"; # no trailing slashes please!
+    my $outDir  = "$projDir/output";
+    my $logDir  = "$projDir/logs";
+    my $hmmscanlogs   = "$logDir/hmmscan";
+    my $hmmsearchlogs = "$logDir/hmmsearch";
+    my $blastlogs     = "$logDir/blast";
+    my $lastlogs      = "$logDir/last";
+    my $formatdblogs  = "$logDir/formatdb";
+    my $lastdblogs    = "$logDir/lastdb";
+    my $transeqlogs   = "$logDir/transeq";
+
+    my @paths = ( $outDir, $logDir, $hmmscanlogs, $hmmsearchlogs, $blastlogs, $lastlogs, $formatdblogs, $lastdblogs, $transeqlogs );
+    foreach my $path (@paths) {
+	File::Path::make_path($path);
     }
-    foreach my $sample( keys( %{ $self->get_samples() } ) ){
-	my $sample_dir = $proj_dir . $self->get_samples->{$sample}->{"id"} . "/";
-	my $raw_sample_dir = $sample_dir . "raw/";
-	my $orf_sample_dir = $sample_dir . "orfs/";
-	my $search_res     = $sample_dir . "search_results/";
-	my $unsplit_orfs   = $sample_dir . "unsplit_orfs/"; #not always used, always created in case used in alternative run
-	if( -d $sample_dir ){
-	    warn "Sample directory already exists at $sample_dir. Will not overwrite!\n";
-	}
-	else{
-	    make_path( $sample_dir ) || die "Can't create directory $sample_dir in build_sample_ffdb: $!\n";
-	}
-	if( -d $search_res ){
-	    warn "Search results_dir already exists for $sample at $search_res. Will not overwrite!\n";
-	    die;
-	}
-	else{
-	    make_path( $search_res ) || die "Can't create directory $search_res in build_sample_ffdb: $!\n";
-	    my $hmmscan_results = $search_res . "/hmmscan";
-	    make_path( $hmmscan_results ) || die "Can't create directory $hmmscan_results in build_sample_ffdb: $!\n";
-	    my $hmmsearch_results = $search_res . "/hmmsearch";
-	    make_path( $hmmsearch_results ) || die "Can't create directory $hmmsearch_results in build_sample_ffdb: $!\n";
-	    my $blast_results = $search_res . "/blast";
-	    make_path( $blast_results ) || die "Can't create directory $blast_results in build_sample_ffdb: $!\n";
-	    my $last_results = $search_res . "/last";
-	    make_path( $last_results ) || die "Can't create directory $last_results in build_sample_ffdb: $!\n";
-	}
-	if( -d $raw_sample_dir ){
-	    warn "Data already exists in $raw_sample_dir. Will not overwrite!\n";
-	    die;
-	}
-	else{
-	    make_path( $raw_sample_dir );
-	    #copy( $self->get_samples->{$sample}->{"path"}, $raw_sample ) || die "Copy of $sample failed in build_project_ffdb: $!\n";
-	    my $basename = $sample . "_raw_split_";
-#	    my @split_names = @{ $self->MRC::DB::split_sequence_file( $self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $basename, $nseqs_per_samp_split ) };
-	    #this is faster, but less flexible to future input file types.
-	    my @split_names = @{ $self->MRC::DB::split_sequence_file_no_bp( $self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $basename, $nseqs_per_samp_split ) };
-	    #because search results may be large in volume, we will break each set of search results into the corresponding search_dir
-	    #for each split. We don't do this here anymore. Instead, we have the directory created as part of run_hmmscan. Provides more flexibility and 
-	    #enables more consistency (these will be named *raw*, but the file used in hmmscan is *orf*, so it is screwy if we use method below)
-	    if( 0 ){
-		foreach my $split_name( @split_names ){
-		    my $split_search_path = $search_res . $split_name . "/";
-		    if( -d $split_search_path ){
-			warn "Search result path already exists for $split_search_path!\n";
-			die;
-		    }
-		    else{
-			make_path( $split_search_path );
-		    }
-		}	    
-	    }
-	}
-	if( -d $orf_sample_dir ){
-	    warn "orf_sample_dir already exists for $sample at $orf_sample_dir. Will not overwrite!\n";
-	    die;
-	}
-	else{
-	    make_path( $orf_sample_dir ) || die "Can't create directory $orf_sample_dir in build_sample_ffdb: $!\n";
-	}
-	if( -d $unsplit_orfs ){
-	    warn "orf_sample_dir already exists for $sample at $unsplit_orfs. Will not overwrite!\n";
-	    die;
-	}
-	else{
-	    make_path( $unsplit_orfs ) || die "Can't create directory $unsplit_orfs in build_sample_ffdb: $!\n";
+    foreach my $sampleName (keys(%{$self->get_sample_hashref()})) {
+	my $thisSampleID = $self->get_sample_hashref()->{$sampleName}->{"id"};
+	my $sampDir      = "$projDir/${thisSampleID}";
+	my $raw_sample_dir  = "$sampDir/raw";
+	my $orf_sample_dir  = "$sampDir/orfs";
+	my $search_res      = "$sampDir/search_results";
+	my $unsplit_orfs    = "$sampDir/unsplit_orfs"; #not always used, always created in case used in alternative run
+
+	my $hmmscan_results = "$search_res/hmmscan";
+	my $hmmsearch_results = "$search_res/hmmsearch";
+	my $blast_results = "$search_res/blast";
+	my $last_results = "$search_res/last";
+
+	if (-d $raw_sample_dir) {
+	    warn("The directory \"$raw_sample_dir\" already existed!");
+	    if ($self->{"clobber"}) { warn("But you specified the CLOBBER option, so we will brutally overwrite it anyway!"); }
+	    else { die("Since the data already exists in $raw_sample_dir , we will not overwrite it! Unless you specify the flag --clobber to brutally clobber those directories anyway. NOT RECOMMENDED unless you know what you're doing."); }
 	}
 
+	foreach my $dirToMake ($sampDir, $search_res, $hmmscan_results, $hmmsearch_results, $blast_results, $last_results, $raw_sample_dir, $orf_sample_dir, $unsplit_orfs) {
+	    File::Path::make_path($dirToMake); # <-- make_path ALREADY dies on "severe" errors, so no need to check for them. See http://search.cpan.org/~dland/File-Path-2.09/Path.pm#ERROR_HANDLING
+	}
+	my $nameprefix = "${sampleName}_raw_split_"; # the "base name" here.
+	#might want to use the no_bp option to improve throughput of alex's call of split_sequence_file below
+	#my @split_names = @{ $self->MRC::DB::split_sequence_file_no_bp( $self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $basename, $nseqs_per_samp_split ) };
+	$self->MRC::DB::split_sequence_file($self->get_sample_hashref()->{$sampleName}->{"path"}, $raw_sample_dir, $nameprefix, $nseqs_per_samp_split);
     }
-    return $self;
 }
 
 sub split_sequence_file{
-    my $self             = shift;
-    my $full_seq_file    = shift;
-    my $split_dir        = shift;
-    my $basename         = shift;
-    my $nseqs_per_split  = shift;
-    #a list of filenames
-    my @output_names = ();
+    my ($self, $full_seq_file, $split_dir, $base_filename, $nseqs_per_split) = @_;
+    my @output_names = ();    #a list of filenames
     my $seqs = Bio::SeqIO->new( -file => "$full_seq_file", -format => "fasta" );
+
+    ## $counter == 1 is handled specifically here for some reason
     my $counter = 1;
-    my $outname  = $basename . $counter . ".fa";
-    my $splitout = $split_dir . "/" . $outname;
-    my $output = Bio::SeqIO->new( -file => ">$splitout", -format => "fasta" );
-    push( @output_names, $outname );
-    print "Will dump to split $splitout\n";
+    my $outname  = "${base_filename}${counter}.fa";
+    my $output = Bio::SeqIO->new( -file => ">$split_dir/$outname", -format => "fasta" );
+    push(@output_names, $outname);
+    MRC::notify("Will dump to split $split_dir/$outname");
+
     my $seq_ct = 0;
-    while( my $seq = $seqs->next_seq() ){
-	if( $seq_ct == $nseqs_per_split ){	
-	    $counter++;
-	    my $outname  = $basename . $counter . ".fa";
-	    my $splitout = $split_dir . "/" . $outname;
-	    $output = Bio::SeqIO->new( -file => ">$splitout", -format => "fasta" );	
+    while(my $seq = $seqs->next_seq()) {
+	if ($seq_ct == $nseqs_per_split) {
+	    $seq_ct = 0; # reset to 0
+	    $counter++; # weirdly this situation (counter == 2) gets handled separately from the stuff above.
+	    my $outname  = "${base_filename}${counter}.fa";
+	    $output      = Bio::SeqIO->new(-file => ">$split_dir/$outname", -format => "fasta" );	
 	    push( @output_names, $outname );
-	    print "Will dump to split $splitout\n";
-	    $seq_ct = 0;
+	    MRC::notify("Will dump to split $split_dir/$outname");
 	}
-	$output->write_seq( $seq );
-	$seq_ct++;       
+	$output->write_seq($seq);
+
+	MRC::notify("Output file $split_dir/$outname is now of size " . (-s "$split_dir/$outname") . "...");
+
+	$seq_ct++;
     }    
     return \@output_names;
 }
@@ -752,50 +682,51 @@ sub get_split_sequence_paths{
     my $full_path = shift; #0 = filename, 1 = full path 
     my @paths     = ();    
     opendir( DIR, $split_dir ) || die "Error in MRC::DB::get_split_sequence_paths: Can't opendir $split_dir for read: $!\n";
+=======
+sub get_split_sequence_paths {
+    # this could probably be a call to "glob(...)"
+    my ($self, $base_directory, $should_use_full_path) = @_;
+    my @paths = ();
+    opendir(DIR, $base_directory) or die "Error in MRC::DB::get_split_sequence_paths: Can't opendir $base_directory for read: $! ";
+>>>>>>> alex/master
     my @files = readdir( DIR );
     closedir( DIR );
     foreach my $file( @files ){
-	next if( $file =~ m/^\./ );
-	my $path = $file;
-	if( $full_path ){
-	    $path = $split_dir . $file;
-	}
-	push( @paths, $path ) 
-    }      
-    return \@paths;
+	next if( $file =~ m/^\./ ); # don't include '.' and '..' files (or any other dot-whatever file)
+	my $newPath = (defined($should_use_full_path) && $should_use_full_path) ? "$base_directory/$file" : "$file"; # use the FULL path, or just the filename?
+	push(@paths, $newPath);
+    }
+    return \@paths; # apparently returns an array to all the ... paths
 }
 
 sub get_hmmdbs{
-    my $is_remote  = 0;
-
+    my $is_remote  = 0; # what is up with this. This is a default value I guess?
     my $self       = shift;
     my $hmmdb_name = shift;
     $is_remote = shift;
 
     my $ffdb = $self->get_ffdb();
-    my $hmmdb_path = $ffdb . "/HMMdbs/" . $hmmdb_name . "/";
-    opendir( HMMS, $hmmdb_path ) || die "Can't opendir $hmmdb_path for read: $!\n";
-    my @files = readdir( HMMS );
+    my $hmmdb_local_path = "$ffdb/HMMdbs/$hmmdb_name";
+    opendir( HMMS, $hmmdb_local_path ) || die "Can't opendir $hmmdb_local_path for read: $! ";
+    my @files = readdir(HMMS);
     closedir( HMMS );
     my %hmmdbs = ();
     foreach my $file ( @files ){
-	next if( $file =~ m/^\./ );
+	next if( $file =~ m/^\./ ); # skip the fake "." and ".." files
 	next if( $file =~ m/\.h3[i|m|p|f]/ );
 	#if grabbing from remote server, use the fact that HMMdb is a mirror to get proper remote path
-	if( $is_remote ){
-	    $hmmdbs{$file} = $self->get_remote_ffdb . "/HMMdbs/" . $hmmdb_name . "/" . $file;
-	}
-	else{
-	    $hmmdbs{$file} = $hmmdb_path . $file;
+	if ($is_remote) {
+	    $hmmdbs{$file} = $self->get_remote_ffdb() . "/HMMdbs/$hmmdb_name/$file";
+	} else {
+	    $hmmdbs{$file} = "$hmmdb_local_path/$file";
 	}
     }
-    warn "Grabbed ", scalar( keys( %hmmdbs ) ), " HMM dbs from $hmmdb_path\n";
+    MRC::notify("Grabbed " . scalar(keys(%hmmdbs)) . " HMM dbs from $hmmdb_local_path");
     return \%hmmdbs;
 }
 
 sub get_sample_by_sample_id{
-    my $self = shift;
-    my $sample_id = shift;
+    my ($self, $sample_id) = @_;
     my $sample = $self->get_schema->resultset('Sample')->find(
 	{
 	  sample_id => $sample_id  
@@ -805,8 +736,7 @@ sub get_sample_by_sample_id{
 }
 
 sub get_orf_by_orf_id{
-    my $self = shift;
-    my $orf_id = shift;
+    my ($self, $orf_id) = @_;
     my $orf = $self->get_schema->resultset('Orf')->find(
 	{
 	    orf_id => $orf_id,
@@ -816,8 +746,7 @@ sub get_orf_by_orf_id{
 }
 
 sub get_number_reads_in_sample{
-    my $self   = shift;
-    my $sample = shift;
+    my ($self, $sample) = @_;
     my $reads  = $self->MRC::DB::get_reads_by_sample_id( $sample );
     return $reads->count();
 }
@@ -848,7 +777,7 @@ sub get_read_alt_id_by_read_id{
 sub get_orfs_by_read_id{ 
     my $self = shift;
     my $read_id = shift;
-    my $orfs = $self->get_schema->resultset('Orf')->search(
+    my $orfs = $self->get_schema->resultset("Orf")->search(
 	{
 	    read_id => $read_id,
 	}
@@ -859,12 +788,7 @@ sub get_orfs_by_read_id{
 
 sub get_orfs_by_sample{
     my ( $self, $sample_id, $page ) = @_;
-#    my $orfs = $self->get_schema->resultset("Orf")->search(
-#	{
-#	    sample_id => $sample_id,
-#	}
-#    );
-    my $orfs = $self->get_schema->resultset('Orf')->search( 
+    my $orfs = $self->get_schema->resultset("Orf")->search( 
 	{
 	    sample_id => $sample_id,
 
@@ -891,7 +815,7 @@ sub get_orfs_by_sample{
 sub build_dbh{
     my( $self ) = @_;
     my $dbh = DBI->connect( $self->get_dbi_connection(), $self->get_username, $self->get_password ) || die "Can't connect to database: " . $DBI::errstr;
-    return $dbh;
+    return $dbh; # <-- this return value actually gets used
 }
 
 sub get_orfs_by_sample_dbi{
@@ -911,8 +835,7 @@ sub get_orf_from_alt_id_dbi{
 
 sub disconnect_dbh{
     my( $self, $dbh ) = @_;
-    $dbh->disconnect;
-    return $self;
+    $dbh->disconnect();
 }
 
 sub get_families_with_orfs_by_project{
@@ -1012,7 +935,7 @@ sub insert_search_result{
 	    famid => $famid,
 	    evalue => $evalue,
 	    score  => $score,
-	    other_searchstats => "coverage=" . $coverage,
+	    other_searchstats => "coverage=${coverage}",
 	}
 	);
     return $inserted;
@@ -1174,12 +1097,11 @@ sub get_famid_from_geneoid{
 	    gene_oid => $gene_oid,
 	}
     );
-    if( $families->count() > 1 ){
-	if( !( @fcis ) ){
-	    	warn( "Got multiple families for gene_oid $gene_oid. Must use fci to determine which family to select!\n" );
-		exit( 0 );
-	}
+
+    if ($families->count() > 1  and  !(@fcis) ) {
+	die("Got multiple families for gene_oid $gene_oid. Must use fci to determine which family to select!");
     }
+
     my @selected = ();
     while( my $family = $families->next() ){
 	my $famid = $family->famid->famid;
@@ -1198,13 +1120,12 @@ sub get_famid_from_geneoid{
 	    }
 	}
     }
+
     if( scalar( @selected ) > 1 ){
-	warn( "Even with fci selection there are multiple family ids for gene_oid $gene_oid: " . join( " ", @selected, "\n" ) );
-	exit(0);
+	die("Even with fci selection, there are multiple family ids for gene_oid <$gene_oid>: " . join(" ", @selected, "\n") . " ");
     }
-    else{
-	return $selected[0];
-    }
+    
+    return $selected[0];
 }
 
 sub get_famid_from_fam_alt_id{
@@ -1267,7 +1188,7 @@ sub get_gene_length{
 
 sub get_classification_id{
     my ( $self, $evalue, $coverage, $score, $ref_db_name, $algo, $top_hit_type ) = @_;
-    my $method = $algo . ";" . "best_" . $top_hit_type;
+    my $method = $algo . ";" . "best_${top_hit_type}";
     my $inserted = $self->get_schema->resultset( "ClassificationParameter" )->find_or_create(
 	{
 	    evalue_threshold        => $evalue,
@@ -1430,6 +1351,8 @@ sub insert_gene{
 }
 
 sub insert_genome_from_hash{
+    warn "Note: this function never gets called and may be a bit cobweb-y";
+
     my $self           = shift;
     my $ra_genome_data = shift;
     my $force          = shift; #forces an update of a column for which a taxon_oid exists. BE CAREFUL WITH THIS!
@@ -1530,11 +1453,13 @@ sub insert_genome_from_hash{
     if( !$is_unique ){
 	if( $force ){
 	    my $updated = $self->get_schema->resultset("Genome")->update_or_create( $row, { key =>'primary' } );
-	    warn("The taxon_oid $taxon_oid is NOT UNIQUE to the database. Updated row since force is ON!\n!" );
+	    warn("The taxon_oid $taxon_oid is NOT UNIQUE to the database. Updated row since force is ON!");
 	    return $updated;
 	}
-	warn( "The taxon_oid $taxon_oid is NOT UNIQUE to the database. Passing on this entry!\n" );
-	return $self;
+	warn( "The taxon_oid $taxon_oid is NOT UNIQUE to the database. Passing on this entry!");
+	
+	warn "why do we return self here anyway";
+	return $self; # why would this return "$self" anyway?
     }
     #insert the data to the database;
     my $inserted = $self->get_schema->resultset("Genome")->create( $row );
@@ -1602,18 +1527,13 @@ sub _check_value{
 }
 
 sub get_number_orfs_by_project{
-    my $self       = shift;
-    my $project_id = shift;
+    my ($self, $project_id) = @_;
+    my $samples = $self->get_schema->resultset('Sample')->search( { project_id => $project_id } );
     my $total      = 0;
-    my $samples = $self->get_schema->resultset('Sample')->search(
-	{
-	  project_id => $project_id  
-	}
-    );
-    while( my $sample = $samples->next() ){
-	print "getting n_classified orfs from sample" . $sample->id() . "\n";
-	my $count = $self->MRC::DB::get_number_orfs_by_samples( $sample->id() );
-	$total    = $total + $count;
+    while( my $theSample = $samples->next() ){
+	MRC::notify("getting n_classified orfs from sample ID " . $theSample->id());
+	my $count = $self->MRC::DB::get_number_orfs_by_samples( $theSample->id() );
+	$total    += $count;
     }
     return $total;
 }

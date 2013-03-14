@@ -21,6 +21,8 @@
 package MRC::Sim;
 
 use strict;
+use warnings;
+
 use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
@@ -28,7 +30,24 @@ use IPC::System::Simple qw(capture $EXITVAL);
 use List::Util qw(shuffle);
 use File::Copy;
 
-sub get_rand_geneid{
+sub generate_random_noncoding_str($) {
+    my ($seqlen) = @_;
+    my @chars = ("A", "T", "G", "C");
+    my $rand_str;
+    foreach (1..$seqlen) {
+	$rand_str .= $chars[rand @chars];
+    }
+    return $rand_str;
+}
+
+sub strip_pads($) {
+    my $sequence = shift;
+    $sequence =~ s/^N+//g;
+    $sequence =~ s/N+$//g;
+    return $sequence;
+}
+
+sub get_rand_geneid {
     my $self  = shift;
     my $famid = shift;
     my $schema = $self->{"schema"};
@@ -48,11 +67,11 @@ sub get_rand_geneids{
     my @geneids  = $genes->get_column('gene_oid')->all();
     #what if family is small. need a way to automate through this (change number of samples?)
     if( scalar( @geneids ) < $n_samples ){
-	warn( "Not enough genes in family $famid to randomly sample $n_samples genes. Taking all family members." );
+	warn("Not enough genes in family $famid to randomly sample $n_samples genes. Taking all family members instead!");
 	return \@geneids;
     }
     #randomly shuffle array, select the first $n_samples elements
-    warn( "Shuffling and selecting genes\n");
+    warn("Shuffling and selecting genes...");
     my @rand_ids = ( shuffle( @geneids ) )[0 .. $n_samples - 1];
     return \@rand_ids;
 }
@@ -97,6 +116,9 @@ sub run_meta_passage{
     else{
 	@args     = ("-i $inseqs", "--out_dir $out_dir", "--out_basename $out_basename", "-j", "-m -1", "--pad $padlength", "--sim",  "--num_reads $n_reads", "--mean_clone_len $mean_clone_len", "--stddev_clone_len $stddev_clone_len", "--mean_read_len $mean_read_len", "--stddev_read_len $stddev_read_len", "--type $seq_type", "--metasim_path $metasim_src", "--drop_len $drop_length");
     }
+
+    warn("Apparently we are going to run MetaPASSAGE.pl, which we hope is installed.");
+
     warn( "MetaPASSAGE.pl " . "@args" );
     my $results  = capture( "MetaPASSAGE.pl " . "@args" );
     if( $EXITVAL != 0 ){
@@ -128,7 +150,7 @@ sub filter_sim_reads{
 	    $source = $1;
 	}
 	else{
-	    warn( "Can't parse source from $desc!\n" );
+	    warn( "Can't parse source from $desc!");
 	    next;
 	}
 	#only want one read per source (for now)
@@ -144,18 +166,11 @@ sub filter_sim_reads{
 	$id = $id . "_" . $source;
 	$seq->display_id( $id );
 	#print the read and set the source to be skipped next round
-	warn( "Grabbing sequence $id for source $source:\n" );
+	warn( "Grabbing sequence $id for source $source" );
 	$seqout->write_seq( $seq );
 	$sources{$source}++;
     }
     return $filtered_reads_file;
-}
-
-sub strip_pads{
-    my $sequence = shift;
-    $sequence =~ s/^N+//g;
-    $sequence =~ s/N+$//g;
-    return $sequence;
 }
 
 sub pads_to_rand_noncoding{
@@ -167,7 +182,7 @@ sub pads_to_rand_noncoding{
     my $prepped_reads_file = $directory . "/" . $basename . "-prep.fa";
     my $seqout = Bio::SeqIO->new( -file => ">$prepped_reads_file", -format => 'fasta' );
     my $seqin  = Bio::SeqIO->new( -file => $filtered_reads_file, -format => 'fasta' );
-    warn( "Replacing pads with random nucleotide characters\n");
+    warn( "Replacing pads with random nucleotide characters");
     while( my $seq = $seqin->next_seq() ){
 	my $sequence = $seq->seq();
 	#replace each N with a random A|T|G|C. See
@@ -193,25 +208,15 @@ sub pads_to_rand_noncoding{
     return $prepped_reads_file;
 }
 
-sub generate_random_noncoding_str{
-    my $seqlen = shift;
-    my @chars = ( "A", "T", "G", "C");
-    my $rand_str;
-    foreach ( 1..$seqlen){
-	$rand_str .= $chars[rand @chars];
-    }
-    return $rand_str;
-}
-
 sub convert_to_project_sample{
     my $self       = shift;
     my $famid      = shift;
     my $reads_file = shift;
     my $outdir     = shift; #where the sample file will be placed
     my $out_basename = shift;
-    my $cp_file = $outdir . "/" . $out_basename . "_" . $famid . ".fa";
+    my $cp_file = $outdir . "/" . "${out_basename}_${famid}.fa";
     copy( $reads_file, $cp_file ) || die "Copy of $reads_file failed: $!\n";
-    return $cp_file;
+    return $cp_file; # <-- this is important!
 }
 
 #we will convert a gene row into a three element hash: the unqiue gene_oid key, the protein id, and the nucleotide sequence. the same
@@ -232,7 +237,6 @@ sub print_gene{
 	);
     my $length = $seq->length();
     $seqout->write_seq( $seq );    
-    return $length;
 }
 
 sub print_protein{
@@ -266,15 +270,13 @@ sub map_read_ids_to_famids{
 	next if ( -d $projectdir . "/" . $file );
 	if( $file =~ m/$basename\_(\d+)/ ){
 	    my $famid = $1;
-	    my $seqin = Bio::SeqIO->new( -file => $projectdir . "/" . $file, -format => 'fasta' );
+	    my $seqin = Bio::SeqIO->new( -file => "$projectdir/$file", -format => 'fasta' );
 	    while( my $seq = $seqin->next_seq() ){
 		my $id = $seq->display_id();
 		$map{$id}->{$famid}++;
 	    }
-	}
-	else{
-	    warn( "Can't parse family identifier from " . $projectdir . "/" . $file . "\n" );
-	    exit(0);
+	} else{
+	    die("Can't parse family identifier from \"$projectdir/$file\"");
 	}	
     }
     return \%map;

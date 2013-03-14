@@ -3,6 +3,8 @@
 use strict;
 use Getopt::Long;
 
+# Appears to require that 'lastdb' is installed on the remote machine.
+
 #my @args = ( "build_remote_lastdb_script.pl", "-o $b_script_path", "-n $n_splits" );
 
 my ( $outfile, $in_split_db_dir, $n_seqs_per_db_split );
@@ -73,7 +75,7 @@ print OUT join( "\n",
 		"uname -a                                          >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"echo \"****************************\"             >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"echo \"RUNNING LASTDB WITH \$*\"                 >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"source /netapp/home/sharpton/.bash_profile        >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+#		"source /netapp/home/sharpton/.bash_profile        >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"date                                              >> \$LOGS/lastdb/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"\n" );
 

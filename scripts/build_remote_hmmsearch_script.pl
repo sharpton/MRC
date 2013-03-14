@@ -89,7 +89,7 @@ print OUT join( "\n",
 		"uname -a                                          >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"echo \"****************************\"             >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"echo \"RUNNING HMMSEARCH WITH \$*\"                 >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		"source /netapp/home/sharpton/.bash_profile        >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+#		"source /netapp/home/sharpton/.bash_profile        >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"date                                              >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		"\n" );
 
