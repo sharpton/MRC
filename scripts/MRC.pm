@@ -14,7 +14,7 @@ package MRC;
 
 use MRC::DB;
 use MRC::Run;
-use SFams::Schema;
+use Sfams::Schema;
 use Data::Dumper;
 use File::Basename;
 use File::Path;
@@ -101,7 +101,7 @@ sub new{
     $self->{"samples"}     = undef; #hash relating sample names to paths   
     $self->{"rusername"}   = undef;
     $self->{"r_ip"}        = undef;
-    $self->{"rscripts"}    = undef;
+    $self->{"remote_script_dir"}    = undef;
     $self->{"rffdb"}       = undef;
     $self->{"fid_subset"}  = undef; #an array of famids
     $self->{"schema"}      = undef; #current working DB schema object (DBIx)    
@@ -156,6 +156,14 @@ sub set_scripts_dir{
 }
 sub get_scripts_dir{    my $self = shift;    return $self->{"scripts_dir"}; }
 
+sub multi_load{
+    my $self = shift;
+    my $is_multi = shift;
+    if( defined( $is_multi ) ){
+	$self->{"multiload"} = $is_multi;
+    }
+    return $self->{"multiload"};
+}
 
 
 sub set_ffdb{ # Function: Indicates where the MRC flat file database is located
@@ -185,6 +193,7 @@ sub set_ref_ffdb{
     $self->{"ref_ffdb"} = $path;
 }
 sub get_ref_ffdb() {  my $self = shift;  return $self->{"ref_ffdb"};}
+
 
 =head2 set_dbi_connection
 
@@ -252,13 +261,11 @@ sub trans_method{
    return $self->{"trans_method"};
 }
 
-=head2 set_project_path
-=======
 sub set_bulk_insert_count{
     my ($self, $count) = @_;
     $self->{"bulk_insert_count"} = $count;
 }
->>>>>>> alex/master
+
 
 =head2 set_project_path
  Usage   : $analysis->set_project_path( "~/data/metaprojects/project1/" );
@@ -776,6 +783,14 @@ sub build_remote_ffdb {
     MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/projects", $verbose);
     MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/HMMdbs"  , $verbose);   
     MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/BLASTdbs", $verbose);
+}
+
+sub build_remote_script_dir {
+    my ($self, $verbose) = @_;
+    my $rscripts      = $self->{"remote_script_dir"};
+    ( defined($rscripts) ) || die "The remote scripts directory was not defined, so we cannot create it!\n";
+    my $connection = $self->get_remote_connection();
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rscripts"          , $verbose); # <-- 'mkdir' with the '-p' flag won't produce errors or overwrite if existing, so simply always run this.
 }
 
 =head set_remote_hmmscan_script

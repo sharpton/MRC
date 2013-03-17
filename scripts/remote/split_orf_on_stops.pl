@@ -56,7 +56,7 @@ sub process_seq{
     if ($sequence =~ m/\*/){ # we are looking for literal asterisks
 	my @allSeqs  = split( "\\*", $sequence ); # split on asterisks
 	foreach my $seq(@allSeqs){
-	    if(length($seq) =< $seq_len_min){
+	    if(length($seq) <= $seq_len_min){
 		next; # guess it's too short
 	    }
 	    my $id = "${header}_${count}"; # looks like we have the original header line plus a count

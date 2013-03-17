@@ -104,8 +104,8 @@ sub run_transeq_array {
     my $script = "$remote_scripts_path/run_transeq_array.sh";
     my $qsubArrayJobArgument = " -t '1-${array_length}' ";
     my @args = ($qsubArrayJobArgument, $script, $indir, $inbasename, $outdir, $outbasename, $remote_scripts_path, $logsdir);
-    if (defined($split_outdir) && $split_outdir) { push(@args, $split_outdir); } ## add $split_outdir to the argument list, if it was specified
-    if (defined($filter_length) && $split_output) { push(@args, $filter_length; } ## add it to the argument list, if it was specified
+    if (defined($split_outdir) ) { push(@args, $split_outdir); } ## add $split_outdir to the argument list, if it was specified
+    if (defined($filter_length) && defined( $split_outdir ) ) { push(@args, $filter_length); } ## add it to the argument list, if it was specified
     warn("run_transeq_handler.pl: (run_transeq_array): About to execute this command: qsub @args");
     my $results = IPC::System::Simple::capture("qsub " . "@args");
     ($EXITVAL == 0 ) or die("Error in run_transeq_array (running transeq array) on remote server: $results ");
@@ -113,11 +113,11 @@ sub run_transeq_array {
 }
 
 sub run_transeq {
-    my ($input, $output, $remote_scripts_path, $logsdir, $filter_length, $split_output) = @_;
+    my ($input, $output, $remote_scripts_path, $logsdir, $filter_length, $split_outdir) = @_;
     my $script = "$remote_scripts_path/run_transeq.sh";
     my @args = ($script, $input, $output, $logsdir);
-    if (defined($split_output) && $split_output) { push(@args, $split_output); } ## add it to the argument list, if it was specified
-    if (defined($filter_length) && $split_output) { push(@args, $filter_length; } ## add it to the argument list, if it was specified
+    if (defined($split_outdir)) { push(@args, $split_outdir); } ## add it to the argument list, if it was specified
+    if (defined($filter_length) && defined($split_outdir)) { push(@args, $filter_length); } ## add it to the argument list, if it was specified
     warn("run_transeq_handler.pl: (run_transeq): About to execute this command: qsub @args");
     my $results = IPC::System::Simple::capture("qsub " . "@args");
     if($EXITVAL != 0) { die( "Error running transeq (run_transeq) on remote server: $results "); }

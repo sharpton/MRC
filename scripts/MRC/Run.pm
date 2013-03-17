@@ -107,9 +107,9 @@ sub execute_ssh_cmd($$;$) {
 
 
 sub get_sequence_length_from_file($) {
-    my($file) = @_;
+    my($file) = shift;
     #my $READSTRING = ($file =~ m/\.gz/ ) ? "zmore $file | " : "$file"; # allow transparent reading of gzipped files via 'zmore'
-    open(FILE, "zcat --force $file") || die "Unable to open the file \"$file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
+    open(FILE, "zcat --force $file |") || die "Unable to open the file \"$file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
     my $seqLength = 0;
     while(<FILE>){
 	next if ($_ =~ m/^\>/); # skip lines that start with a '>'
@@ -250,13 +250,13 @@ sub load_samples{
 	}
 
 	if( $self->bulk_load() ){
-	    my $tmp    = "/tmp/" . $sid . ".sql";	    
+	    my $tmp    = "/tmp/" . $samp . ".sql";	    
 	    my $table  = "metareads";
 	    my $nrows  = 10000;
 	    my @fields = ( "sample_id", "read_alt_id" );
-	    my $fks    = { "sample_id" => $sid }; #foreign keys and fields not in file 
+	    my $fks    = { "sample_id" => $samp }; #foreign keys and fields not in file 
 	    unless( $self->is_slim() ){
-		$self->MRC::DB::bulk_import( $table, $samples{$sample}->{"path"}, $tmp, $nrows, $fks, \@fields );
+		$self->MRC::DB::bulk_import( $table, $samples{$samp}->{"path"}, $tmp, $nrows, $fks, \@fields );
 	    }
 	}
 	else{
@@ -583,12 +583,12 @@ sub classify_reads{
 		    chomp $_;
 		    if( $_ =~ m/\>(.*?)$/ ){
 			my $orf_alt_id = $1;
-			next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+			next unless( $hitHashPtr->{$orf_alt_id}->{"has_hit"} );
 			my $orf;
 			$orf = $orf_alt_id;
 			my $read_id = $self->MRC::Run::parse_orf_id( $orf, $self->trans_method );
-			my @results = @{ $self->MRC::Run::read_map_process_orfs( $hit_map, $read_map, $read_id, $orf_alt_id, $algo ) };
-			$hit_map  = $results[0];
+			my @results = @{ $self->MRC::Run::read_map_process_orfs(  $hitHashPtr, $read_map, $read_id, $orf_alt_id, $algo ) };
+			$hitHashPtr  = $results[0];
 			$read_map = $results[1]; 
 		    }
 		}
@@ -704,6 +704,7 @@ sub _parse_famid_from_ffdb_seqid {
     }
     return $famid;
 }
+
 sub filter_hit_map_for_top_reads{
     my ( $self, $sample_id, $is_strict, $algo, $hitHashPtr ) = @_;
 #    print "Getting top read hit from $algo\n";
@@ -722,7 +723,7 @@ sub filter_hit_map_for_top_reads{
 		my $orf        = $self->MRC::DB::get_orf_from_alt_id( $orf_alt_id, $sample_id );
 		my $read_id    = $orf->{"read_id"};		
 		my @results = @{ $self->MRC::Run::read_map_process_orfs( $hitHashPtr, $read_map, $read_id, $orf_alt_id, $algo ) };
-		$hit_map  = $results[0];
+		$hitHashPtr  = $results[0];
 		$read_map = $results[1]; 
 	    }
 	}
@@ -772,11 +773,11 @@ sub filter_hit_map_for_top_reads_dbi{
 #	print "grabbing rows\n";
 #	system( "date" );
 	    my $orf_alt_id = $orf->{"orf_alt_id"};
-	    next unless( $hit_map->{$orf_alt_id}->{"has_hit"} );
+	    next unless(  $hitHashPtr->{$orf_alt_id}->{"has_hit"} );
 	    my $read_id = $orf->{"read_id"};	    
-	    my @results = @{ $self->MRC::Run::read_map_process_orfs( $hit_map, $read_map, $read_id, $orf_alt_id, $algo ) };
-	    $hit_map  = $results[0];
-	    $read_map = $results[1]; 
+	    my @results = @{ $self->MRC::Run::read_map_process_orfs( $hitHashPtr, $read_map, $read_id, $orf_alt_id, $algo ) };
+	    $hitHashPtr = $results[0];
+	    $read_map   = $results[1]; 
 	} 
     }
     $orfs->finish;
@@ -803,8 +804,8 @@ sub filter_hit_map_for_top_reads_dbi_single{
 	    my $orfs       = $self->MRC::DB::get_orf_from_alt_id_dbi( $dbh, $orf_alt_id, $sample_id );
 	    my $orf        = $orfs->fetchall_arrayref();
 	    my $read_id = $orf->[0][2];
-	    my @results = @{ $self->MRC::Run::read_map_process_orfs( $hit_map, $read_map, $read_id, $orf_alt_id, $algo ) };
-	    $hit_map  = $results[0];
+	    my @results = @{ $self->MRC::Run::read_map_process_orfs( $hitHashPtr, $read_map, $read_id, $orf_alt_id, $algo ) };
+	    $hitHashPtr  = $results[0];
 	    $read_map = $results[1]; 
 	    $orfs->finish;	
 	}
@@ -1683,10 +1684,12 @@ sub get_remote_search_results {
     my $in_orf_dir = File::Spec->catdir($self->get_sample_path($sample_id), "orfs"); # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs(@{$self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0)}) { # get_split_sequence_paths is a like a custom version of "glob(...)". It may be eventually replaced by "glob."
 	warn "Handling <$in_orfs>...";
-	my $remote_results_output_dir = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", $type);
-	my $remoteFile = $self->get_remote_connection() . ':' . "$remote_results_output_dir/$in_orfs";
-	my $local_search_res_dir  = File::Spec->catdir($self->get_sample_path($sample_id), "search_results", $type);
-	MRC::Run::transfer_file_into_directory($remoteFile, "$local_search_res_dir/");
+#	my $remote_results_output_dir = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", $type);
+#	my $remoteFile = $self->get_remote_connection() . ':' . "$remote_results_output_dir/$in_orfs/";
+	my $remote_results_output_dir = $self->get_remote_connection() . ':' . File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", $type, $in_orfs);
+	my $local_search_res_dir  = File::Spec->catdir($self->get_sample_path($sample_id), "search_results", $type, $in_orfs);
+#	MRC::Run::transfer_file_into_directory($remoteFile, "$local_search_res_dir/");
+	MRC::Run::transfer_directory("$remote_results_output_dir", "$local_search_res_dir");
     }
 }
 

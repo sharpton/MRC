@@ -156,21 +156,21 @@ my $input_pid      = undef;
 my $goto           = undef; #B=Build HMMdb
 
 my $use_scratch              = 0; #should we use scratch space on remote machine?
-my $multi                = 1; #should we multiload our inserts to the database?
-my $bulk_insert_count    = 1000;
+
 my $dbname               = undef; #"Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
 my $schema_name          = undef; #"Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
 
 #Translation settings
 my $trans_method         = "transeq";
 my $should_split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
-if( $split_orfs ){
+if( $should_split_orfs ){
     $trans_method = $trans_method . "_split";
 }
 my $filter_length        = 14; #filters out orfs of this size or smaller
 
 #Don't turn on both this AND (slim + bulk).
 my $multi                = 1; #should we multiload our inserts to the database?
+my $bulk_insert_count    = 1000;
 #for REALLY big data sets, we streamline inserts into the DB by using bulk loading scripts. Note that this isn't as "safe" as traditional inserts
 my $bulk = 0;
 #for REALLY, REALLY big data sets, we improve streamlining by only writing familymembers to the database in a standalone familymembers_slim table. 
@@ -207,9 +207,6 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "rpath=s"     => \$remoteExePath
 
 	   ,              's=s' => \$sWasSpecified #interestingly, you can't have a "sub" here that dies, as execution continues on
-	   ,    "hmmdb|h=s"     => \$hmmdb_name
-	   ,    "blastdb|b=s"   => \$blastdb_name
-
 	   ,    "sub=s" => \$family_subset_list
 
 	   ,    "stage!"      => \$stage # should we "stage" the database onto the remote machine?
@@ -266,7 +263,7 @@ if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
     dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");
 }
 
-(-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n");
+unless( defined( $input_pid ) ){ (-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n") };
 
 
 
@@ -294,10 +291,10 @@ if( defined( $family_subset_list ) ){
 (defined($reps_only)) or die "reps_only was not defined!";
 (defined($nr_db)) or die "nr_db was not defined!";
 (defined($blast_db_split_size)) or die "blast_db_split_size was not defined!";
-$blastdb_name = $db_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
+my $blastdb_name = $db_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
 
 (defined($hmm_db_split_size)) or die "hmm_db_split_size was not defined!";
-$hmmdb_name = "${db_basename}_${hmm_db_split_size}";
+my $hmmdb_name = "${db_basename}_${hmm_db_split_size}";
 
 my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
 my $remote_ffdb_dir     = "${remoteDir}/MRC_ffdb"; #  used to be = "/scrapp2/yourname/MRC/MRC_ffdb/";
@@ -320,23 +317,29 @@ my $analysis = MRC->new();  #Initialize the project
 
 $analysis->set_scripts_dir($localScriptDir);
 $analysis->set_remote_exe_path($remoteExePath);
-$analysis->set_dbi_connection("DBI:mysql:$dbname:$db_hostname", $dbname, $db_hostname); $analysis->set_username($db_username); $analysis->set_password($db_pass); $analysis->set_schema_name($schema_name);
+$analysis->set_dbi_connection("DBI:mysql:$dbname:$db_hostname", $dbname, $db_hostname); 
+$analysis->set_username($db_username); 
+$analysis->set_password($db_pass); 
+$analysis->set_schema_name($schema_name);
 $analysis->build_schema();
 $analysis->set_multiload($multi);
 $analysis->set_bulk_insert_count($bulk_insert_count);
-$analysis->set_ffdb($local_ffdb); $analysis->set_ref_ffdb($local_reference_ffdb); $analysis->set_fcis(\@fcis); #Connect to the flat file database
+$analysis->set_ffdb($local_ffdb); 
+$analysis->set_ref_ffdb($local_reference_ffdb); 
+$analysis->set_fcis(\@fcis); #Connect to the flat file database
 $analysis->set_family_subset($family_subset_list, $check); #constrain analysis to a set of families of interest
 $analysis->set_hmmdb_name($hmmdb_name); # always set it; why not, right?
 $analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right?
+$analysis->trans_method( $trans_method );
 $analysis->set_clustering_strictness($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score); $analysis->set_remote_status($is_remote);
 
 ### =========== NOW THAT THE MRC OBJECT "Analysis" HAS BEEN CREATED, DO SOME SANITY CHECKING ON THE FINAL PARAMETERS =============================
-if (!$hmmdb_build && !(-d $analysis->MRC::DB::get_hmmdb_path())) {
+if ( ( $use_hmmscan || $use_hmmsearch ) && !$hmmdb_build && !(-d $analysis->MRC::DB::get_hmmdb_path())) {
     warn("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.");
     die("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database. We should specify --hdb probably.");
 }
 
-if (!$blastdb_build && !(-d $analysis->MRC::DB::get_blastdb_path())) {
+if ( ( $use_last || $use_blast ) && !$blastdb_build && !(-d $analysis->MRC::DB::get_blastdb_path())) {
     warn("The blast database path did not exist, BUT we did not specify the --bdb option to build a database.");
     die("The blast database path did not exist, BUT we did not specify the --bdb option to build a database. We should specify --bdb probably.");
 }
@@ -353,6 +356,7 @@ if ($is_remote) {
     $analysis->set_remote_script_dir($remote_script_dir);
     if (!$dryRun) {
 	$analysis->build_remote_ffdb($verbose); #checks if necessary to build and then builds
+	$analysis->build_remote_script_dir( $verbose );
     } else {
 	MRC::dryNotify("Not setting the remote credentials!");
     }
@@ -409,7 +413,7 @@ else { MRC::dryNotify("Skipped getting the partitioned samples for $project_dir.
 ############
 #Load Data. Project id becomes a project var in load_project
 
-*if (!$dryRun) {
+if (!$dryRun) {
     $analysis->MRC::Run::load_project($project_dir, $nseqs_per_samp_split);
 } else {
     $analysis->set_project_id(-99); # Dummy project ID
@@ -493,10 +497,10 @@ unless( $slim){
 ## ================================================================================
 BUILDHMMDB:
     ; # <-- this keeps emacs from indenting the code stupidly. Ugh!
-if( ! -d $analysis->MRC::DB::get_hmmdb_path() ){
-    $hmmdb_build = 1;
-    $stage       = 1;
-}	
+#if( ! -d $analysis->MRC::DB::get_hmmdb_path() ){
+#    $hmmdb_build = 1;
+#    $stage       = 1;
+#}	
 
 if ($hmmdb_build){
     if (!$use_hmmscan && !$use_hmmsearch) {
@@ -506,10 +510,11 @@ if ($hmmdb_build){
     $analysis->MRC::Run::build_search_db($hmmdb_name, $hmm_db_split_size, $force_db_build, "hmm");
 }
 
-if( ! -d $analysis->MRC::DB::get_blastdb_path() ){
-    $blastdb_build = 1;
-    $stage         = 1;
-}	
+#if( ! -d $analysis->MRC::DB::get_blastdb_path() ){
+#    $blastdb_build = 1;
+#    $stage         = 1;
+#}
+	
 if ($blastdb_build) {
     if (!$use_blast && !$use_last) {
 	warn("It seems that you want to build a blast database, but you aren't invoking blast or last. While I will continue, you should check your settings to make certain you aren't making a mistake.");

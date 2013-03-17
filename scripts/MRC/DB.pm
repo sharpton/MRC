@@ -674,21 +674,11 @@ sub split_sequence_file_no_bp{
     return \@output_names;
 }
 
-
-
-sub get_split_sequence_paths{
-    my $self      = shift;
-    my $split_dir = shift; #dir path that contains the split files
-    my $full_path = shift; #0 = filename, 1 = full path 
-    my @paths     = ();    
-    opendir( DIR, $split_dir ) || die "Error in MRC::DB::get_split_sequence_paths: Can't opendir $split_dir for read: $!\n";
-=======
 sub get_split_sequence_paths {
     # this could probably be a call to "glob(...)"
     my ($self, $base_directory, $should_use_full_path) = @_;
     my @paths = ();
     opendir(DIR, $base_directory) or die "Error in MRC::DB::get_split_sequence_paths: Can't opendir $base_directory for read: $! ";
->>>>>>> alex/master
     my @files = readdir( DIR );
     closedir( DIR );
     foreach my $file( @files ){
