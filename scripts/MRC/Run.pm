@@ -213,7 +213,7 @@ sub load_samples{
     MRC::notify("Run.pm: load_samples: Processing $numSamples sample${plural} associated with project PID #" . $self->get_project_id() . " ");
     foreach my $samp( keys( %samples ) ){
 	my $pid = $self->get_project_id();
-	my $insert;
+	my $insert;	
 	eval { # <-- this is like a "try" (in the "try/catch" sense)
 	    $insert = $self->MRC::DB::create_sample($samp, $pid );
 	};
@@ -249,20 +249,20 @@ sub load_samples{
 	    die "Terminating: Database insertion error! See the message above for more details..."; # no "newline" with die!
 	}
 
+	$samples{$samp}->{"id"} = $insert->sample_id();
+	my $sid                 = $insert->sample_id(); # just a short name for the sample ID above
 	if( $self->bulk_load() ){
 	    my $tmp    = "/tmp/" . $samp . ".sql";	    
 	    my $table  = "metareads";
 	    my $nrows  = 10000;
 	    my @fields = ( "sample_id", "read_alt_id" );
-	    my $fks    = { "sample_id" => $samp }; #foreign keys and fields not in file 
+	    my $fks    = { "sample_id" => $sid }; #foreign keys and fields not in file 
 	    unless( $self->is_slim() ){
 		$self->MRC::DB::bulk_import( $table, $samples{$samp}->{"path"}, $tmp, $nrows, $fks, \@fields );
 	    }
 	}
 	else{
 	    my $seqs                = Bio::SeqIO->new( -file => $samples{$samp}->{"path"}, -format => 'fasta' );
-	    $samples{$samp}->{"id"} = $insert->sample_id();
-	    my $sid                 = $insert->sample_id(); # just a short name for the sample ID above
 	    my $numReads            = 0;
 	    unless( $self->is_slim() ){
 		if ($self->is_multiload()) {
@@ -431,7 +431,6 @@ sub bulk_load_orf{
     my $seqfile = shift;
     my $sid     = shift;
     my $method  = shift;
-    print $method . "\n";
     my $tmp    = "/tmp/" . $sid . ".sql";	    
     my $table  = "orfs";
     my $nrows  = 10000;

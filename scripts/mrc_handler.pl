@@ -169,14 +169,14 @@ if( $should_split_orfs ){
 my $filter_length        = 14; #filters out orfs of this size or smaller
 
 #Don't turn on both this AND (slim + bulk).
-my $multi                = 1; #should we multiload our inserts to the database?
+my $multi                = 0; #should we multiload our inserts to the database?
 my $bulk_insert_count    = 1000;
 #for REALLY big data sets, we streamline inserts into the DB by using bulk loading scripts. Note that this isn't as "safe" as traditional inserts
-my $bulk = 0;
+my $bulk = 1;
 #for REALLY, REALLY big data sets, we improve streamlining by only writing familymembers to the database in a standalone familymembers_slim table. 
 #No foreign keys on the table, so could have empty version of database except for these results. 
 #Note that no metareads or orfs will write to DB w/ this option
-my $slim = 0;
+my $slim = 1;
 
 
 my $verbose              = 0; # Print extra diagnostic info?
@@ -198,8 +198,11 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "dbhost=s"     => \$db_hostname
 	   , "dbname=s"     => \$dbname
 	   , "dbschema=s"   => \$schema_name
-	   , "dbprefix=s"   => \$db_prefix_basename
 
+	   # Search database name
+	   , "dbprefix=s"     => \$db_prefix_basename
+	   , "hmmsplit|n=i"   => \$hmm_db_split_size
+	   , "blastsplit|n=i" => \$blast_db_split_size
 	   # Remote computational cluster server related variables
 	   , "rhost=s"     => \$remote_hostname
 	   , "ruser=s"     => \$remote_user
@@ -214,7 +217,6 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,    "bdb!"   => \$blastdb_build
 	   ,    "forcedb!"     => \$force_db_build
 
-	   ,    "hmmsplit|n=i"   => \$hmm_db_split_size
 	   ,    "wait|w=i"   => \$waittime        #   <-- in seconds
 	   ,    "remote!"     => \$is_remote
 	   ,    "pid=i"      => \$input_pid
@@ -256,6 +258,14 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 ($coverage >= 0.0 && $coverage <= 1.0) or dieWithUsageError("Coverage must be between 0.0 and 1.0 (inclusive). You specified: $coverage.");
 
 if ((defined($goto) && $goto) && !defined($input_pid)) { dieWithUsageError("If you specify --goto=SOMETHING, you must ALSO specify the --pid to goto!"); }
+
+if( $bulk && $multi ){
+    dieWithUsageError( "You invoking BOTH --bulk and --multi, but can you only proceed with one or the other!");
+}
+
+if( $slim && !$bulk ){
+    dieWithUsageError( "You are invoking --slim without turning on --bulk, so I have to exit!");
+}
 
 #try to detect if we need to stage the database or not on the remote server based on runtime options
 if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
@@ -323,6 +333,8 @@ $analysis->set_password($db_pass);
 $analysis->set_schema_name($schema_name);
 $analysis->build_schema();
 $analysis->set_multiload($multi);
+$analysis->bulk_load( $bulk );
+$analysis->is_slim( $slim );
 $analysis->set_bulk_insert_count($bulk_insert_count);
 $analysis->set_ffdb($local_ffdb); 
 $analysis->set_ref_ffdb($local_reference_ffdb); 
@@ -471,16 +483,15 @@ unless( $slim){
 	foreach my $in_orfs(@{ $analysis->MRC::DB::get_split_sequence_paths($in_orf_dir, 1) }){
 	    warn "Processing orfs in <$in_orfs>...";
 	    my $orfs = Bio::SeqIO->new(-file => $in_orfs, -format => 'fasta');
-	    if ($analysis->is_multiload()){
-		if( $bulk ){
+	    if( $analysis->bulk_load() ){
 		    if( !$dryRun) { $analysis->MRC::Run::bulk_load_orf( $in_orfs, $sample_id, $analysis->trans_method ); }
 		    else { MRC::dryNotify(); }
-		}
-		else{
+	    }
+	    elsif ($analysis->is_multiload()){
 		    if (!$dryRun) { $analysis->MRC::Run::load_multi_orfs($orfs, $sample_id, $analysis->trans_method); }
 		    else { MRC::dryNotify(); }
-		}
-	    } else {
+	    }
+	    else {
 		while (my $orf = $orfs->next_seq()) {
 		    my $orf_alt_id  = $orf->display_id();
 		    my $read_alt_id = MRC::Run::parse_orf_id($orf_alt_id, $analysis->trans_method );

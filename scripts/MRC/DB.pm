@@ -847,19 +847,16 @@ sub get_families_with_orfs_by_project{
 	    project_id => $project_id,
 	}
 	);
-    print Dumper $inside_samps->count();
     my $inside_orfs =  $self->get_schema->resultset('Orf')->search(
 	{
 	    sample_id => { -in => $inside_samps->get_column('sample_id')->as_query },
 	}
 	);
-    print Dumper $inside_orfs->count();
     my $fams =  $self->get_schema->resultset('Familymember')->search(
 	{
 	    orf_id => { -in => $inside_orfs->get_column('orf_id')->as_query },
 	}
 	);	    
-    print Dumper $fams->count();
     return $fams;
 }    
 
@@ -879,13 +876,11 @@ sub get_families_with_orfs_by_sample{
 	    sample_id => $sample_id,
 	}
 	);
-    print Dumper $inside_orfs->count();
     my $fams =  $self->get_schema->resultset('Familymember')->search(
 	{
 	    orf_id => { -in => $inside_orfs->get_column('orf_id')->as_query },
 	}
 	);	    
-    print Dumper $fams->count();
     return $fams;
 }
 
