@@ -1,14 +1,27 @@
 #!/usr/bin/perl -w
 
 use strict;
+use warnings;
 use Getopt::Long;
 
+#if there are extra characters in the header, such as a description, we don't want them when we modify the sequence id
+sub get_header_part_before_whitespace($) {
+    my ($header) = @_;
+    if($header =~ m/^(.*?)\s/){
+	return($1); # looks like we only want... the part BEFORE the space?
+    } else {
+	return $header; # unmodified header is just fine, thank you
+    }
+}
+
+
+
 my( $inseqs, $outseqs );
-my $seq_len_min = 0; #in AA length; 
+my $seq_len_min = 0; #in AA length, filter is inclusive; 
 GetOptions(
     "i=s" => \$inseqs,
     "o=s" => \$outseqs,
-    "l:i" => \$seq_len_min,
+    "l=i" => \$seq_len_min,
     );
 
 open( IN,  $inseqs )     || die "Can't open $inseqs for read: $!\n";
@@ -20,13 +33,12 @@ my $seq    = ();
 while( <IN> ){
     chomp $_;
     if( $_ =~ m/\>/ ){
-	if( $infile ){
+	if($infile) {
 	    process_seq( $header, $seq, $seq_len_min, $out );
-	    $header = get_header( $_ );
+	    $header = get_header_part_before_whitespace($_);
 	    $seq    = ();
-	}
-	else{
-	    $header = get_header( $_ );
+	} else{
+	    $header = get_header_part_before_whitespace($_);
 	    $infile = 1;
 	}
     }
@@ -37,33 +49,23 @@ while( <IN> ){
 close IN;
 close OUT;
 
-#if there are extra characters in the header, such as a description, we don't want them when we modify
-#the sequence id
-sub get_header{
-    my $header = shift;
-    if( $header =~ m/^(.*?)\s/ ){
-	$header = $1;
-    }
-    return $header;
-}
 
 sub process_seq{
-    my( $header, $sequence, $seq_len_min, $out ) = @_;
+    my( $header, $sequence, $seq_len_min, $out) = @_;
     my $count = 1;
-    if( $sequence =~ m/\*/ ){
-	my @seqs  = split( "\\*", $sequence );
-	foreach my $seq( @seqs ){
-	    if( length( $seq ) < $seq_len_min ){
-		next;
+    if ($sequence =~ m/\*/){ # we are looking for literal asterisks
+	my @allSeqs  = split( "\\*", $sequence ); # split on asterisks
+	foreach my $seq(@allSeqs){
+	    if(length($seq) <= $seq_len_min){
+		next; # guess it's too short
 	    }
-	    my $id = $header . "_" . $count;
+	    my $id = "${header}_${count}"; # looks like we have the original header line plus a count
 	    print $out "$id\n$seq\n";
-	    $count++;
+	    $count++; # hmm. Increment count here.
 	}
-    }
-    #no stops, but still want consistant format
-    else{
-	my $id = $header . "_" . $count;
+    } else{
+	#no stops (no asterisks??), but still want consistant format
+	my $id = "${header}_${count}"; # looks like we have the original header line plus a count
 	print $out "$id\n$sequence\n";       
     }
 }

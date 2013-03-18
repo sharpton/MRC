@@ -3,46 +3,90 @@
 #MRC.pm - The MRC workflow manager
 #Copyright (C) 2011  Thomas J. Sharpton 
 #author contact: thomas.sharpton@gladstone.ucsf.edu
-#
-#This program is free software: you can redistribute it and/or modify
-#it under the terms of the GNU General Public License as published by
-#the Free Software Foundation, either version 3 of the License, or
-#(at your option) any later version.
-#    
-#This program is distributed in the hope that it will be useful,
-#but WITHOUT ANY WARRANTY; without even the implied warranty of
-#MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#GNU General Public License for more details.
-#    
-#You should have received a copy of the GNU General Public License
-#along with this program (see LICENSE.txt).  If not, see 
-#<http://www.gnu.org/licenses/>.
+#This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+#This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+#You should have received a copy of the GNU General Public License along with this program (see LICENSE.txt).  If not, see <http://www.gnu.org/licenses/>.
+
+use strict;
+use warnings;
 
 package MRC;
 
-use strict;
 use MRC::DB;
 use MRC::Run;
 use Sfams::Schema;
-use IMG::Schema;
 use Data::Dumper;
 use File::Basename;
+use File::Path;
+use File::Spec;
+
+my $USE_COLORS_CONSTANT = 1; ## Set this to '0' to avoid printing colored output to the terminal, or '1' to print colored output.
+
+sub tryToLoadModule($) {
+    # Tries to load a module. Returns a true value (1) if it succeeds. Otherwise, returns a false value (0).
+    my $x = eval("require $_[0]");
+    if ((defined($@) && $@)) {
+	warn "Module loading of $_[0] FAILED. Skipping this module.";
+	return 0;
+    } else {
+	$_[0]->import();
+	return 1;
+    }
+}
+
+if (!tryToLoadModule("Term::ANSIColor")) {
+    $USE_COLORS_CONSTANT = 0; # Failed to load the ANSI color terminal, so don't use colors! Not sure how reliable this actually is.
+}
+
+sub safeColor($;$) { # one required and one optional argument
+    ## Prints colored text, but only if USER_COLORS_CONSTANT is set.
+    ## Allows you to totally disable colored printing by just changing USE_COLORS_CONSTANT to 0 at the top of this file
+    my ($str, $color) = @_;
+    return (($USE_COLORS_CONSTANT) ? Term::ANSIColor::colored($str, $color) : $str);
+}
+
+sub dryNotify(;$) { # one optional argument
+    my ($msg) = @_;
+    $msg = (defined($msg)) ? $msg : "This was only a dry run, so we skipped executing a command.";
+    chomp($msg);
+    print STDERR safeColor("[DRY RUN]: $msg\n", "black on_magenta");
+}
+
+sub notifyAboutScp($) {
+    my ($msg) = @_;
+    chomp($msg);
+    my $parentFunction = defined((caller(2))[3]) ? (caller(2))[3] : '';
+    print STDERR (safeColor("[SCP]: $parentFunction: $msg\n", "green on_black")); ## different colors from normal notification message
+    # no point in printing the line number for an SCP command, as they all are executed from Run.pm anyway
+}
+
+sub notifyAboutRemoteCmd($) {
+    my ($msg) = @_;
+    chomp($msg);
+    my $parentFunction = defined((caller(2))[3]) ? (caller(2))[3] : '';
+    print STDERR (safeColor("[REMOTE CMD]: $parentFunction: $msg\n", "black on_green")); 
+    ## different colors from normal notification message
+    # no point in printing the line number for a remote command, as they all are executed from Run.pm anyway
+}
+
+sub notify($) {
+    my ($msg) = @_;
+    chomp($msg);
+    print STDERR (safeColor("[NOTE]: $msg\n", "cyan on_black"));
+}
 
 =head2 new
-
- Title   : new
  Usage   : $project = MRC->new()
  Function: initializes a new MRC analysis object
  Example : $analysus = MRC->new();
  Returns : A MRC analysis object
- Args    : None
-
 =cut
 
 sub new{
-    my $proto = shift;
+    my ($proto) = @_;
     my $class = ref($proto) || $proto;
     my $self  = {};
+    warn "Setting default values: is_remote, is_strict, and multiload have default values.";
     $self->{"fci"}         = undef; #family construction ids that are allowed to be processed. array reference
     $self->{"workdir"}     = undef; #master path to MRC scripts
     $self->{"ffdb"}        = undef; #master path to the flat file database
@@ -57,7 +101,7 @@ sub new{
     $self->{"samples"}     = undef; #hash relating sample names to paths   
     $self->{"rusername"}   = undef;
     $self->{"r_ip"}        = undef;
-    $self->{"rscripts"}    = undef;
+    $self->{"remote_script_dir"}    = undef;
     $self->{"rffdb"}       = undef;
     $self->{"fid_subset"}  = undef; #an array of famids
     $self->{"schema"}      = undef; #current working DB schema object (DBIx)    
@@ -77,6 +121,9 @@ sub new{
     $self->{"multiload"}          = 0; #should we multiload our insert statements?
     $self->{"bulk_insert_count"}  = undef; #how many rows should be added at a time when using multi_load?
     $self->{"schema_name"}        = undef; #stores the schema module name, e.g., Sfams::Schema
+    $self->{"slim"}               = 0; #are we processing a VERY, VERY large data set that requires a slim database?
+    $self->{"bulk"}               = 0; #are we processing a VERY large data set that requires mysql data imports over inserts?
+    $self->{"trans_method"}       = undef; #how are we translating the sequences?
     bless($self);
     return $self;
 }
@@ -84,80 +131,53 @@ sub new{
 =head2 get_sample_ids
 
  Title   : get_sample_ids
- Usage   : $analysis->get_sample_ids( )
  Function: Obtains the unique sample_ids for each sample in the project
  Example : my @sample_ids = @{ analysis->get_sample_ids() };
- Returns : A array of sample_ids (array reference)
- Args    : None
-
+ Returns : A array REFERENCE of sample_ids (array reference)
 =cut
 
-sub get_sample_ids{
-    my $self = shift;
+sub get_sample_ids {
+    my ($self) = @_;
     my @sample_ids = ();
-    foreach my $sample( keys( %{ $self->{"samples"} } ) ){
-	my $sample_id = $self->{"samples"}->{$sample}->{"id"};
-	push( @sample_ids, $sample_id );
+    foreach my $samp (keys(%{$self->{"samples"}})) {
+	my $this_sample_id = $self->{"samples"}->{$samp}->{"id"};
+	(defined($this_sample_id)) or die "That's weird---the sample id for sample <$samp> was not defined! How is this even possible?";
+	push(@sample_ids, $this_sample_id);
     }
-    return \@sample_ids;
+    return \@sample_ids; # <-- array reference!
 }
-
-=head2 set_scripts_dir
-
- Title   : set_scripts_dir
- Usage   : $analysis->set_scripts_dir( "~/projects/MRC/scripts" )
- Function: Indicates where the MRC scripts directory is located
- Example : my $scripts_path = analysis->set_scripts_dir( "~/projects/MRC/scripts" );
- Returns : A string that points to a directory path (scalar, optional)
- Args    : A string that points to a directory path (scalar)
-
-=cut
 
 sub set_scripts_dir{
   my $self = shift;
   my $path = shift;
-  if( !defined( $path ) ){
-    warn "No scripts path specified for set_scripts_dir in MRC.pm. Cannot continue!\n";
-    die;
-  }
-  if( !( -e $path ) ){
-    warn "The method set_scripts_dir cannot access scripts path $path. Cannot continue!\n";
-    die;
-  }
-  $self->{"workdir"} = $path;
-  return $self->{"workdir"};
+  (defined($path)) or die "No scripts path specified for set_scripts_dir in MRC.pm. Cannot continue!";
+  (-e $path && -d $path) or die "The method set_scripts_dir cannot access scripts path $path. Maybe it isn't a directory or something. Cannot continue!";
+  $self->{"scripts_dir"} = $path;
 }
+sub get_scripts_dir{    my $self = shift;    return $self->{"scripts_dir"}; }
 
-sub get_scripts_dir{
+sub multi_load{
     my $self = shift;
-    return $self->{"workdir"};
-}
-
-=head2 set_ffdb
-
- Title   : set_ffdb
- Usage   : $analysis->set_ffdb( "~/projects/MRC/ffdb/" )
- Function: Indicates where the MRC flat file database is located
- Example : my $scripts_path = analysis->set_ffdb( "~/projects/MRC/ffdb" );
- Returns : A string that points to a directory path (scalar, optional)
- Args    : A string that points to a directory path (scalar)
-
-=cut
-
-sub set_ffdb{
-    my $self = shift;
-    my $path = shift;
-    if( !defined( $path ) ){
-      warn "No ffdb path specified for set_flat_file_db in MRC.pm. Cannot continue!\n";
-      die;
+    my $is_multi = shift;
+    if( defined( $is_multi ) ){
+	$self->{"multiload"} = $is_multi;
     }
+    return $self->{"multiload"};
+}
+
+
+sub set_ffdb{ # Function: Indicates where the MRC flat file database is located
+    my $self = shift;  
+    my $path = shift;
+    if( !defined( $path ) ){	die "No ffdb path specified for set_flat_file_db in MRC.pm. Cannot continue!\n";    }
     if( !( -e $path ) ){
-      warn "The method set_flat_file_db cannot access ffdb path $path. Cannot continue!\n";
-    die;
+	warn "In set_ffdb, $path does not exist, so I'll create it\n";
+	mkpath( $path );
     }
     $self->{"ffdb"} = $path;
-    return $self->{"ffdb"};
 }
+
+sub get_ffdb()     {  my $self = shift;  return $self->{"ffdb"};}  # Function: Identify the location of the MRC flat file database. Must have been previously set with set_ffdb()
 
 sub set_ref_ffdb{
     my $self = shift;
@@ -171,33 +191,9 @@ sub set_ref_ffdb{
       die;
     }
     $self->{"ref_ffdb"} = $path;
-    return $self->{"ref_ffdb"};
 }
+sub get_ref_ffdb() {  my $self = shift;  return $self->{"ref_ffdb"};}
 
-
-
-=head2 get_ffdb
-
- Title   : get_ffdb
- Usage   : $analysis->get_ffdb()
- Function: Identify the location of the MRC flat file database. Must have been previously set with set_ffdb()
- Example : analysis->set_ffdb( "~/projects/MRC/ffdb" );
-           my $ffdb = analysis->get_ffdb();
- Returns : A string that points to a directory path (scalar)
- Args    : None
-
-=cut
-
-sub get_ffdb{
-  my $self = shift;
-  return $self->{"ffdb"};
-}
-
-
-sub get_ref_ffdb{
-  my $self = shift;
-  return $self->{"ref_ffdb"};
-}
 
 =head2 set_dbi_connection
 
@@ -210,70 +206,78 @@ sub get_ref_ffdb{
 
 =cut
 
-sub set_dbi_connection{
-    my $self = shift;
-    my $path = shift;
-    $self->{"dbi"} = $path;
-    return $self->{"dbi"};
+sub set_dbi_connection {
+    my ($self, $dbipath, $database_name, $db_hostname) = @_;
+    $self->{"dbi"} = $dbipath;
+    $self->{"db_name"}     = $database_name; # <-- usually something like "Sfams_tmp" or whatever. Allowed to be UNDEFINED!
+    $self->{"db_hostname"} = $db_hostname; # <-- something like "test.myserver.com". Allowed to be UNDEFINED!
+}
+
+sub get_db_name()        { my $self = shift; return $self->{"db_name"}; }
+sub get_db_hostname()    { my $self = shift; return $self->{"db_hostname"}; }
+sub get_dbi_connection() { my $self = shift; return $self->{"dbi"}; }
+
+
+sub set_multiload {
+    my ($self, $multi) = @_;
+    if ($multi != 0 && $multi != 1) { die "The multi variable must be either 0 or 1!"; }
+    $self->{"multiload"} = $multi;
+}
+sub is_multiload() { # supposed to be a true/false value
+    my ($self) = @_;
+    return($self->{"multiload"});
 }
 
 
-sub get_dbi_connection{
+sub get_bulk_insert_count{
     my $self = shift;
-    return $self->{"dbi"};
-}
-
-sub multi_load{
-    my $self  = shift;
-    my $multi = shift;
-    if( defined( $multi ) ){
-	$self->{"multiload"} = $multi;
-    }
-    return $self->{"multiload"};
-}
-
-sub bulk_insert_count{
-    my $self = shift;
-    my $count = shift;
-    if( defined( $count ) ){
-	$self->{"bulk_insert_count"} = $count;
-    }
     return $self->{"bulk_insert_count"};
 }
 
-=head2 set_project_path
+sub is_slim{
+    my $self = shift;
+    my $slim = shift;
+    if( defined( $slim ) ){
+	$self->{"slim"} = $slim;
+    }
+    return $self->{"slim"};
+}
 
- Title   : set_project_path
+sub bulk_load{
+    my $self = shift;
+    my $bulk = shift;
+    if( defined( $bulk ) ){
+	$self->{"bulk"} = $bulk;
+    }
+    return $self->{"bulk"};
+}
+
+sub trans_method{
+   my $self = shift;
+   my $method = shift;
+   if( defined( $method ) ){
+       $self->{"trans_method"} = $method;
+   }
+   return $self->{"trans_method"};
+}
+
+sub set_bulk_insert_count{
+    my ($self, $count) = @_;
+    $self->{"bulk_insert_count"} = $count;
+}
+
+
+=head2 set_project_path
  Usage   : $analysis->set_project_path( "~/data/metaprojects/project1/" );
  Function: Point to the raw project data directory (not the ffdb version)
- Example : my $path = analysis->set_project_path( "~/data/metaprojects/project1/" );
- Returns : A filepath (string)
- Args    : A filepath (string)
-
 =cut 
 
 sub set_project_path{
     my $self = shift;
     my $path = shift;
     $self->{"projectpath"} = $path;
-    return $self->{"projectpath"};
 }
-
-=head2 get_project_path
-
- Title   : get_project_path
- Usage   : $analysis->get_project_path();
- Function: Point to the raw project data directory (not the ffdb version)
- Example : my $path = analysis->get_project_path();
- Returns : A filepath (string)
- Args    : None
-
-=cut 
-
-sub get_project_path{
-    my $self = shift;
-    return $self->{"projectpath"};
-}
+sub get_project_path{ my $self = shift;    return $self->{"projectpath"}; }
 
 =head2 get_sample_path
 
@@ -286,11 +290,12 @@ sub get_project_path{
 
 =cut 
 
-sub get_sample_path{
-    my $self = shift;
-    my $sample_id = shift;
-    my $sample_path = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/". $sample_id . "/";
-    return $sample_path;
+sub get_sample_path($) { # note the mandatory (numeric?) argument!
+    my ($self, $sample_id) = @_;
+    (defined($self->get_ffdb())) or die "ffdb was not defined! This can't be called until AFTER you call set_ffdb.";
+    (defined($sample_id)) or die "get_sample_path has ONE MANDATORY argument! It can NOT be called with an undefined input sample_id! In this case, Sample id was not defined!";
+    (defined($self->get_project_id())) or die "Project ID was not defined!";
+    return(File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "$sample_id")); # concatenates items into a filesystem path
 }
 
 =head2 set_username 
@@ -299,22 +304,14 @@ sub get_sample_path{
  Usage   : $analysis->set_username( $username );
  Function: Set the MySQL username
  Example : my $username = $analysis->set_username( "joebob" );
- Returns : A username (string)
  Args    : A username (string)
 
 =cut 
 
-sub set_username{
-    my $self = shift;
-    my $path = shift;
-    $self->{"user"} = $path;
-    return $self->{"user"};
+sub set_username { # note: this is the MYSQL username!
+    my ($self, $user) = @_; $self->{"user"} = $user;
 }
-
-sub get_username{
-    my $self = shift;
-    return $self->{"user"};
-}
+sub get_username() { my $self = shift; return $self->{"user"}; }
 
 =head2 set_password
 
@@ -322,37 +319,29 @@ sub get_username{
  Usage   : $analysis->set_password( $password );
  Function: Set the MySQL password
  Example : my $username = $analysis->set_password( "123456abcde" );
- Returns : A password (string)
  Args    : A password (string)
 
 =cut 
 
-#NOTE: Need to add encryption/decryption function before official release
+#NOTE: This is pretty dubious! Need to add encryption/decryption function before official release
 
 sub set_password{
     my $self = shift;
     my $path = shift;
+    warn "In MRC.pm (function: set_password()): Note: we are setting the password in plain text here. This should ideally be eventually changed to involve encryption or something.";
     $self->{"pass"} = $path;
-    return $self->{"pass"};
 }
+sub get_password { my $self = shift; return $self->{"pass"}; }
 
-sub get_password{
-    my $self = shift;
-    return $self->{"pass"};
-}
-   
 
-sub schema_name{
-    my $self = shift;
-    my $database_name = shift;
-    if( defined( $database_name ) ){
-	$self->{"schema_name"} = $database_name . "::Schema";
+sub set_schema_name{
+    my ($self, $new_name) = @_;
+    if ($new_name =~ m/::Schema$/) { ## <-- does the new schema end in the literal text '::Schema'?
+	$self->{"schema_name"} = $new_name; # Should end in ::Schema . "::Schema";
+    } else {
+	warn("Note: you passed the schema name in as \"$new_name\", but names should always end in the literal text \"::Schema\". So we have actually modified the input argument, now the schema name is being set to: \"$new_name::Schema\" ");
+	$self->{"schema_name"} = $new_name . "::Schema"; # Append "::Schema" to the name.
     }
-    if( !defined( $self->{"schema_name"} ) ){
-	warn( "You must define the schema name via MRC::schema_name() to connect to the DBIx engine! Defaulting to database Sfams\n" );
-	$self->{"schema_name"} = "Sfams::Schema";
-    }
-    return $self->{"schema_name"};
 }
 
 =head2 build_schema
@@ -368,17 +357,16 @@ sub schema_name{
 
 sub build_schema{
     my $self   = shift;
-#    my $schema = Sfams::Schema->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
-    my $schema = $self->schema_name->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
-				       #since we have terms in DB that are reserved words in mysql (e.g., order)
-				       #we need to put quotes around those field ids when calling SQL
-				       {
-					   quote_char => '`', #backtick is quote in sql
-					   name_sep   => '.'  #allows SQL generator to put quotes in right place
-				       }
+    my $schema = $self->{"schema_name"}->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
+						  #since we have terms in DB that are reserved words in mysql (e.g., order)
+						  #we need to put quotes around those field ids when calling SQL
+						  {
+						      quote_char => '`', #backtick is quote in sql
+						      name_sep   => '.'  #allows SQL generator to put quotes in right place
+						  }
 	);
     $self->{"schema"} = $schema;
-    return $self->{"schema"};
+    return $self->{"schema"}; ## return the schema too! this gets used!
 }
 
 =head2 get_schema
@@ -392,11 +380,7 @@ sub build_schema{
 
 =cut 
 
-sub get_schema{
-    my $self = shift;
-    my $schema = $self->{"schema"};
-    return $schema;
-}
+sub get_schema{    my $self = shift;    return($self->{"schema"}); }
 
 =head2 set_project_id
 
@@ -413,14 +397,12 @@ sub get_schema{
 #NOTE: Check that the MRC::DB::insert_project() function is named/called correctly above
 
 sub set_project_id{
-    my $self = shift;
-    my $pid  = shift;
-    if( !(defined $pid ) ){
+    my ($self, $pid) = @_;
+    if (!defined($pid)) {
       warn "No project id specified in set_project_id. Cannot continue!\n";
-      die;
+      die "No project id specified in set_project_id. Cannot continue!\n";
     }
     $self->{"project_id"} = $pid;
-    return $self->{"project_id"};
 }
 
 =head2 get_project_id
@@ -447,7 +429,7 @@ sub get_project_id{
            famid per line)or select all families associated with various family construction ids. Note that the fci array 
            must be set in the MRC object prior to calling this function. If a subset is specified, you have the option of 
            checking whether the families in the file are from the construction_ids that you have set in the MRC object.
- Example : my @families = @{ $analysis->get_family_subset( "~/data/large_family_ids, 1 ) };
+ Example : my @families = @{ $analysis->get_family_subset( "~/data/large_family_ids", 1 ) };
  Returns : An array reference of family ids that will be used in the downstream analyses
  Args    : Subset file path (string), Binary for whether fci should be checked. Both are optional.
 
@@ -540,18 +522,18 @@ sub set_samples{
     return $self->{"samples"};
 }
 
-=head2 get_samples
+=head2 get_sample_hashref
 
- Title   : get_samples
- Usage   : $analysis->get_samples()
+ Title   : get_sample_hashref
+ Usage   : $analysis->get_sample_hashref()
  Function: Retrieve a hash reference that relates sample names to sample ffdb path from the MRC object
- Example : my %samples = %{ $analysis->get_samples() };
+ Example : my %samples = %{ $analysis->get_sample_hashref() };
  Returns : A hash_ref of sample names to sample ffdb paths (hash reference)
  Args    : None
 
 =cut 
 
-sub get_samples{
+sub get_sample_hashref {
     my $self = shift;
     my $samples = $self->{"samples"}; #a hash reference
     return $samples;
@@ -593,48 +575,31 @@ sub get_project_desc{
 }
 
 =head2 set_hmmdb_name
-
- Title   : set_hmmdb_name
- Usage   : $analysis->set_hmmdb_name( );
  Function: Set the name of the hmm database you want to use. Should be unique if you want to build a new database
  Example : my $remote_scripts_path = $analysis->get_hmmdb_name( "ALL_HMMS_FCI_1" );
- Returns : The name of the hmm database to use (string) 
  Args    : The name of the hmm database to use (string) 
 
 =cut 
 
-sub set_hmmdb_name{
-    my ( $self, $name ) = @_;
+sub set_hmmdb_name {
+    my ($self, $name) = @_;
+    (defined($name) && length($name) > 0) or die "Invalid argument: You passed in an empty value apparently.";
     $self->{"hmmdb"} = $name;
-    return $self->{"hmmdb"};
 }
+sub get_hmmdb_name {     my $self = shift;  return $self->{"hmmdb"};   }
 
-sub set_blastdb_name{
-    my ( $self, $name ) = @_;
+sub set_blastdb_name {
+    my ($self, $name) = @_; 
+    (defined($name) && length($name) > 0) or die "Invalid argument: You passed in an empty value apparently.";
     $self->{"blastdb"} = $name;
-    return $self->{"blastdb"};
 }
+sub get_blastdb_name {   my $self = shift;  return $self->{"blastdb"}; }
 
-=head2 get_hmmdb_name
 
- Title   : set_hmmdb_name
- Usage   : $analysis->get_hmmdb_name( );
- Function: Get the name of the hmm database you want to use. Should be unique if you want to build a new database
- Example : my $remote_scripts_path = $analysis->set_hmmdb_name();
- Returns : The name of the hmm database to use (string) 
- Args    : None
+# Remote EXE path
+sub set_remote_exe_path($$) { my ($self, $newPath) = @_; $self->{"remote_exe_path"} = $newPath; }
+sub get_remote_exe_path($)  { my ($self) = @_; return($self->{"remote_exe_path"}); }
 
-=cut 
-
-sub get_hmmdb_name{
-    my $self = shift;
-    return $self->{"hmmdb"};
-}
-
-sub get_blastdb_name{
-    my $self = shift;
-    return $self->{"blastdb"};
-}
 
 =head2 set_remote_server
 
@@ -752,8 +717,10 @@ sub get_remote_ffdb{
 =cut 
 
 sub get_remote_project_path{
-   my ( $self ) = @_;
-   my $path = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/";
+   my ($self) = @_;
+   (defined($self->get_remote_ffdb())) or warn "get_remote_project_path: Remote ffdb path was NOT defined at this point, but we requested it anyway!\n";
+   (defined($self->get_project_id())) or warn "get_remote_project_path: Project ID was NOT defined at this point, but we requested it anyway!.\n";
+   my $path = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/";
    return $path;
 }
 
@@ -770,92 +737,60 @@ sub get_remote_project_path{
 
 sub get_remote_sample_path{
     my ( $self, $sample_id ) = @_;
-    my $path = $self->get_remote_ffdb() . "projects/" . $self->get_project_id() . "/" . $sample_id . "/";
+    my $path = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/";
     return $path;
 }
 
-=head2 set_remote_scripts
 
- Title   : set_remote_scripts
- Usage   : $analysis->set_remote_scripts( );
- Function: Store the location of the remote scripts path (place where this code is stored) in the MRC object
- Example : my $remote_scripts_path = $analysis->set_remote_scripts( "~/projects/MRC/scripts/" );
- Returns : The path to the remote scripts directory (string)
- Args    : The path to the remote scripts directory (string)
 
-=cut 
-
-sub set_remote_scripts{
-    my $self     = shift;
-    my $rscripts = shift;
-    $self->{"rscripts"} = $rscripts;
-    return $self->{"rscripts"};
+sub set_remote_script_dir{
+    my ($self, $remote_script_dir) = @_;
+    $self->{"remote_script_dir"} = $remote_script_dir;
 }
-
-=head2 get_remote_scripts
-
- Title   : get_remote_scripts
- Usage   : $analysis->get_remote_scripts( );
- Function: Get the location of the remote scripts path (place where this code is stored) from the MRC object
- Example : my $remote_scripts_path = $analysis->get_remote_scripts( "~/projects/MRC/scripts/" );
- Returns : The path to the remote scripts directory (string)
- Args    : None
-
-=cut 
-
-sub get_remote_scripts{
-    my $self = shift;
-    return $self->{"rscripts"};
+sub get_remote_script_dir{ # remote script DIRECTORY
+    my ($self) = @_;
+    return $self->{"remote_script_dir"}; # remote script directory
 }
-
 
 =head2 get_remote_connection
 
  Title   : get_remote_connection
- Usage   : $analysis->get_remote_connection( );
  Function: Get the connection string to the remote host (i.e., username@hostname). Must have set remote_username and
            remote_server before running this command
- Example : my $connection = $analysis->get_remote_connectoin();
  Returns : A connection string(string) 
- Args    : None
-
 =cut 
-
 sub get_remote_connection{
-    my $self = shift;
-    my $username = $self->get_remote_username();
-    my $server   = $self->get_remote_server();
-    my $connection = $username . "@" . $server;
-    return $connection;
+    my ($self) = @_;
+    return($self->get_remote_username() . "@" . $self->get_remote_server());
 }
 
 =head build_remote_ffdb
 
  Title   : build_remote_ffdb
  Usage   : $analysis->build_remote_ffdb();
- Function: Build the ffdb on the remote host. Includes setting up projects/, HMMdbs/ dirs if they don't exist. Must have set
+ Function: Makes some directories on the remote host. Build the ffdb on the remote host. Includes setting up projects/, HMMdbs/ dirs if they don't exist. Must have set
            the location of the remote ffdb and have a complete connection string to the remote host.
  Example : $analysis->build_remote_ffdb();
- Returns : self
- Args    : A binary value to print verbose output (binary), optional
+ Args    : (optional) $verbose: true/false (whether or not to print verbose output)
 
 =cut 
 
-sub build_remote_ffdb{
-    my $self    = shift;
-    my $verbose = shift;
-    my $rffdb   = $self->{"rffdb"};
+sub build_remote_ffdb {
+    my ($self, $verbose) = @_;
+    my $rffdb      = $self->{"rffdb"};
     my $connection = $self->get_remote_connection();
-    #the -p flag won't produce errors or overwrite if existing, so simply always run this.
-    my $command = "mkdir -p " . $rffdb;	
-    $self->MRC::Run::execute_ssh_cmd( $connection, $command, $verbose );   
-    $command = "mkdir -p " . $rffdb . "/projects/";
-    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
-    $command = "mkdir -p " . $rffdb . "/HMMdbs/";
-    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
-    $command = "mkdir -p " . $rffdb . "/BLASTdbs/";
-    $self->MRC::Run::execute_ssh_cmd( $connection, $command );   
-    return $self;
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb"          , $verbose); # <-- 'mkdir' with the '-p' flag won't produce errors or overwrite if existing, so simply always run this.
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/projects", $verbose);
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/HMMdbs"  , $verbose);   
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rffdb/BLASTdbs", $verbose);
+}
+
+sub build_remote_script_dir {
+    my ($self, $verbose) = @_;
+    my $rscripts      = $self->{"remote_script_dir"};
+    ( defined($rscripts) ) || die "The remote scripts directory was not defined, so we cannot create it!\n";
+    my $connection = $self->get_remote_connection();
+    MRC::Run::execute_ssh_cmd( $connection, "mkdir -p $rscripts"          , $verbose); # <-- 'mkdir' with the '-p' flag won't produce errors or overwrite if existing, so simply always run this.
 }
 
 =head set_remote_hmmscan_script
@@ -864,7 +799,7 @@ sub build_remote_ffdb{
  Usage   : $analysis->set_remote_hmmscan_script();
  Function: Set the location of the script that is located on the remote server that runs the hmmscan jobs
  Example : my $filepath = $analysis->set_remote_hmmscan_script( "~/projects/MRC/scripts/run_hmmscan.sh" )
- Returns : A filepath to the script (string)
+ Returns : nothing
  Args    : A filepath to the script (string)
 
 =cut 
@@ -873,14 +808,12 @@ sub set_remote_hmmscan_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_hmmscan_script"} = $filepath;
-    return $self;
 }
 
 sub set_remote_hmmsearch_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_hmmsearch_script"} = $filepath;
-    return $self;
 }
 
 
@@ -888,14 +821,12 @@ sub set_remote_blast_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_blast_script"} = $filepath;
-    return $self;
 }
 
 sub set_remote_last_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_last_script"} = $filepath;
-    return $self;
 }
 
 
@@ -903,53 +834,20 @@ sub set_remote_formatdb_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_formatdb_script"} = $filepath;
-    return $self;
 }
 
 sub set_remote_lastdb_script{
     my $self     = shift;
     my $filepath = shift; 
     $self->{"r_lastdb_script"} = $filepath;
-    return $self;
 }
 
-=head get_remote_hmmscan_script
-
- Title   : get_remote_hmmscan_script
- Usage   : $analysis->get_remote_hmmscan_script();
- Function: Get the location of the script that is located on the remote server that runs the hmmscan jobs
- Example : my $filepath = $analysis->get_remote_hmmscan_script();
- Returns : A filepath to the script (string)
- Args    : None
-
-=cut 
-
-sub get_remote_hmmscan_script{
-    my $self = shift;
-    return $self->{"r_hmmscan_script"};
-}
-
-
-sub get_remote_hmmsearch_script{
-    my $self = shift;
-    return $self->{"r_hmmsearch_script"};
-}
-
-
-sub get_remote_blast_script{
-    my $self = shift;
-    return $self->{"r_blast_script"};
-}
-
-sub get_remote_last_script{
-    my $self = shift;
-    return $self->{"r_last_script"};
-}
-
-sub get_remote_lastdb_script{
-    my $self = shift;
-    return $self->{"r_lastdb_script"};
-}
+# Function: Get the location of the script that is located on the remote server
+sub get_remote_hmmscan_script{   my $self = shift;   return $self->{"r_hmmscan_script"}; }
+sub get_remote_hmmsearch_script{ my $self = shift;   return $self->{"r_hmmsearch_script"}; }
+sub get_remote_blast_script{     my $self = shift;   return $self->{"r_blast_script"}; }
+sub get_remote_last_script{      my $self = shift;   return $self->{"r_last_script"}; }
+sub get_remote_lastdb_script{    my $self = shift;   return $self->{"r_lastdb_script"}; }
 
 
 =head set_remote_project_log_dir
@@ -967,24 +865,8 @@ sub set_remote_project_log_dir{
     my $self     = shift;
     my $filepath = shift;
     $self->{"r_project_logs"} = $filepath;
-    return $self;
 }
-
-=head get_remote_project_log_dir
-
- Title   : get_remote_project_log_dir
- Usage   : $analysis->get_remote_project_log_dir();
- Function: Get the location of the directory that is located on the remote server that will contain the run logs
- Example : my $filepath = $analysis->get_remote_project_log_dir();
- Returns : A filepath to the directory (string)
- Args    : None
-
-=cut 
-
-sub get_remote_project_log_dir{
-    my $self = shift;
-    return $self->{"r_project_logs"};
-}
+sub get_remote_project_log_dir{    my $self = shift;    return $self->{"r_project_logs"}; }
 
 =head is_remote
 
@@ -997,13 +879,14 @@ sub get_remote_project_log_dir{
 
 =cut 
 
-sub is_remote{
+sub set_remote_status($$) { 
+    my ($self, $remStatus) = @_;
+    ($remStatus == 0 or $remStatus == 1) or die "Remote status must be 1 or 0, no other values are allowed!";
+    $self->{"is_remote"} = $remStatus;
+}
+sub is_remote {
     my $self = shift;
-    my $switch = shift;
-    if( defined( $switch ) ){
-	$self->{"is_remote"} = $switch;
-    }
-    return $self->{"is_remote"};
+    return ($self->{"is_remote"}); # I guess this can be used as true/false!
 }
 
 =head is_strict_clustering
@@ -1018,12 +901,15 @@ sub is_remote{
 
 =cut 
 
+sub set_clustering_strictness($$) {
+    my ($self, $strictness) = @_;
+    ($strictness == 0 or $strictness == 1) or die "Bad value for is_strict!";
+    $self->{"is_strict"} = $strictness;
+}
+
+
 sub is_strict_clustering{
     my $self = shift;
-    my $switch = shift;
-    if( defined( $switch ) ){
-	$self->{"is_strict"} = $switch;
-    }
     return $self->{"is_strict"};
 }
 

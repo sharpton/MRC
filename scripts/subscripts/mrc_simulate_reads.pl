@@ -30,6 +30,10 @@ my $seq_type = 'RNA2DNA'; #For our purposes, same as running 'DNA', which is not
 
 my $metasim_src = "/home/sharpton/src/metasim/";
 
+warn("This REQUIRES that metasim_src be present, which is currently hard-coded to Tom's directory in <$metasim_src>.");
+
+(-d $metasim_src) or die "Metasim_src directory ($metasim_src) was NOT present on the system! Quitting.";
+
 GetOptions(
     "u=s"   => \$username,
     "p=s"   => \$password,
