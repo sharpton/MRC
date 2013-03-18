@@ -1021,6 +1021,17 @@ sub get_genome_from_taxon_oid{
     return $genome;
 
 }
+sub get_genome_from_ncbi_taxon_oid{
+    my $self = shift;
+    my $taxon_oid = shift;
+    my $genome = $self->get_schema->resultset("Genome")->find(
+	{
+	    ncbi_taxon_oid => $taxon_oid,
+	}
+	);
+    return $genome;
+
+}
 
 sub get_family_from_famid{
     my $self = shift;
@@ -1205,6 +1216,56 @@ sub insert_family_construction{
     return $inserted;
 }
 
+sub insert_tree{
+	my ($self, $treedesc, $treepath, $treetype) = @_;
+	my $inserted = $self->get_schema->resultset("Trees")->create({
+		treedesc => $treedesc,
+		treepath => $treepath,
+		treetype=> $treetype,
+	}
+	);
+	return $inserted;
+}
+
+sub insert_tree_into_family{
+	my ($self, $treeID, $famID) = @_;
+	my $update_row = $self->get_schema->resultset( "Family" )->find({famid => $famID });
+	if(defined $update_row){
+		$update_row->update({alltree => $treeID});
+	}else{
+		warn "Couldn't find family $famID when trying to update the tree field\n";
+	}
+}
+
+sub insert_alignment_into_family{
+	my ($self, $alnpath, $famID) = @_;
+	my $update_row = $self->get_schema->resultset( "Family" )->find({famid => $famID });
+	if(defined $update_row){
+		$update_row->update({alnpath => $alnpath});
+	}else{
+		warn "Couldn't find family $famID when trying to update the alnpath field\n";
+	}
+}
+sub insert_seed_alignment_into_family{
+	my ($self, $alnpath, $famID) = @_;
+	my $update_row = $self->get_schema->resultset( "Family" )->find({famid => $famID });
+	if(defined $update_row){
+		$update_row->update({seed_alnpath => $alnpath});
+	}else{
+		warn "Couldn't find family $famID when trying to update the seed_alnpath field\n";
+	}
+}
+
+sub insert_hmm_into_family{
+	my ($self, $hmmpath, $famID) = @_;
+	my $update_row = $self->get_schema->resultset( "Family" )->find({famid => $famID });
+	if(defined $update_row){
+		$update_row->update({hmmpath => $hmmpath});
+	}else{
+		warn "Couldn't find family $famID when trying to update the hmmpath field\n";
+	}
+}
+
 sub insert_family{
     my( $self, $familyconstruction_id, $fam_alt_id, $name,
 	$description, $alnpath, $seed_alnpath, $hmmpath,
@@ -1352,8 +1413,8 @@ sub insert_genome_from_hash{
     my $ncbi_project_id   = _check_value( $data{ "GenBank_Project_ID" } );
     my $completion        = _check_value( $data{ "Status" } );
     my $domain            = _check_value( $data{ "Domain"} );
-    my $genome_name       = _check_value( $data{ "Genome_Name" } );
-    my $directory         = _check_value( $data{ "Genome_Name" } );
+    my $genome_name       = _check_value( $data{ "Genome_Name_/_Sample_Name" } );
+    my $directory         = _check_value( $data{ "Genome_Name_/_Sample_Name" } );
     $directory            =~ s/\s/\_/g;
     $directory            =~ s/\//\_/g;
     $directory            =~ s/\(/\_/g;
@@ -1389,6 +1450,7 @@ sub insert_genome_from_hash{
     my $oxygen_req        = _check_value( $data{ "Oxygen_Requirement" } );
     my $habitat           = _check_value( $data{ "Ecosystem" } );
     my $temp_range        = _check_value( $data{ "Temperature_Range" } );
+    #my $pathogenic_in     = _check_value( $data{ "Hosts" } );
     my $pathogenic_in     = _check_value( $data{ "Hosts" } );
     my $disease           = _check_value( $data{ "Diseases" } );
     if( defined $disease && $disease eq "None" ){
@@ -1464,6 +1526,18 @@ sub check_taxon_oid_unique{
 sub get_max_treeid{
     my $self   = shift;
     my $treeid = $self->get_schema->resultset('Tree')->get_column('treeid')->max();
+    return $treeid;
+}
+
+sub get_max_familyconstruction_id{
+    my $self   = shift;
+    my $treeid = $self->get_schema->resultset('Familyconstruction')->get_column('familyconstruction_id')->max();
+    return $treeid;
+}
+
+sub get_max_famid{
+    my $self   = shift;
+    my $treeid = $self->get_schema->resultset('Family')->get_column('famid')->max();
     return $treeid;
 }
 
