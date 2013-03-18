@@ -339,7 +339,7 @@ sub set_schema_name{
     if ($new_name =~ m/::Schema$/) { ## <-- does the new schema end in the literal text '::Schema'?
 	$self->{"schema_name"} = $new_name; # Should end in ::Schema . "::Schema";
     } else {
-	warn("Note: you passed the schema name in as \"$new_name\", but names should always end in the literal text \"::Schema\". So we have actually modified the input argument, now the schema name is being set to: \"$new_name::Schema\" ");
+	warn("Note: you passed the schema name in as \"$new_name\", but names should always end in the literal text \"::Schema\". So we have actually modified the input argument, now the schema name is being set to: " . $new_name . ":::Schema\" ");
 	$self->{"schema_name"} = $new_name . "::Schema"; # Append "::Schema" to the name.
     }
 }
@@ -357,6 +357,10 @@ sub set_schema_name{
 
 sub build_schema{
     my $self   = shift;
+    if( !defined( $self->{"schema_name"} ) ){
+	warn( "You did not specify a schema name using MRC::set_schema_name, so I'm defaulting to the most commonly used schema, SFams!\n" );
+	$self->set_schema_name( "SFams" );
+    }
     my $schema = $self->{"schema_name"}->connect( $self->{"dbi"}, $self->{"user"}, $self->{"pass"},
 						  #since we have terms in DB that are reserved words in mysql (e.g., order)
 						  #we need to put quotes around those field ids when calling SQL

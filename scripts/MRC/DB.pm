@@ -1397,8 +1397,6 @@ sub insert_gene{
 }
 
 sub insert_genome_from_hash{
-    warn "Note: this function never gets called and may be a bit cobweb-y";
-
     my $self           = shift;
     my $ra_genome_data = shift;
     my $force          = shift; #forces an update of a column for which a taxon_oid exists. BE CAREFUL WITH THIS!

@@ -286,7 +286,7 @@ if (!defined($dbname)) {
 }
 
 if (!defined($schema_name)) {
-    $schema_name = "Sfams::Schema";
+    $schema_name = "SFams::Schema";
     warn("Note: --dbschema=SCHEMA was not specified on the command line, so we are using the default schema name, which is \"$schema_name\".");
 }
 
