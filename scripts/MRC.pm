@@ -846,13 +846,26 @@ sub set_remote_lastdb_script{
     $self->{"r_lastdb_script"} = $filepath;
 }
 
-# Function: Get the location of the script that is located on the remote server
-sub get_remote_hmmscan_script{   my $self = shift;   return $self->{"r_hmmscan_script"}; }
-sub get_remote_hmmsearch_script{ my $self = shift;   return $self->{"r_hmmsearch_script"}; }
-sub get_remote_blast_script{     my $self = shift;   return $self->{"r_blast_script"}; }
-sub get_remote_last_script{      my $self = shift;   return $self->{"r_last_script"}; }
-sub get_remote_lastdb_script{    my $self = shift;   return $self->{"r_lastdb_script"}; }
+sub set_remote_rapsearch_script{
+    my $self     = shift;
+    my $filepath = shift; 
+    $self->{"r_rapsearch_script"} = $filepath;
+}
 
+sub set_remote_prerapsearch_script{
+    my $self     = shift;
+    my $filepath = shift; 
+    $self->{"r_prerapsearch_script"} = $filepath;
+}
+
+# Function: Get the location of the script that is located on the remote server
+sub get_remote_hmmscan_script{      my $self = shift;   return $self->{"r_hmmscan_script"}; }
+sub get_remote_hmmsearch_script{    my $self = shift;   return $self->{"r_hmmsearch_script"}; }
+sub get_remote_blast_script{        my $self = shift;   return $self->{"r_blast_script"}; }
+sub get_remote_last_script{         my $self = shift;   return $self->{"r_last_script"}; }
+sub get_remote_lastdb_script{       my $self = shift;   return $self->{"r_lastdb_script"}; }
+sub get_remote_prerapsearch_script{ my $self = shift;   return $self->{"r_prerapsearch_script"}; }
+sub get_remote_rapsearch_script{    my $self = shift;   return $self->{"r_rapsearch_script"}; }
 
 =head set_remote_project_log_dir
 

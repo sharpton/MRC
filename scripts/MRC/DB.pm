@@ -549,15 +549,20 @@ sub build_sample_ffdb{
     my $projDir = "$ffdb/projects/$pid"; # no trailing slashes please!
     my $outDir  = "$projDir/output";
     my $logDir  = "$projDir/logs";
-    my $hmmscanlogs   = "$logDir/hmmscan";
-    my $hmmsearchlogs = "$logDir/hmmsearch";
-    my $blastlogs     = "$logDir/blast";
-    my $lastlogs      = "$logDir/last";
-    my $formatdblogs  = "$logDir/formatdb";
-    my $lastdblogs    = "$logDir/lastdb";
-    my $transeqlogs   = "$logDir/transeq";
+    my $hmmscanlogs      = "$logDir/hmmscan";
+    my $hmmsearchlogs    = "$logDir/hmmsearch";
+    my $blastlogs        = "$logDir/blast";
+    my $lastlogs         = "$logDir/last";
+    my $rapsearchlogs    = "$logDir/rapsearch";
+    my $formatdblogs     = "$logDir/formatdb";
+    my $lastdblogs       = "$logDir/lastdb";
+    my $prerapsearchlogs = "$logDir/prerapsearch";
+    my $transeqlogs      = "$logDir/transeq";
 
-    my @paths = ( $outDir, $logDir, $hmmscanlogs, $hmmsearchlogs, $blastlogs, $lastlogs, $formatdblogs, $lastdblogs, $transeqlogs );
+    my @paths = ( $outDir, $logDir, $hmmscanlogs, $hmmsearchlogs, $blastlogs, 
+		  $formatdblogs, $lastlogs, $lastdblogs, $rapsearchlogs,
+		  $prerapsearchlogs, $transeqlogs );
+
     foreach my $path (@paths) {
 	File::Path::make_path($path);
     }
@@ -569,10 +574,11 @@ sub build_sample_ffdb{
 	my $search_res      = "$sampDir/search_results";
 	my $unsplit_orfs    = "$sampDir/unsplit_orfs"; #not always used, always created in case used in alternative run
 
-	my $hmmscan_results = "$search_res/hmmscan";
+	my $hmmscan_results   = "$search_res/hmmscan";
 	my $hmmsearch_results = "$search_res/hmmsearch";
-	my $blast_results = "$search_res/blast";
-	my $last_results = "$search_res/last";
+	my $blast_results     = "$search_res/blast";
+	my $last_results      = "$search_res/last";
+	my $rapsearch_results = "$search_res/rapsearch";
 
 	if (-d $raw_sample_dir) {
 	    warn("The directory \"$raw_sample_dir\" already existed!");
@@ -580,7 +586,7 @@ sub build_sample_ffdb{
 	    else { die("Since the data already exists in $raw_sample_dir , we will not overwrite it! Unless you specify the flag --clobber to brutally clobber those directories anyway. NOT RECOMMENDED unless you know what you're doing."); }
 	}
 
-	foreach my $dirToMake ($sampDir, $search_res, $hmmscan_results, $hmmsearch_results, $blast_results, $last_results, $raw_sample_dir, $orf_sample_dir, $unsplit_orfs) {
+	foreach my $dirToMake ($sampDir, $search_res, $hmmscan_results, $hmmsearch_results, $blast_results, $last_results, $rapsearch_results, $raw_sample_dir, $orf_sample_dir, $unsplit_orfs) {
 	    File::Path::make_path($dirToMake); # <-- make_path ALREADY dies on "severe" errors, so no need to check for them. See http://search.cpan.org/~dland/File-Path-2.09/Path.pm#ERROR_HANDLING
 	}
 	my $nameprefix = "${sampleName}_raw_split_"; # the "base name" here.
@@ -614,7 +620,7 @@ sub split_sequence_file{
 	}
 	$output->write_seq($seq);
 
-	MRC::notify("Output file $split_dir/$outname is now of size " . (-s "$split_dir/$outname") . "...");
+	#MRC::notify("Output file $split_dir/$outname is now of size " . (-s "$split_dir/$outname") . "...");
 
 	$seq_ct++;
     }    

@@ -312,13 +312,15 @@ sub back_load_project(){
     $self->set_project_id( $project_id );
     $self->set_project_path("$ffdb/projects/$project_id");
     if( $self->is_remote ){
-	$self->set_remote_hmmscan_script(   $self->get_remote_project_path() . "/run_hmmscan.sh" );
-	$self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "/run_hmmsearch.sh" );
-        $self->set_remote_blast_script(     $self->get_remote_project_path() . "/run_blast.sh" );
-        $self->set_remote_last_script(      $self->get_remote_project_path() . "/run_last.sh" );
-        $self->set_remote_formatdb_script(  $self->get_remote_project_path() . "/run_formatdb.sh" );
-        $self->set_remote_lastdb_script(    $self->get_remote_project_path() . "/run_lastdb.sh" );
-	$self->set_remote_project_log_dir(  $self->get_remote_project_path() . "/logs" );
+	$self->set_remote_hmmscan_script(      $self->get_remote_project_path() . "/run_hmmscan.sh" );
+	$self->set_remote_hmmsearch_script(    $self->get_remote_project_path() . "/run_hmmsearch.sh" );
+        $self->set_remote_blast_script(        $self->get_remote_project_path() . "/run_blast.sh" );
+        $self->set_remote_formatdb_script(     $self->get_remote_project_path() . "/run_formatdb.sh" );
+        $self->set_remote_lastdb_script(       $self->get_remote_project_path() . "/run_lastdb.sh" );
+        $self->set_remote_last_script(         $self->get_remote_project_path() . "/run_last.sh" );
+	$self->set_remote_rapsearch_script(    $self->get_remote_project_path() . "/run_rapsearch.sh");
+	$self->set_remote_prerapsearch_script( $self->get_remote_project_path() . "/run_prerapsearch.sh");
+	$self->set_remote_project_log_dir(     $self->get_remote_project_path() . "/logs" );
     }
 }
 
@@ -342,12 +344,6 @@ sub back_load_samples{
     }
     $self->set_samples( \%samples );
     #back load remote data
-    if( $self->is_remote() ){
-	$self->set_remote_hmmscan_script(   $self->get_remote_project_path() . "/run_hmmscan.sh" );
-        $self->set_remote_hmmsearch_script( $self->get_remote_project_path() . "/run_hmmsearch.sh" );
-        $self->set_remote_blast_script(     $self->get_remote_project_path() . "/run_blast.sh" );
-        $self->set_remote_project_log_dir(  $self->get_remote_project_path() . "/logs" );
-    }
     warn("Back-loading of samples is now complete.");
     #return $self;
 }
@@ -549,7 +545,7 @@ sub classify_reads{
 
 	if ($algo eq "hmmscan" or $algo eq "hmmsearch") {
 	    $database_name = $self->get_hmmdb_name();
-	} elsif ($algo eq "blast" or $algo eq "last") {
+	} elsif ($algo eq "blast" or $algo eq "last" or $algo eq "rapsearch" ) {
 	    $database_name = $self->get_blastdb_name();
 	    $query_seqs_for_function_call = $query_seqs; # because blast doesn't give sequence lengths in report, need the input file to get seq lengths. add $query_seqs to function
 	} else { die "Bad algorithm choice : $algo"; }
@@ -557,10 +553,9 @@ sub classify_reads{
 	#use the database name to enable multiple searches against different databases
 	if (not($result_file =~ m/$database_name/)) {
 	    warn "Skpping $result_file for some reason, as it did not match the name $database_name.";
-	    warn "Note that 'last' also matches in 'blast'! Not super sure this is intentional";
 	    # SKIP if the result file doesn't match this name!
 	} else {
-	    print "Processing \"$result_file\" with <$algo>...";
+#	    print "Processing \"$result_file\" with <$algo>...\n";
 	    $hitHashPtr = $self->MRC::Run::parse_search_results("$search_results/${result_file}", $algo, $hitHashPtr, $query_seqs_for_function_call );
 	}
     }
@@ -627,7 +622,7 @@ sub classify_reads{
 	    #blast hits are gene_oids, which map to famids via the database (might change refdb seq headers to include famid in header
 	    #which would enable faster flatfile lookup).
 	    ##should probably do the above for the _slim option so that DB can remain light
-	    if( $algo eq "blast" || $algo eq "last" ){
+	    if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch"){
 #		my $family = $self->MRC::DB::get_family_from_geneoid( $hit );
 #		$family->result_class('DBIx::Class::ResultClass::HashRefInflator');
                 #if multiple fams, taking the first that's found. 
@@ -877,13 +872,8 @@ sub parse_search_results{
     my $is_strict  = $self->is_strict_clustering();   #strict (top-hit) v. fuzzy (all hits above thresholds) clustering. Fuzzy not yet implemented   
     #because blast table doesn't print the sequence lengths (ugh) we have to look up the query length
     my %seqlens    = ();
-    if( $type eq "blast" ){
+    if( $type eq "blast" || $type eq "last" || $type eq "rapsearch" ){
 	%seqlens   = %{ _underscore_get_sequence_lengths_from_file( $orfs_file ) };
-    }
-    if ($type eq "last") {
-	warn "Alex's Warning: the orfs_file variable is SPECIFIED when last is called, yet we do not call the code above! Either the call to parse_search_results with last should NOT include query_seqs, or we should change the line above to say if the string is 'blast' OR 'last' and not just blast!";
-	%seqlens   = %{ _underscore_get_sequence_lengths_from_file( $orfs_file ) };
-	warn "Alex added the line above. Not sure if it's right, but at least it's consistent...";
     }
 
     #open the file and process each line
@@ -939,7 +929,7 @@ sub parse_search_results{
 	    }
 	}
 	
-	if( $type eq "blast" ){
+	if( $type eq "blast" || $type eq "rapsearch" ){
 	    if( $_ =~ m/^(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)\s+(.*?)$/ ){
 		$qid    = $1;
 		$tid    = $2;
@@ -1630,22 +1620,24 @@ sub gunzip_remote_dbs{
 sub format_remote_blast_dbs{
     my($self, $remote_script_path) = @_;
     my $remote_database_dir   = File::Spec->catdir($self->get_remote_ffdb(), $BLASTDB_DIR, $self->get_blastdb_name());
-    my $results    = execute_ssh_cmd($self->get_remote_connection(), "qsub -sync y $remote_script_path $remote_database_dir");
+    my $results               = execute_ssh_cmd($self->get_remote_connection(), "qsub -sync y $remote_script_path $remote_database_dir");
 }
 
 sub run_search_remote {
     my ($self, $sample_id, $type, $waitTimeInSeconds, $verbose) = @_;
-    ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed in! The invalid type was: \"$type\".";
+    ($type eq "blast" or $type eq "last" or $type eq "rapsearch" or $type eq "hmmsearch" or $type eq "hmmscan") or
+	die "Invalid type passed in! The invalid type was: \"$type\".";
     my $remote_orf_dir         = File::Spec->catdir($self->get_remote_sample_path($sample_id), "orfs");
     my $log_file_prefix       = File::Spec->catfile($self->get_remote_project_log_dir(), "${type}_handler");
     my $remote_results_output_dir  = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", ${type});
     my ($remote_script_path, $db_name, $remote_db_dir);
 
-    if (($type eq "blast") or ($type eq "last")) {
+    if (($type eq "blast") or ($type eq "last") or ($type eq "rapsearch")) {
 	$db_name               = $self->get_blastdb_name();
 	$remote_db_dir         = File::Spec->catdir($self->get_remote_ffdb(), $BLASTDB_DIR, $db_name);
-	if ($type eq "last" ) { $remote_script_path  = $self->get_remote_last_script();  } # LAST
-	if ($type eq "blast") { $remote_script_path  = $self->get_remote_blast_script(); } # BLAST
+	if ($type eq "last" )     { $remote_script_path  = $self->get_remote_last_script();  } # LAST
+	if ($type eq "blast")     { $remote_script_path  = $self->get_remote_blast_script(); } # BLAST
+	if ($type eq "rapsearch") { $remote_script_path  = $self->get_remote_rapsearch_script(); } # BLAST
     }
     if (($type eq "hmmsearch") or ($type eq "hmmscan")) {
 	$db_name               = $self->get_hmmdb_name();
@@ -1678,7 +1670,8 @@ sub run_search_remote {
 
 sub get_remote_search_results {
     my($self, $sample_id, $type) = @_;
-    ($type eq "blast" or $type eq "last" or $type eq "hmmsearch" or $type eq "hmmscan") or die "Invalid type passed into get_remote_search_results! The invalid type was: \"$type\".";
+    ($type eq "blast" or $type eq "last" or $type eq "rapsearch" or $type eq "hmmsearch" or $type eq "hmmscan") or 
+	die "Invalid type passed into get_remote_search_results! The invalid type was: \"$type\".";
     # Note that every sequence split has its *own* output dir, in order to cut back on the number of files per directory.
     my $in_orf_dir = File::Spec->catdir($self->get_sample_path($sample_id), "orfs"); # <-- Always the same input directory (orfs) no matter what the $type is.
     foreach my $in_orfs(@{$self->MRC::DB::get_split_sequence_paths($in_orf_dir, 0)}) { # get_split_sequence_paths is a like a custom version of "glob(...)". It may be eventually replaced by "glob."

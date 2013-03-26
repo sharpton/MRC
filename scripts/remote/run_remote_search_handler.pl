@@ -6,7 +6,7 @@ use File::Path qw(make_path rmtree);
 use IPC::System::Simple qw(capture $EXITVAL);
 use File::Spec;
 
-#called by lighthouse, executes run_hmmsearch.sh, run_hmmscan.sh, or run_blast.sh
+#called by remote, executes run_hmmsearch.sh, run_hmmscan.sh, or run_blast.sh, etc.
 warn "This command was run: perl run_remote_search_handler.pl @ARGV";
 
 my($result_dir, $db_dir, $query_seq_dir, $db_name, $scriptpath);
@@ -45,7 +45,7 @@ foreach my $query_seq_file( @query_files ){
     # Here is the original line from Tom's code: note that there was previously expected to be a '/' integrated with the results_dir: my $split_sub_results_dir = $results_dir . $query_seq_file . "/";
 
     #now let's see if that directory exists. If not, create it.
-    check_and_make_path($split_sub_result_dir, 0);
+    check_and_make_path($split_sub_result_dir, 1);
     #run the jobs!
     print "-"x60 . "\n";
     print " RUN REMOTE SEARCH HANDLER.PL arguments for <$query_seq_file>\n";

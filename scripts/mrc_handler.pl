@@ -131,6 +131,7 @@ my @fcis                 = (0, 1, 2); #what family construction ids are allowed 
 my $db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
 my $nr_db                = 1; #should we build a non-redundant version of the sequence database? For some reason, this is coded to ALWAYS be true.
+my $db_suffix            = "rsdb"; #prerapsearch index can't point to seq file or will overwrite, so append to seq file name 
 
 my $hmmdb_build    = 0;
 my $blastdb_build  = 0;
@@ -149,7 +150,8 @@ my $top_hit_type   = "read"; # "orf" or "read" Read means each read can have one
 my $use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
 my $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
 my $use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
-my $use_last       = 1; #should we use last to compare SFam reference sequences to reads?
+my $use_last       = 0; #should we use last to compare SFam reference sequences to reads?
+my $use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
 
 my $waittime       = 30;
 my $input_pid      = undef;
@@ -200,9 +202,9 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "dbschema=s"   => \$schema_name
 
 	   # Search database name
-	   , "dbprefix=s"     => \$db_prefix_basename
-	   , "hmmsplit|n=i"   => \$hmm_db_split_size
-	   , "blastsplit|n=i" => \$blast_db_split_size
+	   , "dbprefix=s"   => \$db_prefix_basename
+	   , "hmmsplit=i"   => \$hmm_db_split_size
+	   , "blastsplit=i" => \$blast_db_split_size
 	   # Remote computational cluster server related variables
 	   , "rhost=s"     => \$remote_hostname
 	   , "ruser=s"     => \$remote_user
@@ -216,6 +218,13 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,    "hdb!"   => \$hmmdb_build
 	   ,    "bdb!"   => \$blastdb_build
 	   ,    "forcedb!"     => \$force_db_build
+
+	   #search methods
+	   ,    "use_hmmscan"   => \$use_hmmscan
+	   ,    "use_hmmsearch" => \$use_hmmsearch
+	   ,    "use_blast"     => \$use_blast
+	   ,    "use_last"      => \$use_last
+	   ,    "use_rapsearch" => \$use_rapsearch
 
 	   ,    "wait|w=i"   => \$waittime        #   <-- in seconds
 	   ,    "remote!"     => \$is_remote
@@ -255,12 +264,16 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 (defined($remote_hostname))      or dieWithUsageError("--rhost (remote computational cluster primary note) must be specified. Example --rhost='main.cluster.youruniversity.edu')!");
 (defined($remote_user))          or dieWithUsageError("--ruser (remote computational cluster username) must be specified. Example username: --ruser='someguy'!");
 
+($use_hmmsearch || $use_hmmscan || $use_blast || $use_last || $use_rapsearch ) or dieWithUsageError( "You must specify a search algorithm. Example --use_rapsearch!");
+
+if( $use_rapsearch && !defined( $db_suffix ) ){  dieWithUsageError( "You must specify a database name suffix for indexing when running rapsearch!" );
+
 ($coverage >= 0.0 && $coverage <= 1.0) or dieWithUsageError("Coverage must be between 0.0 and 1.0 (inclusive). You specified: $coverage.");
 
 if ((defined($goto) && $goto) && !defined($input_pid)) { dieWithUsageError("If you specify --goto=SOMETHING, you must ALSO specify the --pid to goto!"); }
 
 if( $bulk && $multi ){
-    dieWithUsageError( "You invoking BOTH --bulk and --multi, but can you only proceed with one or the other!");
+    dieWithUsageError( "You are invoking BOTH --bulk and --multi, but can you only proceed with one or the other!");
 }
 
 if( $slim && !$bulk ){
@@ -270,8 +283,7 @@ if( $slim && !$bulk ){
 #try to detect if we need to stage the database or not on the remote server based on runtime options
 if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
     #$stage = 1;
-    dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");
-}
+    dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");}}
 
 unless( defined( $input_pid ) ){ (-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n") };
 
@@ -281,30 +293,30 @@ unless( defined( $input_pid ) ){ (-d $project_dir) or dieWithUsageError("You mus
 ### =========== Automatic setting of default parameters ========
 
 if (!defined($dbname)) {
-    $dbname = "Sfams_hmp";
-    warn("Note: --dbname=NAME was not specified on the command line, so we are using the default database name, which is \"$dbname\".");
+    $dbname = "SFams";
+warn("Note: --dbname=NAME was not specified on the command line, so we are using the default database name, which is \"$dbname\".");
 }
 
 if (!defined($schema_name)) {
     $schema_name = "SFams::Schema";
-    warn("Note: --dbschema=SCHEMA was not specified on the command line, so we are using the default schema name, which is \"$schema_name\".");
+warn("Note: --dbschema=SCHEMA was not specified on the command line, so we are using the default schema name, which is \"$schema_name\".");
 }
 
 # Automatically set the blast database name, if the user didn't specify something already.
 #set ffdb search database naming parameters
-my $db_basename = undef;
+
 (defined($db_prefix_basename)) or die "Note: db_prefix_basename (database basename/prefix) was not specified on the command line (--dbprefix=PREFIX). Using the default value, which is <$db_prefix_basename>.";
 if( defined( $family_subset_list ) ){
     my $subset_name = basename( $family_subset_list ); 
-    $db_basename = $db_prefix_basename. "_" . $subset_name; 
+    $db_prefix_basename = $db_prefix_basename. "_" . $subset_name; 
 }
 (defined($reps_only)) or die "reps_only was not defined!";
 (defined($nr_db)) or die "nr_db was not defined!";
 (defined($blast_db_split_size)) or die "blast_db_split_size was not defined!";
-my $blastdb_name = $db_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
+my $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
 
 (defined($hmm_db_split_size)) or die "hmm_db_split_size was not defined!";
-my $hmmdb_name = "${db_basename}_${hmm_db_split_size}";
+my $hmmdb_name = "${db_prefix_basename}_${hmm_db_split_size}";
 
 my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
 my $remote_ffdb_dir     = "${remoteDir}/MRC_ffdb"; #  used to be = "/scrapp2/yourname/MRC/MRC_ffdb/";
@@ -379,6 +391,7 @@ MRC::notify("Starting a classification run using the following settings:\n");
 ($use_blast)     && MRC::notify("   * Algorithm: blast\n");
 ($use_hmmscan)   && MRC::notify("   * Algorithm: hmmscan\n");
 ($use_hmmsearch) && MRC::notify("   * Algorithm: hmmsearch\n");
+($use_rapsearch) && MRC::notify("   * Algorithm: rapsearch\n");
 ($stage)         && MRC::notify("   * Staging: Stage the remote database\n");
 ($is_remote)     && MRC::notify("   * Use the remote server <$remote_hostname>\n");
 MRC::notify("   * Evalue threshold: ${evalue}\n");
@@ -435,16 +448,24 @@ if (!$dryRun) {
 if ($is_remote){
     if (!$dryRun) {
 	$analysis->MRC::Run::load_project_remote($analysis->get_project_id());
-    } else {
+    } else { #prepare cluster submission scripts
 	MRC::dryNotify("Skipping the REMOTE loading of the project.");
     }
-    $analysis->set_remote_hmmscan_script(  File::Spec->catfile($analysis->get_remote_project_path(), "run_hmmscan.sh"));
-    $analysis->set_remote_hmmsearch_script(File::Spec->catfile($analysis->get_remote_project_path(), "run_hmmsearch.sh"));
-    $analysis->set_remote_blast_script(    File::Spec->catfile($analysis->get_remote_project_path(), "run_blast.sh"));
-    $analysis->set_remote_last_script(     File::Spec->catfile($analysis->get_remote_project_path(), "run_last.sh"));
-    $analysis->set_remote_formatdb_script( File::Spec->catfile($analysis->get_remote_project_path(), "run_formatdb.sh"));
-    $analysis->set_remote_lastdb_script(   File::Spec->catfile($analysis->get_remote_project_path(), "run_lastdb.sh"));
-    $analysis->set_remote_project_log_dir( File::Spec->catdir( $analysis->get_remote_project_path(), "logs"));
+    #hmmscan
+    $analysis->set_remote_hmmscan_script(      File::Spec->catfile($analysis->get_remote_project_path(), "run_hmmscan.sh"));
+    #hmmsearch
+    $analysis->set_remote_hmmsearch_script(    File::Spec->catfile($analysis->get_remote_project_path(), "run_hmmsearch.sh"));
+    #blast
+    $analysis->set_remote_blast_script(        File::Spec->catfile($analysis->get_remote_project_path(), "run_blast.sh"));
+    $analysis->set_remote_formatdb_script(     File::Spec->catfile($analysis->get_remote_project_path(), "run_formatdb.sh"));
+    #last
+    $analysis->set_remote_last_script(         File::Spec->catfile($analysis->get_remote_project_path(), "run_last.sh"));
+    $analysis->set_remote_lastdb_script(       File::Spec->catfile($analysis->get_remote_project_path(), "run_lastdb.sh"));
+    #rapsearch
+    $analysis->set_remote_rapsearch_script(    File::Spec->catfile($analysis->get_remote_project_path(), "run_rapsearch.sh"));
+    $analysis->set_remote_prerapsearch_script( File::Spec->catfile($analysis->get_remote_project_path(), "run_prerapsearch.sh"));
+
+    $analysis->set_remote_project_log_dir(  File::Spec->catdir( $analysis->get_remote_project_path(), "logs"));
 }
 
 ## ================================================================================
@@ -524,19 +545,22 @@ if ($hmmdb_build){
 #if( ! -d $analysis->MRC::DB::get_blastdb_path() ){
 #    $blastdb_build = 1;
 #    $stage         = 1;
-#}
-	
+#}`
+
 if ($blastdb_build) {
-    if (!$use_blast && !$use_last) {
-	warn("It seems that you want to build a blast database, but you aren't invoking blast or last. While I will continue, you should check your settings to make certain you aren't making a mistake.");
+    if (!$use_blast && !$use_last && !$use_rapsearch) {
+	warn("It seems that you want to build a sequence database, but you aren't invoking pairwise sequence search algorithgm. While I will continue, you should check your settings to make certain you aren't making a mistake. You might considering running --use_blast, --use_last, and/or --use_rapsearch");
     }
-    printBanner("BUILDING BLAST DATABASE");
+    printBanner("BUILDING SEQUENCE DATABASE");
     #need to build the nr module here
     $analysis->MRC::Run::build_search_db($blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only, $nr_db);
 }
 
 ### ====================================================================
+### might want to seperate transfering and indexing of the database
+
 REMOTESTAGE:
+    ;
 if ($is_remote && $stage){
     printBanner("STAGING REMOTE SEARCH DATABASE");
     if (defined($hmmdb_name) && ($use_hmmsearch || $use_hmmscan)){
@@ -551,7 +575,7 @@ if ($is_remote && $stage){
     }
 
     my $projID = $analysis->get_project_id();
-    if (defined($blastdb_name) && ($use_blast || $use_last)){
+    if (defined($blastdb_name) && ($use_blast || $use_last || $use_rapsearch)){
 	$analysis->MRC::Run::remote_transfer_search_db($blastdb_name, "blast");
 	#should do optimization here. Also, should roll over to blast+
 	$analysis->MRC::Run::gunzip_remote_dbs($blastdb_name, "blast");
@@ -569,13 +593,21 @@ if ($is_remote && $stage){
 	    my $lastdb_script = "$local_ffdb/projects/$projID/run_lastdb.sh";
 	    exec_and_die_on_nonzero("perl $localScriptDir/build_remote_lastdb_script.pl -o $lastdb_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	    MRC::Run::transfer_file($lastdb_script, ($analysis->get_remote_connection() . ":" . $analysis->get_remote_lastdb_script()));
-	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_lastdb_script() );
+	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_lastdb_script() ); #this will work for last
+	}
+	if ($use_rapsearch){
+	    print "Building remote prerapsearch script...\n";
+	    my $prerapsearch_script = "$local_ffdb/projects/$projID/run_prerapsearch.sh";
+	    exec_and_die_on_nonzero("perl $localScriptDir/build_remote_prerapsearch_script.pl -o $prerapsearch_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch --suf $db_suffix");
+	    MRC::Run::transfer_file($prerapsearch_script, ($analysis->get_remote_connection() . ":" . $analysis->get_remote_prerapsearch_script()));
+	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_prerapsearch_script() ); #this will work for rapsearch
 	}
     }
 }
 
 ### ====================================================================
 BUILDHMMSCRIPT:
+    ;
 if ($is_remote) {
     my $projID = $analysis->get_project_id();
     my $project_path = $analysis->get_remote_project_path();
@@ -621,11 +653,24 @@ if ($is_remote) {
 	exec_and_die_on_nonzero("perl $localScriptDir/build_remote_last_script.pl -z $db_length -o $last_local -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	MRC::Run::transfer_file($last_local, $analysis->get_remote_connection() . ":" . $analysis->get_remote_last_script());
     }
+    if ($use_rapsearch){
+	printBanner("BUILDING REMOTE RAPSEARCH SCRIPT");
+	#we use the blast script code as a template given the similarity between the methods, so there are some common var names between the block here and above
+	my $rap_local    = "$local_ffdb/projects/$projID/run_rapsearch.sh";
+	my $db_length    = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
+	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
+	print "database length is $db_length\n";
+	print "number of rapsearch db splits: $nsplits\n";
+	exec_and_die_on_nonzero("perl $localScriptDir/build_remote_rapsearch_script.pl -z $db_length -o $rap_local -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
+	MRC::Run::transfer_file($rap_local, $analysis->get_remote_connection() . ":" . $analysis->get_remote_rapsearch_script());
+    }
+
 }
 
 ### ====================================================================
 #RUN HMMSCAN
 HMMSCAN:
+    ;
 if ($is_remote){
     printBanner("RUNNING REMOTE SEARCH");
     foreach my $sample_id(@{ $analysis->get_sample_ids() }) {
@@ -633,6 +678,7 @@ if ($is_remote){
 	($use_blast)     && $analysis->MRC::Run::run_search_remote($sample_id, "blast",     $waittime, $verbose);
 	($use_hmmsearch) && $analysis->MRC::Run::run_search_remote($sample_id, "hmmsearch", $waittime, $verbose);
 	($use_last)      && $analysis->MRC::Run::run_search_remote($sample_id, "last",      $waittime, $verbose);
+	($use_rapsearch) && $analysis->MRC::Run::run_search_remote($sample_id, "rapsearch", $waittime, $verbose);
 	print "Progress report: finished ${sample_id} on " . `date` . "";
     }  
 } else {
@@ -652,6 +698,7 @@ if ($is_remote){
 ### ====================================================================
 #GET REMOTE RESULTS
 GETRESULTS:
+    ;
 if ($is_remote){
     printBanner("GETTING REMOTE RESULTS");
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){
@@ -659,6 +706,7 @@ if ($is_remote){
 	($use_blast)     && $analysis->MRC::Run::get_remote_search_results($sample_id, "blast");
 	($use_hmmsearch) && $analysis->MRC::Run::get_remote_search_results($sample_id, "hmmsearch");
 	($use_last)      && $analysis->MRC::Run::get_remote_search_results($sample_id, "last");
+	($use_rapsearch) && $analysis->MRC::Run::get_remote_search_results($sample_id, "rapsearch");
 	print "Progress report: finished ${sample_id} on " . `date` . "";
     }
 }
@@ -666,6 +714,7 @@ if ($is_remote){
 ### ====================================================================
 #PARSE AND LOAD RESULTS
 CLASSIFYREADS:
+    ;
 if ($is_remote){
     printBanner("CLASSIFYING REMOTE SEARCH RESULTS");
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){
@@ -681,6 +730,7 @@ if ($is_remote){
 	if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
 	if ($use_blast)     { push(@algosToRun, "blast"); }
 	if ($use_last)      { push(@algosToRun, "last"); }
+	if ($use_rapsearch) { push(@algosToRun, "rapsearch"); }
 	foreach my $orf_split_file_name(@{ $analysis->MRC::DB::get_split_sequence_paths($path_to_split_orfs, 0) }) { # maybe could be glob("$path_to_split_orfs/*")
 	    foreach my $algo (@algosToRun) {
 		my $class_id = $analysis->MRC::DB::get_classification_id(
@@ -690,7 +740,7 @@ if ($is_remote){
 		$analysis->MRC::Run::classify_reads($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
 	    }
 	}
-   }
+    }
 } else{
     printBanner("RUNNING LOCALLY ----- This is 'deprecated' apparently and maybe hasn't been tested recently?");
     #this block is deprecated...
@@ -709,6 +759,7 @@ if ($is_remote){
 ### ====================================================================
 #calculate diversity statistics
 CALCDIVERSITY:
+    ;
 printBanner("CALCULATING DIVERSITY STATISTICS");
 #note, we could decrease DB pings by merging some of these together (they frequently leverage same hash structure)
 #might need to include classification_id as a call here;
@@ -740,11 +791,9 @@ if ($use_blast){
 }
 ### ====================================================================
 
-
 printBanner("ANALYSIS COMPLETED!\n");
 
 ### ============== MAIN CODE THAT GETS CALLED EVERY TIME: ABOVE =========================
-
 
 __DATA__
 
