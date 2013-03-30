@@ -3,7 +3,7 @@
 #$ -S /bin/bash
 ##$ -l arch=lx24-amd64
 #$ -l arch=linux-x64
-#$ -l h_rt=00:30:0
+#$ -l h_rt=336:00:0
 #$ -l scratch=0.5G
 #$ -cwd
 #$ -o /dev/null

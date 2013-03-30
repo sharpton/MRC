@@ -125,8 +125,8 @@ my $remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set 
 #my $rscripts       = "/netapp/home/yourname/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
 
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-my $blast_db_split_size  = 500; #how many reference seqs per blast db split?
-my $nseqs_per_samp_split = 100000; #how many seqs should each sample split file contain?
+my $blast_db_split_size  = 5000; #how many reference seqs per blast db split?
+my $nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
 my @fcis                 = (0, 1, 2); #what family construction ids are allowed to be processed?
 my $db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
