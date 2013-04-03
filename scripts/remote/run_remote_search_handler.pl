@@ -36,7 +36,11 @@ my @query_files = readdir( IN );
 closedir( IN );
 #loop over the files, launching a queue job for each
 foreach my $query_seq_file( @query_files ){
-    next if( $query_seq_file =~ m/^\./ ); # skip the '.' and '..' and other dot files
+    next if( $query_seq_file =~ m/^\./  ); # skip the '.' and '..' and other dot files
+    if( $query_seq_file =~ m/\.tmp\d*$/ ){ #if we have an old rapsearch run that we're reprocessing, we can't process the *.tmp files!
+	next; #this is safer than unlink; what is user has strange file extention? let's just pass. can delete by hand if abs. necessary
+	#unlink( $query_seq_file );
+    }
     #modify result_dir here such that the output is placed into each split's subdir w/in $result_dir
     my $split_sub_result_dir = File::Spec->catdir($result_dir, $query_seq_file);
 

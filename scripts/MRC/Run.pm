@@ -27,6 +27,7 @@ use Data::Dumper;
 use Sfams::Schema;
 use File::Basename;
 use File::Cat;
+use File::Copy;
 use IPC::System::Simple qw(capture $EXITVAL);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 use IO::Compress::Gzip qw(gzip $GzipError);
@@ -535,6 +536,7 @@ sub classify_reads{
     my @result_files = readdir( RES );
     closedir( RES );
     foreach my $result_file( @result_files ){
+	next if( $result_file =~ m/^\./ );
 	if(not( $result_file =~ m/$orf_split_filename/ )) {
 	    warn "Skipped the file $result_file, as it did not match the name: $orf_split_filename.";
 	    next; ## skip it!
@@ -1164,16 +1166,42 @@ sub build_search_db{
     my @split      = (); #array of family HMMs/sequences (compressed)
     my $n_proc     = 0;
     my @fcis       = @{ $self->get_fcis() };
+    #type eq blast specific vars follow
+    my $tmp;
+    my $tmp_path;
+    my $total = 0;
+    my $seqs  = {};
+    my $id    = ();
+    my $seq   = '';	   
+    if( $type eq "blast" ){
+	$tmp_path = "${db_path_with_name}.tmp";
+	open( TMP, ">$tmp_path" ) || die "Can't open $tmp_path for write: $!\n";
+	$tmp = *TMP;	    
+    }
     foreach my $family( @families ){
 	#find the HMM/sequences associated with the family (compressed)
 	my $family_db_file = undef;
-
+	
 	if ($type eq "hmm") {
 	    foreach my $fci (@fcis) {
 		my $path = "${ref_ffdb}/fci_${fci}/HMMs/${family}.hmm.gz";
 		if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
 	    }
 	    (defined($family_db_file)) or die("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) . " ");
+	    push( @split, $family_db_file );
+	    $count++;
+	    #if we've hit our split size, process the split
+	    if($count >= $split_size || $family == $families[-1]) {
+		$n_proc++; 	    #build the DB
+		my $split_db_path;
+		if( $type eq "hmm" ){
+		    $split_db_path = MRC::Run::cat_db_split($db_path_with_name, $n_proc, $ffdb, ".hmm", \@split, $type, 0); # note: the $nr_db parameter for hmm is ALWAYS zero --- it makes no sense to build a NR HMM DB
+		} 
+		gzip_file($split_db_path); # We want DBs to be gzipped.
+		unlink($split_db_path); # So we save the gzipped copy, and DELETE the uncompressed copy
+		@split = (); # clear this out
+		$count = 0; # clear this too
+	    }
 	} elsif( $type eq "blast" ) {
 	    foreach my $fci( @fcis ){
 		if (0 == $fci) {
@@ -1204,32 +1232,63 @@ sub build_search_db{
 	    }
 	    (defined($family_db_file)) or die( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" )  . " ");
 #	    $family_db_file =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
-	    $length += get_sequence_length_from_file($family_db_file);
+	    #process the families and produce split dbs along the way
+	    if( $nr_db ){
+		my $nr_tmp      = _build_nr_seq_db( $family_db_file, ".fa" );
+		$family_db_file = $nr_tmp;
+	    }
+	    open(FILE, "zcat --force $family_db_file |") || die "Unable to open the file \"$family_db_file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!	    
+	    while(<FILE>){
+		if ( $_ =~ m/^\>/ ){
+		    $total++;
+		    #no longer need _append_famids_to_seqids, we just do it here now
+		    chomp $_;
+		    if( defined( $id ) ){ #then we've seen a seq before, add that one to the hash
+			$seqs->{$id} = $seq;
+			$id  = ();
+			$seq = '';
+		    }
+		    $id = $_ . "_" . $family . "\n";
+		}
+		else{
+		    chomp $_; # remove the newline
+		    $length += length($_);
+		    $seq    .= $_ . "\n";
+		}
+		#we've hit our desired size (or at the end). Process the split
+		if( ( scalar( keys( %$seqs ) ) >= $split_size ) || ( $family == $families[-1] && eof )) {
+		    foreach my $id( keys( %$seqs ) ){
+			print $tmp $id;
+			print $tmp $seqs->{$id};
+		    }
+		    close $tmp;
+		    $n_proc++; 	    #build the db split number
+		    my $split_db_path = "${db_path_with_name}_${n_proc}.fa";
+		    move( $tmp_path, $split_db_path );		    
+		    gzip_file($split_db_path); # We want DBs to be gzipped.
+		    unlink($split_db_path); # So we save the gzipped copy, and DELETE the uncompressed copy
+		    $seqs = {};
+		    unless( $family == $families[-1] && eof ){
+			open( TMP, ">${db_path_with_name}.tmp" ) || die "Can't open ${db_path_with_name}.tmp for write: $!\n";
+			$tmp = *TMP;	    
+		    }
+		}
+	    }
+	    close FILE;
+	    if( $nr_db ){
+		#we don't want to keep the copy of the tmp nr file that we created, which was pushed into $family_db_file above
+		unlink( $family_db_file );
+	    }
 	}
+	else { 
+	    die "invalid type: <$type>"; 
 	
-	push( @split, $family_db_file );
-	$count++;
-	#if we've hit our split size, process the split
-	if($count >= $split_size || $family == $families[-1]) {
-	    $n_proc++; 	    #build the DB
-	    my $split_db_path;
-	    if( $type eq "hmm" ){
-		$split_db_path = MRC::Run::cat_db_split($db_path_with_name, $n_proc, $ffdb, ".hmm", \@split, $type, 0); # note: the $nr_db parameter for hmm is ALWAYS zero --- it makes no sense to build a NR HMM DB
-	    } elsif( $type eq "blast" ){
-		$split_db_path = MRC::Run::cat_db_split($db_path_with_name, $n_proc, $ffdb, ".fa", \@split, $type, $nr_db);
-	    } else { die "invalid type: <$type>"; }
-	    gzip_file($split_db_path); # We want DBs to be gzipped.
-	    unlink($split_db_path); # So we save the gzipped copy, and DELETE the uncompressed copy
-	    @split = (); # clear this out
-	    $count = 0; # clear this too
 	}
     }
-
-    if($type eq "blast"){
-	open( LEN, "> ${raw_db_path}/database_length.txt" ) || die "Can't open ${raw_db_path}/database_length.txt for write: $!\n";
-	print LEN $length;
-	close LEN;
-    }
+    #print out the database length
+    open( LEN, "> ${raw_db_path}/database_length.txt" ) || die "Can't open ${raw_db_path}/database_length.txt for write: $!\n";
+    print LEN $length;
+    close LEN;
 
     print STDERR "Build Search DB: $type DB was successfully built and compressed.\n";
 }
@@ -1275,33 +1334,37 @@ sub _append_famids_to_seqids{
 	my $id       = $seq->display_id();
 	$seq->display_id( $id . "_" . $famid );
 	$seqout->write_seq( $seq );
-    }
+    }    
     return $family_tmp;    
 }
 
 #Note heuristic here: builiding an NR version of each family_db rather than across the complete DB. 
 #Assumes identical sequences are in same family, decreases RAM requirement. First copy of seq is retained
+#can speed this up by getting out of bioperl if necessary....
 sub _build_nr_seq_db{
     my $family    = shift;
     my $suffix    = shift;
-    my $family_nr = $family . "_nr";
-    my $seqin  = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
-    my $seqout = Bio::SeqIO->new( -file => ">$family_nr", -format => 'fasta' );
-    my $dict   = {};
-    my $famid =  _get_famid_from_familydb_path( $family, $suffix );
+    my $family_nr = $family . "_nr_tmp";
+    my $seqin   = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
+    my $seqout  = Bio::SeqIO->new( -file => ">$family_nr", -format => 'fasta' );
+    my $dict    = {};
+    my $famid   =  _get_famid_from_familydb_path( $family, $suffix );
     my $baseid  = basename( $family, $suffix );
     while( my $seq = $seqin->next_seq ){
 	my $id       = $seq->display_id();
-	$seq->display_id( $id . "_" . $famid );
+#	$seq->display_id( $id . "_" . $famid ); We append earlier now with _append_famids_to_seqids
+	$seq->display_id( $id );
 	my $sequence = $seq->seq();
 	#if we haven't seen this seq before, print it out
 	if( !defined( $dict->{$sequence} ) ){
 	    $seqout->write_seq( $seq );
 	    $dict->{$sequence}++;
 	} else {
-	    #print "Removing duplication sequence $id\n";
+#	    print "Removing duplication sequence $id\n";
 	}
-    }
+    }    
+    my $gzip_nr = $family_nr . ".gz";
+    gzip $family_nr => $gzip_nr || die "gzip failed for $family_nr: $GzipError\n";
     return $family_nr;
 }
 
@@ -1628,7 +1691,7 @@ sub run_search_remote {
     ($type eq "blast" or $type eq "last" or $type eq "rapsearch" or $type eq "hmmsearch" or $type eq "hmmscan") or
 	die "Invalid type passed in! The invalid type was: \"$type\".";
     my $remote_orf_dir         = File::Spec->catdir($self->get_remote_sample_path($sample_id), "orfs");
-    my $log_file_prefix       = File::Spec->catfile($self->get_remote_project_log_dir(), "${type}_handler");
+    my $log_file_prefix        = File::Spec->catfile($self->get_remote_project_log_dir(), "${type}_handler");
     my $remote_results_output_dir  = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", ${type});
     my ($remote_script_path, $db_name, $remote_db_dir);
 
