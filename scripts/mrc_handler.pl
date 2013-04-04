@@ -125,7 +125,7 @@ my $remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set 
 #my $rscripts       = "/netapp/home/yourname/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
 
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-my $blast_db_split_size  = 500000; #how many family sequence files per blast db split? keep small to keep mem footprint low
+my $blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
 my $nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
 my @fcis                 = (0, 1, 2); #what family construction ids are allowed to be processed?
 my $db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
@@ -214,11 +214,11 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,              's=s' => \$sWasSpecified #interestingly, you can't have a "sub" here that dies, as execution continues on
 	   ,    "sub=s" => \$family_subset_list
 
-	   ,    "stage!"      => \$stage # should we "stage" the database onto the remote machine?
-	   ,    "hdb!"   => \$hmmdb_build
-	   ,    "bdb!"   => \$blastdb_build
+	   ,    "stage!"       => \$stage # should we "stage" the database onto the remote machine?
+	   ,    "hdb!"         => \$hmmdb_build
+	   ,    "bdb!"         => \$blastdb_build
 	   ,    "forcedb!"     => \$force_db_build
-
+	   ,    "scratch!"     => \$use_scratch
 	   #search methods
 	   ,    "use_hmmscan"   => \$use_hmmscan
 	   ,    "use_hmmsearch" => \$use_hmmsearch
@@ -266,7 +266,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 
 ($use_hmmsearch || $use_hmmscan || $use_blast || $use_last || $use_rapsearch ) or dieWithUsageError( "You must specify a search algorithm. Example --use_rapsearch!");
 
-if( $use_rapsearch && !defined( $db_suffix ) ){  dieWithUsageError( "You must specify a database name suffix for indexing when running rapsearch!" );
+if( $use_rapsearch && !defined( $db_suffix ) ){  dieWithUsageError( "You must specify a database name suffix for indexing when running rapsearch!" ); }
 
 ($coverage >= 0.0 && $coverage <= 1.0) or dieWithUsageError("Coverage must be between 0.0 and 1.0 (inclusive). You specified: $coverage.");
 
@@ -283,7 +283,7 @@ if( $slim && !$bulk ){
 #try to detect if we need to stage the database or not on the remote server based on runtime options
 if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
     #$stage = 1;
-    dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");}}
+    dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");}
 
 unless( defined( $input_pid ) ){ (-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n") };
 
@@ -315,8 +315,18 @@ if( defined( $family_subset_list ) ){
 (defined($blast_db_split_size)) or die "blast_db_split_size was not defined!";
 my $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
 
+if( ( $use_blast || $use_last || $use_rapsearch ) && ( !$blastdb_build ) && ( ! -d $local_ffdb . "/BLASTdbs/" . $blastdb_name ) ){
+    dieWithUsageError("You are apparently trying to conduct a pairwise sequence search, but aren't telling me to build a database and I can't find one that already exists with your requested name. As a result, you must use the --bdb option to build a new blast database");
+}
+
+
 (defined($hmm_db_split_size)) or die "hmm_db_split_size was not defined!";
 my $hmmdb_name = "${db_prefix_basename}_${hmm_db_split_size}";
+
+if( ( $use_hmmsearch || $use_hmmscan  ) && ( !$hmmdb_build ) && ( ! -d $local_ffdb . "/HMMdbs/" . $hmmdb_name ) ){
+    dieWithUsageError("You are apparently trying to conduct a HMMER related search, but aren't telling me to build an HMM database and I can't find one that already exists with your requested name. As a result, you must use the --hdb option to build a new blast database");
+}
+
 
 my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
 my $remote_ffdb_dir     = "${remoteDir}/MRC_ffdb"; #  used to be = "/scrapp2/yourname/MRC/MRC_ffdb/";
@@ -566,7 +576,7 @@ if ($is_remote && $stage){
     if (defined($hmmdb_name) && ($use_hmmsearch || $use_hmmscan)){
 	$analysis->MRC::Run::remote_transfer_search_db($hmmdb_name, "hmm");
 	if (!$use_scratch){
-	    print "Not using remote scratch space, apparently... I guess there is some gunzipping going on?\n";
+	    print "Not using remote scratch space, apparently...\n";
 	    #should do optimization here
 	    $analysis->MRC::Run::gunzip_remote_dbs($hmmdb_name, "hmm");
 	} else {
@@ -578,7 +588,12 @@ if ($is_remote && $stage){
     if (defined($blastdb_name) && ($use_blast || $use_last || $use_rapsearch)){
 	$analysis->MRC::Run::remote_transfer_search_db($blastdb_name, "blast");
 	#should do optimization here. Also, should roll over to blast+
-	$analysis->MRC::Run::gunzip_remote_dbs($blastdb_name, "blast");
+	if( !$use_scratch ){
+	    print "Not using remote scratch space, apparently...\n";
+	    $analysis->MRC::Run::gunzip_remote_dbs($blastdb_name, "blast");
+	} else {
+	    print "Using remote scratch space, apparently...\n";
+	}
 	my $project_path = $analysis->get_remote_project_path();
 	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
 	if ($use_blast){
