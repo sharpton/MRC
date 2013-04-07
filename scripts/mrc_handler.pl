@@ -327,9 +327,25 @@ if( ( $use_hmmsearch || $use_hmmscan  ) && ( !$hmmdb_build ) && ( ! -d $local_ff
     dieWithUsageError("You are apparently trying to conduct a HMMER related search, but aren't telling me to build an HMM database and I can't find one that already exists with your requested name. As a result, you must use the --hdb option to build a new blast database");
 }
 
-
 my $remote_script_dir   = "${remoteDir}/scripts"; # this should probably be automatically set to a subdir of remote_ffdb
 my $remote_ffdb_dir     = "${remoteDir}/MRC_ffdb"; #  used to be = "/scrapp2/yourname/MRC/MRC_ffdb/";
+
+#if we aren't staging, does the database exist on the remote server?
+if( !$stage && $is_remote ){
+    if( $use_blast || $use_last || $use_rapsearch ){
+	my $remote_db_dir = $remote_ffdb_dir . "/BLASTdbs/" . $blastdb_name;
+	my $command = "if ssh ${remote_user}\@${remote_hostname} \"[ -d ${remote_db_dir} ]\"; then echo \"1\"; else echo \"0\"; fi";
+	my $results = `$command`;
+	if( $results == 0 ){ dieWithUsageError( "You are trying to search against a remote database that hasn't been staged. Run with --stage to place the db ${blastdb_name} on the remote server $remote_hostname\n" );}
+    }
+    if( $use_hmmsearch || $use_hmmscan ){
+	my $remote_db_dir = $remote_ffdb_dir . "/HMMdbs/" . $hmmdb_name;
+	my $command = "if ssh ${remote_user}\@${remote_hostname} \"[ -d ${remote_db_dir} ]\"; then echo \"1\"; else echo \"0\"; fi";
+	my $results = `$command`;
+	if( $results == 0 ){ dieWithUsageError( "You are trying to search against a remote database that hasn't been staged. Run with --stage to place the db ${hmmdb_name} on the remote server $remote_hostname\n" );}
+    }
+}
+
 ### =========== Automatic setting of default parameters ========
 
 
