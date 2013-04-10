@@ -591,8 +591,9 @@ sub build_sample_ffdb{
 	}
 	my $nameprefix = "${sampleName}_raw_split_"; # the "base name" here.
 	#might want to use the no_bp option to improve throughput of alex's call of split_sequence_file below
-	#my @split_names = @{ $self->MRC::DB::split_sequence_file_no_bp( $self->get_samples->{$sample}->{"path"}, $raw_sample_dir, $basename, $nseqs_per_samp_split ) };
-	$self->MRC::DB::split_sequence_file($self->get_sample_hashref()->{$sampleName}->{"path"}, $raw_sample_dir, $nameprefix, $nseqs_per_samp_split);
+	#my @split_names = @{ 
+	$self->MRC::DB::split_sequence_file_no_bp( $self->get_sample_hashref()->{$sampleName}->{"path"}, $raw_sample_dir, $nameprefix, $nseqs_per_samp_split );
+	#$self->MRC::DB::split_sequence_file(       $self->get_sample_hashref()->{$sampleName}->{"path"}, $raw_sample_dir, $nameprefix, $nseqs_per_samp_split);
     }
 }
 
@@ -609,7 +610,12 @@ sub split_sequence_file{
     MRC::notify("Will dump to split $split_dir/$outname");
 
     my $seq_ct = 0;
+    my $seq_count_across_splits = 0; 
     while(my $seq = $seqs->next_seq()) {
+	#have we reached the prerarefy sequence count, if that is set?
+	if( defined( $self->MRC::prerarefy_samples() ) && $seq_count_across_splits == $self->MRC::prerarefy_samples() ){
+	    last;
+	}	   
 	if ($seq_ct == $nseqs_per_split) {
 	    $seq_ct = 0; # reset to 0
 	    $counter++; # weirdly this situation (counter == 2) gets handled separately from the stuff above.
@@ -623,6 +629,7 @@ sub split_sequence_file{
 	#MRC::notify("Output file $split_dir/$outname is now of size " . (-s "$split_dir/$outname") . "...");
 
 	$seq_ct++;
+	$seq_count_across_splits++;
     }    
     return \@output_names;
 }
@@ -640,18 +647,23 @@ sub split_sequence_file_no_bp{
     my $outname  = $basename . $counter . ".fa";
     my $splitout = $split_dir . "/" . $outname;
     open( OUT, ">$splitout" ) || die "Can't open $splitout for write in MRC::DB::split_sequence_file_no_bp\n";
-    my $output   = Bio::SeqIO->new( -file => ">$splitout", -format => "fasta" );
     push( @output_names, $outname );
     print "Will dump to split $splitout\n";
     my $seq_ct   = 0;
     my $header   = ();
     my $sequence = ();
+    my $seq_count_across_splits = 0;
     while( <SEQS> ){
+	#have we reached the prerarefy sequence count, if that is set?
+	if( defined( $self->MRC::prerarefy_samples() ) && $seq_count_across_splits == $self->MRC::prerarefy_samples() ){
+	    last;
+	}	   
 	chomp $_;
-	if( $_ =~ m/^(\>.*?)\s/ ){
+	if( $_ =~ m/^(\>.*)/ ){
 	    if( defined( $header ) ){
 		print OUT "$header\n$sequence\n";
 		$seq_ct++;
+		$seq_count_across_splits++;
 		$sequence = ();
 	    }
 	    $header = $1;

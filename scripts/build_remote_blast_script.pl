@@ -105,10 +105,10 @@ if( $scratch ){
     #Copy files over to the node's scratch dir
     print OUT join( "\n",
 		    "echo \"Copying dbfiles to scratch\"            >> \$LOGS/blast/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "cp \${DBPATH}/\${DB}*.gz /scratch/              >> \$LOGS/blast/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "cp -f \${DBPATH}/\${DB}*.gz /scratch/              >> \$LOGS/blast/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		    "gunzip /scratch/\${DB}*.gz                      >> \$LOGS/blast/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		    "echo \"Copying input file to scratch\"         >> \$LOGS/blast/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "cp \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> \$LOGS/blast/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "cp -f \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> \$LOGS/blast/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		    "\n");
     #RUN HMMER
     print OUT "date                                                 >> \$LOGS/blast/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";

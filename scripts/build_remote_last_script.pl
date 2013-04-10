@@ -123,10 +123,10 @@ if( $use_scratch ){
     #Copy files over to the node's scratch dir
     print OUT join( "\n",
 		    "echo \"Copying dbfiles to scratch\"            >> ${LAST_ALL} 2>&1",
-		    "cp \${DBPATH}/\${DB}*.gz /scratch/              >> ${LAST_ALL} 2>&1",
+		    "cp -f \${DBPATH}/\${DB}*.gz /scratch/              >> ${LAST_ALL} 2>&1",
 		    "gunzip /scratch/\${DB}*.gz                      >> ${LAST_ALL} 2>&1",
 		    "echo \"Copying input file to scratch\"         >> ${LAST_ALL} 2>&1",
-		    "cp \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> ${LAST_ALL} 2>&1",
+		    "cp -f \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> ${LAST_ALL} 2>&1",
 		    "\n");
     #RUN LAST
     print OUT "date                                                 >> ${LAST_ALL} 2>&1\n";

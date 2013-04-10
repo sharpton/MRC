@@ -124,6 +124,8 @@ sub new{
     $self->{"slim"}               = 0; #are we processing a VERY, VERY large data set that requires a slim database?
     $self->{"bulk"}               = 0; #are we processing a VERY large data set that requires mysql data imports over inserts?
     $self->{"trans_method"}       = undef; #how are we translating the sequences?
+    $self->{"prerarefy"}          = undef; #how many sequences should we retain per sample. If defined, will not analyze more seqs/sample than the value
+    $self->{"total_seq_count"}    = 0; #how many sequences are we analyzing per sample? Rolls back to zero for each sample, used in prerarefication
     bless($self);
     return $self;
 }
@@ -1037,6 +1039,23 @@ sub set_fcis{
 sub get_fcis{
     my $self = shift;
     return $self->{"fci"};
+}
+
+sub prerarefy_samples{
+    my( $self, $value ) = @_;
+    if( defined( $value ) ){
+	$self->{"prerarefy"} = $value;
+    }
+    return $self->{"prerarefy"};    
+}
+
+#no longer used in prerarefication
+sub total_sample_seq_count{
+    my( $self, $value ) = @_;
+    if( defined( $value ) ){
+	$self->{"total_seq_count"} = $value;
+    }
+    return $self->{"total_seq_count"};
 }
 
 1;

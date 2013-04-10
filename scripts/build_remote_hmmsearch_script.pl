@@ -108,12 +108,12 @@ if( $scratch ){
     #Copy files over to the node's scratch dir
     print OUT join( "\n",
 		    "echo \"Copying dbfiles to scratch\"            >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "cp \${DBPATH}/\${DB}.gz /scratch/              >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "cp -f \${DBPATH}/\${DB}.gz /scratch/              >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		    "gunzip /scratch/\${DB}.gz                      >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		    "echo \"Running hmmpress\"                      >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		    "hmmpress -f /scratch/\${DB}                    >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		    "echo \"Copying input file to scratch\"         >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
-		    "cp \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
+		    "cp -f \${INPATH}/\${INPUT} /scratch/\${INPUT}     >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1",
 		    "\n");
     #RUN HMMER
     print OUT "date                                                 >> \$LOGS/hmmsearch/\${JOB_ID}.\${SGE_TASK_ID}.all 2>&1\n";

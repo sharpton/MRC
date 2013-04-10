@@ -164,7 +164,7 @@ my $schema_name          = undef; #"Sfams::Schema"; #eventually, we'll need to d
 
 #Translation settings
 my $trans_method         = "transeq";
-my $should_split_orfs           = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
+my $should_split_orfs    = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 if( $should_split_orfs ){
     $trans_method = $trans_method . "_split";
 }
@@ -189,6 +189,8 @@ my %skip_samps = ();
 
 my $extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
 my $sWasSpecified = undef; # The "s" parameter is no longer valid, so we specially detect it with this variable. This is sorta required; "sub {...}" doesn't actually allow program exit it seems.
+
+my $prerare_count = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to them
 
 GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "refdb=s"       => \$local_reference_ffdb
@@ -226,11 +228,13 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,    "use_last"      => \$use_last
 	   ,    "use_rapsearch" => \$use_rapsearch
 
-	   ,    "wait|w=i"   => \$waittime        #   <-- in seconds
-	   ,    "remote!"     => \$is_remote
-	   ,    "pid=i"      => \$input_pid
-	   ,    "goto|g=s"   => \$goto
-	   ,    "z=i"          => \$nseqs_per_samp_split
+	   ,    "wait|w=i"     => \$waittime        #   <-- in seconds
+	   ,    "remote!"      => \$is_remote
+	   ,    "pid=i"        => \$input_pid
+	   ,    "goto|g=s"     => \$goto
+
+	   ,    "z=i"             => \$nseqs_per_samp_split
+	   ,    "prerare-samps:i" => \$prerare_count
 
 	   ,    "e=f"  => \$evalue
 	   ,    "c=f"  => \$coverage
@@ -286,7 +290,6 @@ if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
     dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");}
 
 unless( defined( $input_pid ) ){ (-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n") };
-
 
 
 ### =========== END OF SANITY CHECKING OF INPUT ARGUMENTS ==========
@@ -382,7 +385,11 @@ $analysis->set_hmmdb_name($hmmdb_name); # always set it; why not, right?
 $analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right?
 $analysis->trans_method( $trans_method );
 $analysis->set_clustering_strictness($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score); $analysis->set_remote_status($is_remote);
-
+if( defined( $prerare_count ) ){ 
+    print Dumper $prerare_count;
+    warn( "You are running with --prerare-samps, so I will only process $prerare_count sequences from each sample\n");
+    $analysis->MRC::prerarefy_samples( $prerare_count ) 
+};
 ### =========== NOW THAT THE MRC OBJECT "Analysis" HAS BEEN CREATED, DO SOME SANITY CHECKING ON THE FINAL PARAMETERS =============================
 if ( ( $use_hmmscan || $use_hmmsearch ) && !$hmmdb_build && !(-d $analysis->MRC::DB::get_hmmdb_path())) {
     warn("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.");
