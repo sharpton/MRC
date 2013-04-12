@@ -125,7 +125,8 @@ my $remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set 
 #my $rscripts       = "/netapp/home/yourname/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
 
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-my $blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
+#my $blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
+my $blast_db_split_size  = 10; #how many family sequence files per blast db split? keep small to keep mem footprint low
 my $nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
 my @fcis                 = (0, 1, 2); #what family construction ids are allowed to be processed?
 my $db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
@@ -136,6 +137,7 @@ my $db_suffix            = "rsdb"; #prerapsearch index can't point to seq file o
 my $hmmdb_build    = 0;
 my $blastdb_build  = 0;
 my $force_db_build = 0;
+my $force_search   = 0;
 my $check          = 0;
 
 #Right now, a single evalue, coverage threshold and strict/tophit are applied to both algorithms
@@ -220,6 +222,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,    "hdb!"         => \$hmmdb_build
 	   ,    "bdb!"         => \$blastdb_build
 	   ,    "forcedb!"     => \$force_db_build
+	   ,    "forcesearch!" => \$force_search
 	   ,    "scratch!"     => \$use_scratch
 	   #search methods
 	   ,    "use_hmmscan"   => \$use_hmmscan
@@ -711,12 +714,19 @@ HMMSCAN:
     ;
 if ($is_remote){
     printBanner("RUNNING REMOTE SEARCH");
+    my( $hmm_splits, $blast_splits );
+    if( $use_hmmscan || $use_hmmsearch ){
+	$hmm_splits   = $analysis->MRC::DB::get_number_db_splits("hmm");
+    }
+    if( $use_blast || $use_last || $use_rapsearch ){
+	$blast_splits = $analysis->MRC::DB::get_number_db_splits("blast");
+    }
     foreach my $sample_id(@{ $analysis->get_sample_ids() }) {
-	($use_hmmscan)   && $analysis->MRC::Run::run_search_remote($sample_id, "hmmscan",   $waittime, $verbose);
-	($use_blast)     && $analysis->MRC::Run::run_search_remote($sample_id, "blast",     $waittime, $verbose);
-	($use_hmmsearch) && $analysis->MRC::Run::run_search_remote($sample_id, "hmmsearch", $waittime, $verbose);
-	($use_last)      && $analysis->MRC::Run::run_search_remote($sample_id, "last",      $waittime, $verbose);
-	($use_rapsearch) && $analysis->MRC::Run::run_search_remote($sample_id, "rapsearch", $waittime, $verbose);
+	($use_hmmscan)   && $analysis->MRC::Run::run_search_remote($sample_id, "hmmscan",   $hmm_splits,   $waittime, $verbose, $force_search);
+	($use_hmmsearch) && $analysis->MRC::Run::run_search_remote($sample_id, "hmmsearch", $hmm_splits,   $waittime, $verbose, $force_search);
+	($use_blast)     && $analysis->MRC::Run::run_search_remote($sample_id, "blast",     $blast_splits, $waittime, $verbose, $force_search);
+	($use_last)      && $analysis->MRC::Run::run_search_remote($sample_id, "last",      $blast_splits, $waittime, $verbose, $force_search);
+	($use_rapsearch) && $analysis->MRC::Run::run_search_remote($sample_id, "rapsearch", $blast_splits, $waittime, $verbose, $force_search);
 	print "Progress report: finished ${sample_id} on " . `date` . "";
     }  
 } else {

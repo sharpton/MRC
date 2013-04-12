@@ -1687,11 +1687,12 @@ sub format_remote_blast_dbs{
 }
 
 sub run_search_remote {
-    my ($self, $sample_id, $type, $waitTimeInSeconds, $verbose) = @_;
+    my ($self, $sample_id, $type, $nsplits, $waitTimeInSeconds, $verbose, $forcesearch) = @_;
     ($type eq "blast" or $type eq "last" or $type eq "rapsearch" or $type eq "hmmsearch" or $type eq "hmmscan") or
 	die "Invalid type passed in! The invalid type was: \"$type\".";
-    my $remote_orf_dir         = File::Spec->catdir($self->get_remote_sample_path($sample_id), "orfs");
-    my $log_file_prefix        = File::Spec->catfile($self->get_remote_project_log_dir(), "${type}_handler");
+    ( $nsplits > 0 ) || die "Didn't get a properly formatted count for the number of search DB splits! I got $nsplits.";
+    my $remote_orf_dir             = File::Spec->catdir($self->get_remote_sample_path($sample_id), "orfs");
+    my $log_file_prefix            = File::Spec->catfile($self->get_remote_project_log_dir(), "${type}_handler");
     my $remote_results_output_dir  = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", ${type});
     my ($remote_script_path, $db_name, $remote_db_dir);
 
@@ -1714,16 +1715,20 @@ sub run_search_remote {
     foreach my $transferMe (@scriptsToTransfer) {
 	MRC::Run::transfer_file_into_directory($transferMe, ($self->get_remote_connection() . ':' . $self->get_remote_script_dir() . '/')); # transfer the script into the remote directory
     }
-
+    
     # See "run_remote_search" in run_remote_search_handler.pl
     my $remote_cmd  = "\'" . "perl " . File::Spec->catfile($self->get_remote_script_dir(), "run_remote_search_handler.pl")
 	. " --resultdir=$remote_results_output_dir "
 	. " --dbdir=$remote_db_dir "
 	. " --querydir=$remote_orf_dir "
 	. " --dbname=$db_name "
+	. " --nsplits=$nsplits "
 	. " --scriptpath=${remote_script_path} "
-	. " -w $waitTimeInSeconds "
-	. "> ${log_file_prefix}.out 2> ${log_file_prefix}.err "
+	. " -w $waitTimeInSeconds ";
+    if( $forcesearch ){
+	$remote_cmd .= " --forcesearch ";
+    }
+    $remote_cmd .=    "> ${log_file_prefix}.out 2> ${log_file_prefix}.err "
 	. "\'"; # single quotes bracket this command for whatever reason
 
     my $results     = execute_ssh_cmd($self->get_remote_connection(), $remote_cmd, $verbose);
