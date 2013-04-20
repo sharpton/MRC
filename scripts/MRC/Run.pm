@@ -35,6 +35,7 @@ use Bio::SearchIO;
 use DBIx::Class::ResultClass::HashRefInflator;
 use Benchmark;
 use File::Spec;
+use List::Util qw( shuffle );
 
 # ServerAliveInterval : in SECONDS
 # ServerAliveCountMax : number of times to keep the connection alive
@@ -45,7 +46,7 @@ my $HMMDB_DIR = "HMMdbs";
 my $BLASTDB_DIR = "BLASTdbs";
 
 
-sub _remote_transfer_internal($$$) {
+sub _remote_transfer_internal_scp($$$) {
     my ($src_path, $dest_path, $path_type) = @_;
     ($path_type eq 'directory' or $path_type eq 'file') or die "unsupported path type! must be 'file' or 'directory'. Yours was: '$path_type'.";
     my $COMPRESSION_FLAG = '-C';
@@ -58,6 +59,23 @@ sub _remote_transfer_internal($$$) {
     (0 == $EXITVAL) or die("Error transferring $src_path to $dest_path using $path_type: $results");
     return $results;
 }
+
+#rolling over to rsync for directories
+sub _remote_transfer_internal($$$) {
+    my ($src_path, $dest_path, $path_type) = @_;
+    ($path_type eq 'directory' or $path_type eq 'file') or die "unsupported path type! must be 'file' or 'directory'. Yours was: '$path_type'.";
+    my $COMPRESSION_FLAG = '--compress';
+    my $PRESERVE_MODIFICATION_TIMES = '--times';
+    my $PRESERVE_PERMISSIONS_FLAG = '--perms';
+    my $RECURSIVE_FLAG = ($path_type eq 'directory') ? '--recursive' : ''; # only specify recursion if DIRECTORIES are being transferred!
+    my $FLAGS = "$COMPRESSION_FLAG $RECURSIVE_FLAG $PRESERVE_MODIFICATION_TIMES $PRESERVE_PERMISSIONS_FLAG";
+    my @args = ($FLAGS, $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING, $src_path, $dest_path);
+    MRC::notifyAboutScp("rsync @args");
+    my $results = IPC::System::Simple::capture("rsync @args");
+    (0 == $EXITVAL) or die("Error transferring $src_path to $dest_path using $path_type: $results");
+    return $results;
+}
+
 
 sub ends_in_a_slash($) { return ($_[0] =~ /\/$/); } # return whether or not the first (and only) argument to this function ends in a forward slash (/)
 
@@ -170,7 +188,7 @@ sub get_partitioned_samples{
     closedir(PROJ);
 
     foreach my $file (@files) {
-	next if ( $file =~ m/^\./ || $file =~ m/hmmscan/ || $file =~ m/output/); # skip hmmscan and output, for whatever reason
+	next if ( $file =~ m/^\./ || $file =~ m/hmmscan/ || $file =~ m/output/); 
 	next if ( -d "$path/$file" ); # skip directories, apparently
 	if($file =~ m/DESCRIPT\.txt/){ # <-- see if there's a description file
 	    my $text = ''; # blank
@@ -263,6 +281,7 @@ sub load_samples{
 	    }
 	}
 	else{
+	    #could speed this up by getting out of bioperl...
 	    my $seqs                = Bio::SeqIO->new( -file => $samples{$samp}->{"path"}, -format => 'fasta' );
 	    my $numReads            = 0;
 	    unless( $self->is_slim() ){
@@ -393,8 +412,6 @@ sub load_orf{
     my $read_id = $read->read_id();
     $self->MRC::DB::insert_orf($orf_alt_id, $read_id, $sample_id);
 }
-
-
 
 sub load_multi_orfs{
     my ($self, $orfsBioSeqObject, $sample_id, $algo) = @_;   # $orfsBioSeqObject is a Bio::Seq object
@@ -568,8 +585,6 @@ sub classify_reads{
     #if we want best hit per metaread, use this block
     if( $top_hit_type eq "read" ){
 	print "Filtering hits to identify top hit per read, on " . `date`;
-	###
-	#THIS ISN'T CORRECT. YOU'VE GONE AND SCREWED IT ALL UP.
 	if( $self->is_slim ){
 	    my $read_map = {};
 	    foreach my $orf_split_file_name( @{ $self->MRC::DB::get_split_sequence_paths( $self->get_sample_path( $sample_id ) . "/orfs/" , 1 ) } ) {
@@ -1921,10 +1936,9 @@ sub build_PCA_data_frame{
 }
 
 sub calculate_project_richness {
-    my ($self, $class_id) = @_;
+    my ($self, $class_id, $post_rare_reads) = @_; #$post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
     #identify which families were uniquely found across the project
     my $hit_fams = {}; #hashref
-
     my $family_rs = $self->MRC::DB::get_families_with_orfs_by_project( $self->get_project_id(), $class_id );
     while(my $family = $family_rs->next() ){
 	my $famid = $family->famid->famid();
@@ -1933,7 +1947,7 @@ sub calculate_project_richness {
     }
     my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "output", "project_richness_${class_id}.tab");
     open( OUT, ">$output" ) || die "Can't open $output for write: $! ";
-    print OUT join( "\t", "opf", "\n" ); # not sure why "join" is being used here...
+    print OUT join( "\t", "opf", "\n" );
     foreach my $famid( keys( %$hit_fams ) ){
 	print OUT "$famid\n";     # dump the famids that were found in the project to the output
     }
@@ -2014,24 +2028,105 @@ sub calculate_sample_relative_abundance{
     close OUT;
 }
 
-#maps project_id -> sample_id -> read_id -> orf_id -> famid
 sub build_classification_map{
-    my ($self, $class_id) = @_;
+    my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
     #create the outfile
+    #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
     my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/classification_map_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
-    print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "\n" );
+    print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
-	my $family_rs = $self->MRC::DB::get_families_with_orfs_by_sample( $sample_id );
+	my $family_rs = $self->MRC::DB::get_families_with_orfs_by_sample( $sample_id, $class_id );
 	$family_rs->result_class('DBIx::Class::ResultClass::HashRefInflator');
+	my $read_count;
+	if(!defined( $post_rare_reads->{$sample_id} ) ){
+	    $read_count = $self->MRC::DB::get_reads_by_sample_id( $sample_id )->count();
+	}
 	while( my $family = $family_rs->next() ){
 	    my $famid   = $family->{"famid"};
 	    my $orf_id  = $family->{"orf_id"};
 	    my $read_id = $self->MRC::DB::get_orf_by_orf_id( $orf_id )->read_id();
-	    print OUT join("\t", $self->get_project_id(), $sample_id, $read_id, $orf_id, $famid, "\n" );
+	    if( defined( $post_rare_reads->{$sample_id} ) ){
+		next unless defined $post_rare_reads->{$sample_id}->{$read_id};
+		print OUT join("\t", $self->get_project_id(), $sample_id, $read_id, $orf_id, $famid, $self->post_rarefy(), "\n" );
+	    }	   
+	    else{
+		print OUT join("\t", $self->get_project_id(), $sample_id, $read_id, $orf_id, $famid, $read_count, "\n" );
+	    }
+	    #$map->{$self->get_project_id()}->{$sample_id}->{$read_id}->{$orf_id}->{$famid}++; #NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
 	}	
     }
     close OUT;
+    #return $map;
 }
+
+sub build_classification_map_slim{
+    my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
+    #create the outfile
+    #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_ClassID_" . $class_id . ".tab";
+    open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
+    print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
+    foreach my $sample_id( @{ $self->get_sample_ids() } ){
+	my $members_rs = $self->MRC::DB::get_slim_family_members_by_sample( $sample_id, $class_id );
+	$members_rs->result_class('DBIx::Class::ResultClass::HashRefInflator');
+	my $read_count;
+	if(!defined( $post_rare_reads->{$sample_id} ) ){
+	    $read_count = $self->MRC::DB::get_read_ids_from_ffdb( $sample_id );
+	}
+	while( my $member = $members_rs->next() ){
+	    my $famid       = $member->{"famid"};
+	    my $orf_alt_id  = $member->{"orf_alt_id"};
+	    my $read_id = $self->MRC::Run::parse_orf_id( $orf_alt_id, $self->trans_method );
+	    if( defined( $post_rare_reads->{$sample_id} ) ){
+		next unless defined $post_rare_reads->{$sample_id}->{$read_id};
+		print OUT join("\t", $self->get_project_id(), $sample_id, $read_id, $orf_alt_id, $famid, $self->post_rarefy(), "\n" );
+	    }
+	    else{
+		print OUT join("\t", $self->get_project_id(), $sample_id, $read_id, $orf_alt_id, $famid, $read_count, "\n" );
+	    }
+	    #$map->{$self->get_project_id()}->{$sample_id}->{$read_id}->{$orf_id}->{$famid}++; #NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
+	}	
+    }
+    close OUT;
+    #return $map;
+}
+
+sub get_post_rarefied_reads{
+    my( $self, $sample_id, $read_number, $is_slim, $post_rare_reads ) = @_;
+    if( !defined( $post_rare_reads ) ){
+	$post_rare_reads = {}; #hashref that maps sample id to read ids
+    }
+    #first, get a list of read ids either from the flat file or the database
+    my @read_ids = ();
+    my @selected_ids = ();
+    if( $is_slim ){ #get from the flat file
+	@read_ids = @{ $self->MRC::DB::get_read_ids_from_ffdb( $sample_id ) };
+	@selected_ids = _random_sample_from_array( $read_number, \@read_ids );
+    }
+    else{ #get from the database
+	my $reads = get_reads_by_sample_id( $sample_id );
+	while( my $read = $reads->next ){
+	    my $read_id = $read->read_id;
+	    push( @read_ids, $read_id );
+	}
+	@selected_ids = _random_sample_from_array( $read_number, \@read_ids );
+    }
+    foreach my $selected_id( @selected_ids ){
+	$post_rare_reads->{$sample_id}->{$selected_id}++; #should never be greater than 1.....
+    }
+    return $post_rare_reads;
+}
+
+#this could be made to be more efficient...
+sub _random_sample_from_array{
+    my( $num_picks, $ra_deck ) = @_;
+    my @deck = @{ $ra_deck };
+    my @shuffled_indexes = shuffle(0..$#deck);
+    my @pick_indexes     = @shuffled_indexes[ 0 .. $num_picks - 1 ];
+    my @picks            = @deck[ @pick_indexes ];
+    return \@picks;
+}
+
 
 1;

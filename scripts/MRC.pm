@@ -125,6 +125,7 @@ sub new{
     $self->{"bulk"}               = 0; #are we processing a VERY large data set that requires mysql data imports over inserts?
     $self->{"trans_method"}       = undef; #how are we translating the sequences?
     $self->{"prerarefy"}          = undef; #how many sequences should we retain per sample. If defined, will not analyze more seqs/sample than the value
+    $self->{"postrarefy"}         = undef; #how many sequences should base diversity calculations on, per sample. If defined, will randomly rarefy reads from sample for diversity calcs
     $self->{"total_seq_count"}    = 0; #how many sequences are we analyzing per sample? Rolls back to zero for each sample, used in prerarefication
     bless($self);
     return $self;

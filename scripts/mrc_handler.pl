@@ -64,14 +64,22 @@ sub dieWithUsageError($) {
 }
 
 
-sub calculate_diversity($$) {
-    my($analysis, $class_id) = @_; # "analysis" is an MRC object
-    print "Project richness...\n";             $analysis->MRC::Run::calculate_project_richness($class_id);
-    print "Project relative abundance...\n";   $analysis->MRC::Run::calculate_project_relative_abundance($class_id);
-    print "Per-sample richness...\n";          $analysis->MRC::Run::calculate_sample_richness($class_id);
-    print "Per-sample relative abundance..\n"; $analysis->MRC::Run::calculate_sample_relative_abundance($class_id);
-    print "Building classification map...\n";  $analysis->MRC::Run::build_classification_map($class_id);
-    print "Building PCA dataframe...\n";       $analysis->MRC::Run::build_PCA_data_frame($class_id);
+sub calculate_diversity($$$) {
+    my($analysis, $class_id, $post_rare_reads) = @_; # "analysis" is an MRC object, $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
+    print "Building classification map...\n";  
+    if( $analysis->is_slim ){
+	$analysis->MRC::Run::build_classification_map_slim($class_id, $post_rare_reads);
+    }
+    else{
+	$analysis->MRC::Run::build_classification_map($class_id, $post_rare_reads);
+    }
+
+##I think it's better to do these in R, where we can also create plots. Plus, subsetting a dataframe is very fast compared to looping in Perl.
+##but, are there dataframe size limits? I don't think so. This way, we don't need to store the hash class_map in memory, only a pointer to the
+##file path.
+
+#R functions called here via wrappers in Run
+
 }
 
 sub exec_and_die_on_nonzero($) {
@@ -770,8 +778,7 @@ if ($is_remote){
 	    next;
 	}
 	print "Classifying reads for sample $sample_id\n";
-	my $path_to_split_orfs = File::Spec->catdir($analysis->get_sample_path($sample_id), "orfs");
-
+	my $path_to_split_orfs = File::Spec->catdir($analysis->get_sample_path($sample_id), "orfs");     
 	my @algosToRun = ();
 	if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
 	if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
@@ -780,8 +787,15 @@ if ($is_remote){
 	if ($use_rapsearch) { push(@algosToRun, "rapsearch"); }
 	foreach my $orf_split_file_name(@{ $analysis->MRC::DB::get_split_sequence_paths($path_to_split_orfs, 0) }) { # maybe could be glob("$path_to_split_orfs/*")
 	    foreach my $algo (@algosToRun) {
-		my $class_id = $analysis->MRC::DB::get_classification_id(
-		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
+		my ( $class_id, $db_name );
+		if( $algo eq "hmmsearch" || $algo eq "hmmscan" ){
+		    $db_name = $hmmdb_name;
+		}
+		if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch" ){
+		    $db_name = $blastdb_name;
+		}
+		$class_id = $analysis->MRC::DB::get_classification_id(
+		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $db_name, $algo, $top_hit_type,
 		    )->classification_id();
 		print "Classification_id for this run using $algo is $class_id\n";    
 		$analysis->MRC::Run::classify_reads($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
@@ -801,41 +815,43 @@ if ($is_remote){
     }
 }
 
-#die "apparently we die here before calculating diversity statistics for some reason";
+die "apparently we die here before calculating diversity statistics for some reason";
 
 ### ====================================================================
 #calculate diversity statistics
 CALCDIVERSITY:
     ;
 printBanner("CALCULATING DIVERSITY STATISTICS");
-#note, we could decrease DB pings by merging some of these together (they frequently leverage same hash structure)
-#might need to include classification_id as a call here;
-if ($use_hmmscan){
-    print "Calculating hmmscan diversity\n";
-    my $algo = "hmmscan";
-    my $class_id = $analysis->MRC::DB::get_classification_id(
+my $post_rare_reads = {}; #hash ref that maps samples to read_ids, not just classified reads!
+if( defined( $analysis->post_rarefy) ){
+    foreach my $sample_id(@{ $analysis->get_sample_ids() }){ 
+        $post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->post_rarefy, $slim, $post_rare_reads );
+    }
+}
+my @algosToRun = ();
+if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
+if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
+if ($use_blast)     { push(@algosToRun, "blast"); }
+ if ($use_last)      { push(@algosToRun, "last"); }
+if ($use_rapsearch) { push(@algosToRun, "rapsearch"); }
+foreach my $algo (@algosToRun) {
+    my ( $class_id, $db_name );
+    if( $algo eq "hmmsearch" || $algo eq "hmmscan" ){
+	$db_name = $hmmdb_name;
+    }
+    if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch" ){
+	$db_name = $blastdb_name;
+    }
+    $class_id = $analysis->MRC::DB::get_classification_id(
 	$analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
 	)->classification_id();
-    calculate_diversity($analysis, $class_id);
+    print "Calculating diversity using classification_id ${class_id}\n";
+    if( defined( $analysis->post_rarefy ) ){
+	print "Rarefying to $analysis->post_rarefy reads per sample\n";
+    }
+    calculate_diversity($analysis, $class_id, $post_rare_reads);   
 }
 
-if ($use_hmmsearch){
-    print "Calculating hmmsearch diversity\n";
-    my $algo = "hmmsearch";
-    my $class_id = $analysis->MRC::DB::get_classification_id(
-	$analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
-	)->classification_id();
-    calculate_diversity($analysis, $class_id);
-}
-
-if ($use_blast){
-    print "Calculating blast diversity\n";
-    my $algo = "blast";
-    my $class_id = $analysis->MRC::DB::get_classification_id(
-	$analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $blastdb_name, $algo, $top_hit_type,
-	)->classification_id();
-    calculate_diversity($analysis, $class_id);
-}
 ### ====================================================================
 
 printBanner("ANALYSIS COMPLETED!\n");
@@ -848,7 +864,7 @@ mrc_handler.pl  [OPTIONS]
 
 Last updated Feb 2013.
 
-MRC (Metagenomics Read Classifier) program by Tom Sharpton.
+MRC (Metagenomic Read Classifier) program by Tom Sharpton.
 
 Handles a bunch of database and cluster stuff.
 

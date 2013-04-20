@@ -890,10 +890,10 @@ sub get_families_with_orfs_by_sample{
 #	}
 #	);
     my $inside_orfs =  $self->get_schema->resultset('Orf')->search(
-	{
-	    sample_id => $sample_id,
-	}
-	);
+	    {
+		sample_id => $sample_id,
+	    }
+	    );
     my $fams =  $self->get_schema->resultset('Familymember')->search(
 	{
 	    orf_id => { -in => $inside_orfs->get_column('orf_id')->as_query },
@@ -1642,6 +1642,23 @@ sub get_gene_by_protein_id{
 	}
 	);
     return $gene;
+}
+
+sub get_read_ids_from_ffdb{
+    my ( $self, $sample_id ) = @_;
+    my @read_ids             = ();
+    my $ffdb_reads_dir       = $self->MRC::get_sample_path( $sample_id );
+    my @read_files           = glob( $ffdb_reads_dir . "/*.fa" );
+    foreach my $file( @read_files ){
+	open( FILE, $file ) || die "Can't open $file for read: $!\n";
+	while(<FILE>){
+	    next unless( $_ =~ m/^\>(.*?)(\s|$)/ );
+	    my $read_id = $1;
+	    push( @read_ids, $read_id );
+	}
+	close FILE;
+    }
+    return \@read_ids;
 }
 
 1;
