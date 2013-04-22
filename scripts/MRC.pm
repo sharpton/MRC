@@ -127,6 +127,10 @@ sub new{
     $self->{"prerarefy"}          = undef; #how many sequences should we retain per sample. If defined, will not analyze more seqs/sample than the value
     $self->{"postrarefy"}         = undef; #how many sequences should base diversity calculations on, per sample. If defined, will randomly rarefy reads from sample for diversity calcs
     $self->{"total_seq_count"}    = 0; #how many sequences are we analyzing per sample? Rolls back to zero for each sample, used in prerarefication
+    $self->{"parse_score"}        = undef;
+    $self->{"parse_evalue"}       = undef;
+    $self->{"parse_threshold"}    = undef;
+    
     bless($self);
     return $self;
 }
@@ -1057,6 +1061,30 @@ sub total_sample_seq_count{
 	$self->{"total_seq_count"} = $value;
     }
     return $self->{"total_seq_count"};
+}
+
+sub parse_score{
+    my( $self, $value ) = @_;
+    if( defined( $value ) ){
+	$self->{"parse_score"} = $value;
+    }
+    return $self->{"parse_score"};
+}
+
+sub parse_coverage{
+    my( $self, $value ) = @_;
+    if( defined( $value ) ){
+	$self->{"parse_coverage"} = $value;
+    }
+    return $self->{"parse_coverage"};
+}
+
+sub parse_evalue{
+    my( $self, $value ) = @_;
+    if( defined( $value ) ){
+	$self->{"parse_evalue"} = $value;
+    }
+    return $self->{"parse_evalue"};
 }
 
 1;

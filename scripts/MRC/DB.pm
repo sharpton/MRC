@@ -219,6 +219,10 @@ sub bulk_import{
     my $out    = shift;
     my $nrows  = shift;
     my $fks    = shift; #hash ref of foreign keys
+    my $ra_fields    = shift;
+    my @fields       = @{ $ra_fields };
+    my $field_string = join(",", @fields );
+    $field_string    =~ s/\,$//;
     #get a connection
     my $dbh  = DBI->connect( $self->get_dbi_connection() . ";mysql_local_infile=1", $self->get_username, $self->get_password )
 	|| die "Couldn't connect to the database: " . DBI->errstr;
@@ -318,6 +322,43 @@ sub bulk_import{
 	    }
 	}
     }
+    if( $table eq "searchresults" ){ #THE TABLE DATA IS ASSEMBLED ELSEWHERE, WE SIMPLY OPTIMIZE DB PINGS WITH THIS ROUTINE
+	my $count    = 0;
+	my $inserts  = 0;
+	my @rows     = ();
+	my $class_id = $fks->{"classification_id"};
+	open( TAB, "$file" ) || die "Can't open $file for read in MRC::Run::bulk_import\n";
+	my $run = 0;
+	print "Loading data from $file\n";
+	while( <TAB> ){
+	    chomp $_;
+	    my $row   = $_ . "," . $class_id;
+	    my $col_count = ($row =~ tr/\,//);
+	    if( $col_count < scalar(@fields) - 2 ){
+		warn( "Didn't have enough elements to load data from $row when analyzing $file\n" );
+		die;
+	    }
+	    push ( @rows, $row );
+	    $count++;
+	    if( eof || $count == $nrows ){
+		$run++;
+		open( OUT,  ">$out" ) || die "Can't open $out for write in MRC::Run::bulk_import\n";
+		print OUT join( "\n", @rows );
+		close OUT;
+		my $sql = "LOAD DATA LOCAL INFILE '" . $out . "' INTO TABLE " . $table . " FIELDS TERMINATED BY ',' " . 
+		    "LINES TERMINATED BY '\\n' ( " . $field_string . " )";
+		print $sql . "\n";
+		#join(",", @fields) . ")";
+		my $sth  = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
+		$inserts = $inserts + $sth;
+		$count   = 0;
+		@rows    = ();
+		unlink( $out );
+	    }
+	}
+	close TAB;
+	print $inserts . " records inserted\n";
+    }	
     #disconnect
     $dbh->disconnect;
     return $self;
@@ -558,10 +599,11 @@ sub build_sample_ffdb{
     my $lastdblogs       = "$logDir/lastdb";
     my $prerapsearchlogs = "$logDir/prerapsearch";
     my $transeqlogs      = "$logDir/transeq";
+    my $parselogs        = "$logDir/parse_results";
 
     my @paths = ( $outDir, $logDir, $hmmscanlogs, $hmmsearchlogs, $blastlogs, 
 		  $formatdblogs, $lastlogs, $lastdblogs, $rapsearchlogs,
-		  $prerapsearchlogs, $transeqlogs );
+		  $prerapsearchlogs, $transeqlogs, $parselogs );
 
     foreach my $path (@paths) {
 	File::Path::make_path($path);

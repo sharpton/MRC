@@ -38,7 +38,7 @@ then
 fi
 ## JOB_ID and TASK_ID are both *magic* environment variables that are set automatically by the job scheduler! This is some kind of cluster magic.
 
-ALL_OUT_FILE=$LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all
+ALL_OUT_FILE=$LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.allxb
 
 qstat -f -j ${JOB_ID}                           > ${ALL_OUT_FILE} 2>&1
 # Note that the '>' above is just ONE caret, to CREATE the file, and all the subequent ones APPEND to the file ('>>')

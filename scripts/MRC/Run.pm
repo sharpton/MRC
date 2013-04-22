@@ -69,7 +69,8 @@ sub _remote_transfer_internal($$$) {
     my $PRESERVE_PERMISSIONS_FLAG = '--perms';
     my $RECURSIVE_FLAG = ($path_type eq 'directory') ? '--recursive' : ''; # only specify recursion if DIRECTORIES are being transferred!
     my $FLAGS = "$COMPRESSION_FLAG $RECURSIVE_FLAG $PRESERVE_MODIFICATION_TIMES $PRESERVE_PERMISSIONS_FLAG";
-    my @args = ($FLAGS, $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING, $src_path, $dest_path);
+    #my @args = ($FLAGS, $GLOBAL_SSH_TIMEOUT_OPTIONS_STRING, $src_path, $dest_path);
+    my @args = ($FLAGS, $src_path, $dest_path);
     MRC::notifyAboutScp("rsync @args");
     my $results = IPC::System::Simple::capture("rsync @args");
     (0 == $EXITVAL) or die("Error transferring $src_path to $dest_path using $path_type: $results");
@@ -533,7 +534,7 @@ sub parse_orf_id{
 #classifies reads into predefined families given hmmscan results. eventually will take various input parameters to guide classification
 #processes each orf split independently and iteratively (this works because we hmmscan, not hmmsearch). for each split, eval all search
 #result files for that split and build a hash that stores the classification results for each sequence within the split.
-sub classify_reads{
+sub classify_reads_old{
     my $self = shift;
     my $sample_id  = shift;
     my $orf_split_filename  = shift; # just the file name of the split, NOT the full path
@@ -693,7 +694,7 @@ sub classify_reads{
 	my $fks    = { "sample_id"         => $sample_id,
 		       "classification_id" => $class_id,
 	};
-	$self->MRC::DB::bulk_import( $table, \%orf_hits, $tmp, $nrows, $fks );
+	$self->MRC::DB::bulk_import( $table, \%orf_hits, $tmp, $nrows, $fks, \@fields );
     }
     #multi-row insert here:
     if( $self->multi_load() ){
@@ -701,6 +702,89 @@ sub classify_reads{
 	$self->MRC::DB::create_multi_familymembers( $class_id, \%orf_hits);
     }
     print "Found and inserted $n_hits threshold passing search results into the database\n";
+}
+
+sub classify_reads_bulk{
+    my $self                = shift;
+    my $sample_id           = shift;
+    my $orf_split_filename  = shift; # just the file name of the split, NOT the full path
+    my $class_id            = shift; #the classification_id
+    my $algo                = shift;
+
+    ($orf_split_filename !~ /\//) or die "The orf split FILENAME had a slash in it (it was \"$orf_split_filename\"). But this is only allowed to be a FILENAME, not a directory! Fix this programming error.\n";
+
+    #remember, each orf_split has its own search_results sub directory
+    my $search_results = File::Spec->catfile($self->get_sample_path($sample_id), "search_results", $algo, $orf_split_filename);
+    my $query_seqs     = File::Spec->catfile($self->get_sample_path($sample_id), "orfs", $orf_split_filename);
+    #open search results, get all results for this split
+    opendir( RES, $search_results ) || die "Can't open $search_results for read in classify_reads: $!\n";
+    my @result_files = readdir( RES );
+    closedir( RES );
+    my $split_results_cat = $search_results . ".mysqld.splitcat";
+    my $orf_fam_tophit = {};
+    foreach my $result_file( @result_files ){
+	next if( $result_file !~ m/\.mysqld/ ); #we only want to load the mysql data tables that we produced earlier
+	if(not( $result_file =~ m/$orf_split_filename/ )) {
+	    warn "Skipped the file $result_file, as it did not match the name: $orf_split_filename.";
+	    next; ## skip it!
+	}
+	#we have to look across all result files in this dir and for each orf to fam mapping, grab the top scoring hit
+	$orf_fam_tophit = find_orf_fam_tophit( "${search_results}/${result_file}", $orf_fam_tophit );
+	
+#	File::Cat::cat( "${search_results}/${result_file}", $fh ); # From the docs: "Copies data from EXPR to FILEHANDLE, or returns false if an error occurred. EXPR can be either an open readable filehandle or a filename to use as input."	
+    }
+    my $fh;
+    open( $fh, ">$split_results_cat" ) || die "Can't open $split_results_cat for write: $!\n";
+    foreach my $orf( keys( %$orf_fam_tophit ) ){      
+	foreach my $fam( keys( %{ $orf_fam_tophit->{$orf} } ) ){
+	    print $fh $orf_fam_tophit->{$orf}->{$fam}->{'row'} . "\n";
+	}
+    }
+    close $fh;
+#    if( $self->is_slim && $self->bulk_load ){
+    if( 1 ){ #we REQUIRE this type lof loading now
+	my $tmp    = "/tmp/" . $sample_id . ".sql";	    
+	my $table  = "searchresults";
+	my $nrows  = 10000;
+	my @fields = ( "orf_alt_id", "read_alt_id", "sample_id", "famid", "score", "evalue", "orf_coverage", "classification_id" );
+	my $fks    = { "sample_id"         => $sample_id, 
+		       "classification_id" => $class_id,
+	};	   #do we need this? seems safer, and easier to insert, remove samples/classifications from table this way, but also a little slower with extra key check. those tables are small.
+	$self->MRC::DB::bulk_import( $table, $split_results_cat, $tmp, $nrows, $fks, \@fields );    
+    }
+    #clean up
+    close $fh;
+#    unlink( $split_results_cat );
+    return $self;
+}
+
+sub find_orf_fam_tophit{ #for each orf to family mapping, find the top hit
+    my( $result_file, $orf_fam_tophit ) = @_;
+    open( FILE, $result_file ) || die "Can't open $result_file for read: $!\n";
+    while(<FILE>){
+	chomp $_;
+	my( $orf, $famid, $score );
+	if( $_ =~ m/(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)/ ){
+	    $orf    = $1;
+	    $famid  = $4;
+	    $score  = $5;
+	} else {
+	    die( "Can't parse orf_alt_id, famid, or score from $result_file where line is $_\n" );
+	}
+	if( !defined($orf_fam_tophit->{$orf}->{$famid} ) ){
+	    $orf_fam_tophit->{$orf}->{$famid}->{'score'} = $score;
+	    $orf_fam_tophit->{$orf}->{$famid}->{'row'}   = $_;
+	}
+	elsif( $score > $orf_fam_tophit->{$orf}->{$famid}->{'score'} ){
+	    $orf_fam_tophit->{$orf}->{$famid}->{'score'} = $score;
+	    $orf_fam_tophit->{$orf}->{$famid}->{'row'}   = $_;
+	}
+	else{
+	    #do nothing. this is a poorer hit than what we already have
+	}
+    }
+    close FILE;
+    return $orf_fam_tophit;
 }
 
 sub _parse_famid_from_ffdb_seqid {
@@ -874,12 +958,12 @@ sub read_map_process_orfs{
     return \@results;
 }
     
-
+#might need to modify this for the new db structure. only use it for local parsing.
 sub parse_search_results{
     my $self         = shift;
     my $file         = shift;
     my $type         = shift;
-    my $hitHashPtr      = shift;
+    my $hitHashPtr   = shift;
     my $orfs_file    = shift; # $orfs_file is only required for blast; used to get sequence lengths for coverage calculation
 #    my %hit_map      = %{ $r_hit_map };
     #define clustering thresholds
@@ -1164,7 +1248,7 @@ sub build_search_db{
     #Have you built this DB already?
 
     if( -d $raw_db_path && !($force) ){
-	warn "You've already built a <$type> database with the name <$db_name> at <$raw_db_path>. Please delete or overwrite by using the --force option.\n";
+	warn "You've already built a <$type> database with the name <$db_name> at <$raw_db_path>. Please delete or overwrite by using the --forcedb option.\n";
 	exit(0);
     }
 
@@ -1742,6 +1826,74 @@ sub run_search_remote {
 	. " -w $waitTimeInSeconds ";
     if( $forcesearch ){
 	$remote_cmd .= " --forcesearch ";
+    }
+    $remote_cmd .=    "> ${log_file_prefix}.out 2> ${log_file_prefix}.err "
+	. "\'"; # single quotes bracket this command for whatever reason
+
+    my $results     = execute_ssh_cmd($self->get_remote_connection(), $remote_cmd, $verbose);
+    (0 == $EXITVAL) or warn("Execution of command <$remote_cmd> returned non-zero exit code $EXITVAL. The remote reponse was: $results.");
+    return $results;
+}
+
+sub parse_results_remote {
+    my ($self, $sample_id, $type, $nsplits, $waitTimeInSeconds, $verbose, $forceparse) = @_;
+    ($type eq "blast" or $type eq "last" or $type eq "rapsearch" or $type eq "hmmsearch" or $type eq "hmmscan") or
+	die "Invalid type passed in! The invalid type was: \"$type\".";
+    ( $nsplits > 0 ) || die "Didn't get a properly formatted count for the number of search DB splits! I got $nsplits.";
+    my $trans_method = $self->trans_method;
+    my $proj_dir     = $self->get_remote_project_path;
+    my $scripts_dir  = $self->get_remote_script_dir;
+    my $t_score      = $self->parse_score;
+    my $t_coverage   = $self->parse_coverage;
+    my $t_evalue     = $self->parse_evalue;
+    my $remote_orf_dir             = File::Spec->catdir($self->get_remote_sample_path($sample_id), "orfs");
+    my $log_file_prefix            = File::Spec->catfile($self->get_remote_project_log_dir(), "run_remote_parse_results_handler");
+    my $remote_results_output_dir  = File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", ${type});
+    my ($remote_script_path, $db_name, $remote_db_dir);
+    $remote_script_path        = $self->get_remote_script_dir() . "/run_parse_results.sh";
+    if (($type eq "blast") or ($type eq "last") or ($type eq "rapsearch")) {
+	$db_name               = $self->get_blastdb_name();
+	$remote_db_dir         = File::Spec->catdir($self->get_remote_ffdb(), $BLASTDB_DIR, $db_name);
+    }
+    if (($type eq "hmmsearch") or ($type eq "hmmscan")) {
+	$db_name               = $self->get_hmmdb_name();
+	$remote_db_dir         = File::Spec->catdir($self->get_remote_ffdb(), $HMMDB_DIR, $db_name);
+    }
+
+    # Transfer the required scripts, such as "run_remote_search_handler.pl", to the remote server. For some reason, these don't get sent over otherwise!
+    my @scriptsToTransfer = (File::Spec->catfile($self->get_scripts_dir(), "remote", "run_remote_parse_results_handler.pl"),
+			     File::Spec->catfile($self->get_scripts_dir(), "remote", "run_parse_results.sh"),
+			     File::Spec->catfile($self->get_scripts_dir(), "remote", "parse_results.pl"),
+	); 
+    foreach my $transferMe (@scriptsToTransfer) {
+	MRC::Run::transfer_file_into_directory($transferMe, ($self->get_remote_connection() . ':' . $self->get_remote_script_dir() . '/')); # transfer the script into the remote directory
+    }
+    
+    # See "run_remote_search" in run_remote_search_handler.pl
+    my $remote_cmd  = "\'" . "perl " . File::Spec->catfile($self->get_remote_script_dir(), "run_remote_parse_results_handler.pl")
+	. " --resultdir=$remote_results_output_dir "
+	. " --querydir=$remote_orf_dir "
+	. " --dbname=$db_name "
+	. " --nsplits=$nsplits "
+	. " --scriptpath=${remote_script_path} "
+	. " -w $waitTimeInSeconds "
+	. " --sample-id=$sample_id "
+#	. " --class-id=$classification_id "
+	. " --algo=$type "
+	. " --transmeth=$trans_method "
+	. " --proj-dir=$proj_dir "
+	. " --script-dir=$scripts_dir";
+    if( defined( $t_score ) ){
+	$remote_cmd .= " --score=$t_score ";
+    }
+    if( defined( $t_evalue ) ){
+	$remote_cmd .= " --evalue=$t_evalue ";
+    }
+    if( defined( $t_coverage ) ){
+	$remote_cmd .= " --coverage=$t_coverage ";
+    }
+    if( $forceparse ){
+	$remote_cmd .= " --forceparse ";
     }
     $remote_cmd .=    "> ${log_file_prefix}.out 2> ${log_file_prefix}.err "
 	. "\'"; # single quotes bracket this command for whatever reason

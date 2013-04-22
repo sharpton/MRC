@@ -133,8 +133,10 @@ my $remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set 
 #my $rscripts       = "/netapp/home/yourname/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
 
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-my $blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
-my $nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
+#my $blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
+#my $nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
+my $blast_db_split_size  = 50; #how many family sequence files per blast db split? keep small to keep mem footprint low
+my $nseqs_per_samp_split = 10; #how many seqs should each sample split file contain?
 my @fcis                 = (0, 1, 2); #what family construction ids are allowed to be processed?
 my $db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
@@ -199,7 +201,8 @@ my %skip_samps = ();
 my $extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
 my $sWasSpecified = undef; # The "s" parameter is no longer valid, so we specially detect it with this variable. This is sorta required; "sub {...}" doesn't actually allow program exit it seems.
 
-my $prerare_count = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to them
+my $prerare_count  = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to thme
+my $postrare_count = undef; #when calculating diversity statistics, randomly select this number of raw reads per sample
 
 GetOptions("ffdb|d=s"        => \$local_ffdb
 	   , "refdb=s"       => \$local_reference_ffdb
@@ -243,8 +246,9 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 	   ,    "pid=i"        => \$input_pid
 	   ,    "goto|g=s"     => \$goto
 
-	   ,    "z=i"             => \$nseqs_per_samp_split
-	   ,    "prerare-samps:i" => \$prerare_count
+	   ,    "z=i"              => \$nseqs_per_samp_split
+	   ,    "prerare-samps:i"  => \$prerare_count
+	   ,    "postrare-samps:i" => \$postrare_count
 
 	   ,    "e=f"  => \$evalue
 	   ,    "c=f"  => \$coverage
@@ -328,10 +332,9 @@ if( defined( $family_subset_list ) ){
 (defined($blast_db_split_size)) or die "blast_db_split_size was not defined!";
 my $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
 
-if( ( $use_blast || $use_last || $use_rapsearch ) && ( !$blastdb_build ) && ( ! -d $local_ffdb . "/BLASTdbs/" . $blastdb_name ) ){
-    dieWithUsageError("You are apparently trying to conduct a pairwise sequence search, but aren't telling me to build a database and I can't find one that already exists with your requested name. As a result, you must use the --bdb option to build a new blast database");
+if( ( $use_blast || $use_last || $use_rapsearch ) && ( ( !$blastdb_build ) && ( ! -d $local_ffdb . "/BLASTdbs/" . $blastdb_name ) ) ){
+    dieWithUsageError("You are apparently trying to conduct a pairwise sequence search, but aren't telling me to build a database and I can't find one that already exists with your requested name <${blastdb_name}>. As a result, you must use the --bdb option to build a new blast database");
 }
-
 
 (defined($hmm_db_split_size)) or die "hmm_db_split_size was not defined!";
 my $hmmdb_name = "${db_prefix_basename}_${hmm_db_split_size}";
@@ -396,10 +399,15 @@ $analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right
 $analysis->trans_method( $trans_method );
 $analysis->set_clustering_strictness($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score); $analysis->set_remote_status($is_remote);
 if( defined( $prerare_count ) ){ 
-    print Dumper $prerare_count;
     warn( "You are running with --prerare-samps, so I will only process $prerare_count sequences from each sample\n");
     $analysis->MRC::prerarefy_samples( $prerare_count ) 
 };
+if( defined( $postrare_count ) ){ 
+    warn( "You are running with --postrare-samps. When calculating diversity statistics, I'll randomly select $postrare_count sequences from each sample\n");
+    $analysis->MRC::postrarefy_samples( $postrare_count ) 
+};
+
+
 ### =========== NOW THAT THE MRC OBJECT "Analysis" HAS BEEN CREATED, DO SOME SANITY CHECKING ON THE FINAL PARAMETERS =============================
 if ( ( $use_hmmscan || $use_hmmsearch ) && !$hmmdb_build && !(-d $analysis->MRC::DB::get_hmmdb_path())) {
     warn("The hmm database path did not exist, BUT we did not specify the --hdb option to build a database.");
@@ -458,6 +466,7 @@ if (defined($goto) && $goto) {
     if ($goto eq "R" or $goto eq "REMOTE")  { warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
     if ($goto eq "S" or $goto eq "SCRIPT")  { warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
     if ($goto eq "H" or $goto eq "HMM")     { warn "Skipping to hmmscan step!\n"; goto HMMSCAN; }
+    if ($goto eq "P" or $goto eq "PARSE")   { warn "Skipping to get remote hmmscan results step!\n"; goto PARSERESULTS; }
     if ($goto eq "G" or $goto eq "GET")     { warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
     if ($goto eq "C" or $goto eq "CLASSIFY"){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
     if ($goto eq "O" or $goto eq "OUTPUT")  { warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
@@ -751,7 +760,46 @@ if ($is_remote){
 }
 
 ### ====================================================================
+#PARSE SEARCH RESULTS
+
+#parse the output files and prepare mysql data loading files
+PARSERESULTS:
+    ;
+if( $is_remote ){
+    printBanner("PARSING REMOTE SEARCH RESULTS");
+    my( $hmm_splits, $blast_splits );
+    if( $use_hmmscan || $use_hmmsearch ){
+	$hmm_splits   = $analysis->MRC::DB::get_number_db_splits("hmm");
+    }
+    if( $use_blast || $use_last || $use_rapsearch ){
+	$blast_splits = $analysis->MRC::DB::get_number_db_splits("blast");
+    }
+    foreach my $sample_id(@{ $analysis->get_sample_ids() }) { #wite this method
+	($use_hmmscan)   && $analysis->MRC::Run::parse_results_remote($sample_id, "hmmscan",   $hmm_splits,   $waittime, $verbose, $force_search);
+	($use_hmmsearch) && $analysis->MRC::Run::parse_results_remote($sample_id, "hmmsearch", $hmm_splits,   $waittime, $verbose, $force_search);
+	($use_blast)     && $analysis->MRC::Run::parse_results_remote($sample_id, "blast",     $blast_splits, $waittime, $verbose, $force_search);
+	($use_last)      && $analysis->MRC::Run::parse_results_remote($sample_id, "last",      $blast_splits, $waittime, $verbose, $force_search);
+	($use_rapsearch) && $analysis->MRC::Run::parse_results_remote($sample_id, "rapsearch", $blast_splits, $waittime, $verbose, $force_search);
+	print "Progress report: finished ${sample_id} on " . `date` . "";
+    }  
+} else {
+    printBanner("PARSING LOCAL SEARCH RESULTS"); #NOT CODED YET
+    foreach my $sample_id(@{ $analysis->get_sample_ids() }){
+	#my $sample_path = $local_ffdb . "/projects/" . $analysis->get_project_id() . "/" . $sample_id . "/";
+	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs($hmmdb_name) };
+	warn "Running hmmscan for sample ID ${sample_id}...";
+	foreach my $hmmdb(keys(%hmmdbs)) {
+	    my $results_full_path = "search_results/${sample_id}_v_${hmmdb}.hsc";
+	    #run with tblast output format (e.g., --domtblout)
+	    $analysis->MRC::Run::run_hmmscan("orfs.fa", $hmmdbs{$hmmdb}, $results_full_path, 1);
+	}
+    }
+}
+
+### ====================================================================
 #GET REMOTE RESULTS
+
+#adapt to grab mysqld files
 GETRESULTS:
     ;
 if ($is_remote){
@@ -798,7 +846,10 @@ if ($is_remote){
 		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $db_name, $algo, $top_hit_type,
 		    )->classification_id();
 		print "Classification_id for this run using $algo is $class_id\n";    
-		$analysis->MRC::Run::classify_reads($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
+		#ONLY TAKES BULK-LOAD LIKE FILES NOW. OPTIONALLY DELETE PARSED RESULTS WHEN COMPLETED.
+		# NOTE THAT WE ONLY INSERT ALT_IDS INTO THIS TABLE! NEED TO USE SAMPLE_ID, ALT_ID FROM (metareads || orfs) TO UNIQUELY EXTRACT ORF/READ ID		
+		#$analysis->MRC::Run::classify_reads_old($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
+		$analysis->MRC::Run::classify_reads_bulk( $sample_id, $orf_split_file_name, $class_id, $algo ); #top_hit_type and strict clustering gets used in diversity calcs now
 	    }
 	}
     }

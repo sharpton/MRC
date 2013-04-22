@@ -333,13 +333,13 @@ CREATE TABLE `samples` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
--- Table structure for table `searchresults`
+-- Table structure for table `searchresults_old`
 --
 
-DROP TABLE IF EXISTS `searchresults`;
+DROP TABLE IF EXISTS `searchresults_old`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-CREATE TABLE `searchresults` (
+CREATE TABLE `searchresults_old` (
   `searchresults_id` int(11) NOT NULL AUTO_INCREMENT,
   `orf_id` int(11) unsigned NOT NULL,
   `famid` int(10) NOT NULL,
@@ -405,7 +405,37 @@ CREATE TABLE `familymembers_slim` (
   UNIQUE KEY `orf_fam_sample_class_id` (`orf_alt_id_slim`,`famid_slim`,`sample_id`,`classification_id`), /*THIS IS FOR SAFETY*/
   KEY `famid_slim` (`famid_slim`),
   KEY `classification_id` (`classification_id`),
-  KEY `sample_id` (`sample_id`)
+  KEY `sample_id` (`sample_id`),
+  CONSTRAINT `searchresults_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `searchresults_ibfk_2` FOREIGN KEY (`classification_id`) REFERENCES `classification_parameters` (`classification_id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `searchresults`
+--
+
+DROP TABLE IF EXISTS `searchresults`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `searchresults` (
+  `searchresults_id` int(11) NOT NULL AUTO_INCREMENT,
+  `orf_alt_id` varchar(256) NOT NULL, /*FASTER FOR WORKFLOW IF WE STORE ALT_ID*/
+  `read_alt_id` varchar(256) NOT NULL, /*FASTER FOR WORKFLOW IF WE STORE ALT_ID*/
+  `sample_id` int(11) unsigned NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `famid` int(10) NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `classification_id` int(10) unsigned NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `score` float DEFAULT NULL,
+  `evalue` double DEFAULT NULL,
+  `orf_coverage` float DEFAULT NULL,
+  PRIMARY KEY (`searchresults_id`),
+  UNIQUE KEY `orf_fam_sample_class_id` (`orf_alt_id`,`famid`,`sample_id`,`classification_id`), /*THIS IS FOR SAFETY*/ 
+  KEY `orfaltid` (`orf_alt_id`),
+  KEY `famid` (`famid`),
+  KEY `readaltid` (`read_alt_id`),
+  KEY `sampleid` (`sample_id`),
+  CONSTRAINT `searchresults_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `searchresults_ibfk_2` FOREIGN KEY (`classification_id`) REFERENCES `classification_parameters` (`classification_id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
