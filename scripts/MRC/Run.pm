@@ -2180,7 +2180,7 @@ sub calculate_sample_relative_abundance{
     close OUT;
 }
 
-sub build_classification_map{
+sub build_classification_map_old{
     my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
@@ -2212,7 +2212,7 @@ sub build_classification_map{
     #return $map;
 }
 
-sub build_classification_map_slim{
+sub build_classification_map_slim_old{
     my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
@@ -2243,6 +2243,55 @@ sub build_classification_map_slim{
     close OUT;
     #return $map;
 }
+
+sub build_classification_map{
+    my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
+    #create the outfile
+    #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_ClassID_" . $class_id . ".tab";
+    open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
+    print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
+    foreach my $sample_id( @{ $self->get_sample_ids() } ){
+	#how many reads should we count for relative abundance analysis?
+	my $read_count;
+	if(!defined( $post_rare_reads->{$sample_id} ) ){
+	    print( "Calculating classification results using all reads loaded into the database\n" );
+	    $read_count = @{ $self->MRC::DB::get_read_ids_from_ffdb( $sample_id ) }; #need this for relative abundance calculations
+	}
+	#now get the classified results for this sample
+	my $dbh  = $self->MRC::DB::build_dbh();
+	my $members_rs = $self->MRC::DB::get_classified_orfs_by_sample( $sample_id, $class_id, $dbh );
+	#did mysql return any results for this query?
+	my $nrows = 0;
+	$nrows    = $members_rs->rows();
+	print "MySQL return $nrows rows for the above query.\n";
+	if( $nrows == 0 ){
+	    warn "Since we returned no rows for this classification query, you might want to check the stringency of your classification parameters.\n";
+	    next;
+	}
+	my $max_rows = 10000;
+	while( my $rows = $members_rs->fetchall_arrayref( {}, $max_rows ) ){
+	    foreach my $row( @$rows ){
+		my $orf_alt_id = $row->{"orf_alt_id"};		
+		#while( my $member = $members_rs->next() ){
+		my $famid       = $row->{"famid"};
+		my $read_alt_id = $row->{"read_alt_id"};
+		if( defined( $post_rare_reads->{$sample_id} ) ){
+		    next unless defined $post_rare_reads->{$sample_id}->{$read_alt_id};
+		    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $self->post_rarefy(), "\n" );
+		}
+		else{
+		    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $read_count, "\n" );
+		}
+	    }
+	    #$map->{$self->get_project_id()}->{$sample_id}->{$read_id}->{$orf_id}->{$famid}++; #NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
+	}
+	$self->MRC::DB::disconnect_dbh( $dbh );	
+    }
+    close OUT;
+    #return $map;
+}
+
 
 sub get_post_rarefied_reads{
     my( $self, $sample_id, $read_number, $is_slim, $post_rare_reads ) = @_;

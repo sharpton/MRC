@@ -406,8 +406,8 @@ CREATE TABLE `familymembers_slim` (
   KEY `famid_slim` (`famid_slim`),
   KEY `classification_id` (`classification_id`),
   KEY `sample_id` (`sample_id`),
-  CONSTRAINT `searchresults_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `searchresults_ibfk_2` FOREIGN KEY (`classification_id`) REFERENCES `classification_parameters` (`classification_id`) ON DELETE CASCADE ON UPDATE CASCADE
+  CONSTRAINT `familymembers_slim_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `familymembers_slim_ibfk_2` FOREIGN KEY (`classification_id`) REFERENCES `classification_parameters` (`classification_id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -430,9 +430,9 @@ CREATE TABLE `searchresults` (
   `orf_coverage` float DEFAULT NULL,
   PRIMARY KEY (`searchresults_id`),
   UNIQUE KEY `orf_fam_sample_class_id` (`orf_alt_id`,`famid`,`sample_id`,`classification_id`), /*THIS IS FOR SAFETY*/ 
-  KEY `orfaltid` (`orf_alt_id`),
+  KEY `orfalt_sample_id` (`orf_alt_id`,`sample_id`),
   KEY `famid` (`famid`),
-  KEY `readaltid` (`read_alt_id`),
+  KEY `readalt_sample_id` (`read_alt_id`,`sample_id`),
   KEY `sampleid` (`sample_id`),
   CONSTRAINT `searchresults_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `searchresults_ibfk_2` FOREIGN KEY (`classification_id`) REFERENCES `classification_parameters` (`classification_id`) ON DELETE CASCADE ON UPDATE CASCADE

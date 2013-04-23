@@ -64,24 +64,6 @@ sub dieWithUsageError($) {
 }
 
 
-sub calculate_diversity($$$) {
-    my($analysis, $class_id, $post_rare_reads) = @_; # "analysis" is an MRC object, $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
-    print "Building classification map...\n";  
-    if( $analysis->is_slim ){
-	$analysis->MRC::Run::build_classification_map_slim($class_id, $post_rare_reads);
-    }
-    else{
-	$analysis->MRC::Run::build_classification_map($class_id, $post_rare_reads);
-    }
-
-##I think it's better to do these in R, where we can also create plots. Plus, subsetting a dataframe is very fast compared to looping in Perl.
-##but, are there dataframe size limits? I don't think so. This way, we don't need to store the hash class_map in memory, only a pointer to the
-##file path.
-
-#R functions called here via wrappers in Run
-
-}
-
 sub exec_and_die_on_nonzero($) {
     my ($cmd) = @_;
     my $results = IPC::System::Simple::capture($cmd);
@@ -133,10 +115,8 @@ my $remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set 
 #my $rscripts       = "/netapp/home/yourname/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
 
 my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-#my $blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
-#my $nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
-my $blast_db_split_size  = 50; #how many family sequence files per blast db split? keep small to keep mem footprint low
-my $nseqs_per_samp_split = 10; #how many seqs should each sample split file contain?
+my $blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
+my $nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
 my @fcis                 = (0, 1, 2); #what family construction ids are allowed to be processed?
 my $db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
 my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
@@ -149,11 +129,14 @@ my $force_db_build = 0;
 my $force_search   = 0;
 my $check          = 0;
 
-#Right now, a single evalue, coverage threshold and strict/tophit are applied to both algorithms
-my $evalue         = 0.001; #a float
-#my $coverage       = 0.8;
-my $coverage       = 0; #between 0-1
-my $score          = 85; #optionally set
+#optionally set thresholds to use when parsing search results and loading into database. more conservative thresholds decreases DB size
+my $p_evalue       = undef;
+my $p_coverage     = undef;
+my $p_score        = 40;
+#optionally set thresholds to use when classifying reads into families.
+my $evalue         = undef; #a float
+my $coverage       = undef; #between 0-1
+my $score          = 20;
 my $is_strict      = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
 my $top_hit        = 1;
 my $top_hit_type   = "read"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
@@ -397,6 +380,9 @@ $analysis->set_family_subset($family_subset_list, $check); #constrain analysis t
 $analysis->set_hmmdb_name($hmmdb_name); # always set it; why not, right?
 $analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right?
 $analysis->trans_method( $trans_method );
+#values used for parsing search results and loading into database
+$analysis->parse_evalue( $p_evalue ); $analysis->parse_coverage( $p_coverage ); $analysis->parse_score( $p_score );
+#values used for classifying reads into families
 $analysis->set_clustering_strictness($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score); $analysis->set_remote_status($is_remote);
 if( defined( $prerare_count ) ){ 
     warn( "You are running with --prerare-samps, so I will only process $prerare_count sequences from each sample\n");
@@ -866,8 +852,6 @@ if ($is_remote){
     }
 }
 
-die "apparently we die here before calculating diversity statistics for some reason";
-
 ### ====================================================================
 #calculate diversity statistics
 CALCDIVERSITY:
@@ -883,7 +867,7 @@ my @algosToRun = ();
 if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
 if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
 if ($use_blast)     { push(@algosToRun, "blast"); }
- if ($use_last)      { push(@algosToRun, "last"); }
+if ($use_last)      { push(@algosToRun, "last"); }
 if ($use_rapsearch) { push(@algosToRun, "rapsearch"); }
 foreach my $algo (@algosToRun) {
     my ( $class_id, $db_name );
@@ -900,8 +884,22 @@ foreach my $algo (@algosToRun) {
     if( defined( $analysis->post_rarefy ) ){
 	print "Rarefying to $analysis->post_rarefy reads per sample\n";
     }
-    calculate_diversity($analysis, $class_id, $post_rare_reads);   
+    print "Building classification map...\n";  
+#    if( $analysis->is_slim ){
+#	$analysis->MRC::Run::build_classification_map_slim($class_id, $post_rare_reads);
+#    }
+#    else{
+    $analysis->MRC::Run::build_classification_map($class_id, $post_rare_reads);
+#    }
+    
+##I think it's better to do these in R, where we can also create plots. Plus, subsetting a dataframe is very fast compared to looping in Perl.
+##but, are there dataframe size limits? I don't think so. This way, we don't need to store the hash class_map in memory, only a pointer to the
+##file path.
+    
+#R functions called here via wrappers in Run
+    
 }
+
 
 ### ====================================================================
 

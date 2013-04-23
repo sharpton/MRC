@@ -944,6 +944,43 @@ sub get_families_with_orfs_by_sample{
     return $fams;
 }
 
+#This is a complicated series of queries for DBIx. I'm sure someone knows how to do this efficiently in DBIx, but I don't. So, I'll use DBI.
+sub get_classified_orfs_by_sample{
+    my ( $self, $sample_id, $class_id, $dbh ) = @_;
+    #get the classification parameters
+    my $class_params = $self->MRC::DB::get_classification_parameters( $class_id );
+    my $class_method = $class_params->method;
+    my ($algo, $best_type);
+    if( $class_method =~ m/^(.*?);(.*?)$/ ){
+	$algo         = $1;
+	$best_type    = $2;
+    } else{
+	die( "Could not parse the classification method string from classification_parameters table. Got <${class_method}>\n" );
+    }
+    my $sql; #will differ depending on what we want to grab.
+    $sql = "SELECT MAX( score ) AS score, orf_alt_id, read_alt_id, sample_id, famid FROM searchresults WHERE sample_id = ${sample_id} ";
+    if( defined( $class_params->evalue_threshold ) ){
+	$sql .= " AND evalue <= " . $class_params->evalue_threshold . " ";
+    }
+    if( defined( $class_params->score_threshold ) ){
+	$sql .= " AND score >= " . $class_params->score_threshold . " ";
+    }
+    if( defined( $class_params->coverage_threshold) ){
+	$sql .= " AND orf_coverage >= " . $class_params->coverage_threshold . " ";
+    }
+    if( $best_type eq "best_read" ){
+	$sql .= " GROUP BY read_alt_id ORDER BY score DESC ";
+    } elsif( $best_type eq "best_orf" ){
+	$sql .= " GROUP BY orf_alt_id ORDER BY score DESC ";
+    } else {
+	die( "There seems to be a best_type in your database that I don't know about. We parsed <${best_type}> from the method string <{$class_method}> using class_id $class_id\n" );
+    }
+    print "$sql\n";
+    my $sth = $dbh->prepare($sql) || die "SQL Error: $DBI::errstr\n";
+    $sth->execute();
+    return $sth;
+}
+
 sub get_family_members_by_orf_id{
     my $self = shift;
     my $orf_id = shift; 
@@ -1256,6 +1293,17 @@ sub get_classification_id{
 	);
     return $inserted;
 }
+
+sub get_classification_parameters{
+    my( $self, $class_id ) = @_;
+    my $params = $self->get_schema->resultset( "ClassificationParameter" )->find(
+	{
+	    classification_id => $class_id,
+	}
+	);
+    return $params;
+}
+
 ###
 # DB LOADER FUNCTIONS
 ###
@@ -1689,7 +1737,7 @@ sub get_gene_by_protein_id{
 sub get_read_ids_from_ffdb{
     my ( $self, $sample_id ) = @_;
     my @read_ids             = ();
-    my $ffdb_reads_dir       = $self->MRC::get_sample_path( $sample_id );
+    my $ffdb_reads_dir       = File::Spec->catfile($self->MRC::get_sample_path( $sample_id ), "raw" );
     my @read_files           = glob( $ffdb_reads_dir . "/*.fa" );
     foreach my $file( @read_files ){
 	open( FILE, $file ) || die "Can't open $file for read: $!\n";

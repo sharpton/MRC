@@ -1054,6 +1054,14 @@ sub prerarefy_samples{
     return $self->{"prerarefy"};    
 }
 
+sub post_rarefy{
+    my( $self, $value ) = @_;
+    if( defined( $value ) ){
+	$self->{"postrarefy"} = $value;
+    }
+    return $self->{"postrarefy"};    
+}
+
 #no longer used in prerarefication
 sub total_sample_seq_count{
     my( $self, $value ) = @_;
