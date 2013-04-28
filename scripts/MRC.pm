@@ -340,6 +340,19 @@ sub set_password{
 }
 sub get_password { my $self = shift; return $self->{"pass"}; }
 
+sub get_password_from_file{
+    my ( $self, $passfile ) = @_;
+    open( FILE, $passfile ) || die "Can't open $passfile for read:$!\n";
+    my $pass;
+    while(<FILE>){
+	chomp $_;
+	if( $_ =~ m/^dbpass\=(.*)$/ ){
+	    $pass = $1;
+	}
+    }
+    close FILE;
+    return $pass;
+}
 
 sub set_schema_name{
     my ($self, $new_name) = @_;

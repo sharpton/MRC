@@ -43,7 +43,7 @@ use warnings;
 use MRC;
 use MRC::DB;
 use MRC::Run;
-use Getopt::Long;
+use Getopt::Long qw(GetOptionsFromString);
 use Data::Dumper;
 use Bio::SeqIO;
 use File::Basename;
@@ -80,6 +80,28 @@ sub printBanner($) {
     my $pad  = "#" x (length($stringWithDate) + 4); # add four to account for extra # and whitespce on either side of string
     print STDERR MRC::safeColor("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n", "cyan on_blue");
 }
+sub get_conf_file_options($$){
+    my ( $conf_file, $options ) = @_;
+    my $opt_str = '';
+    print "Parsing configuration file <${conf_file}>. Note that command line options trump conf-file settings\n";
+    open( CONF, $conf_file ) || die "can't open $conf_file for read: $!\n";
+    while(<CONF>){
+	chomp $_;
+	if( $_ =~ m/^\-\-(.*)\=(.*)$/ ){
+	    my $key = $1;
+	    my $val = $2;
+	    next if defined( ${ $options->{$key} } ); #command line opts trump 
+	    $opt_str .= " --${key}=${val} ";
+	} elsif( $_ =~ m/^\-\-(.*)$/ ){
+	    my $key = $1;
+	    next if defined( ${ $options->{$key} } ); #command line opts trump 
+	    $opt_str .= " --$key ";
+	}
+    }
+    close CONF;
+    return $opt_str;
+}
+
 #### ========================== ABOVE: FUNCTIONS ===============================
 
 #### ==================== BELOW: Code that gets run DIRECTLY at the main level (not inside a function or anything!) ======================
@@ -94,158 +116,241 @@ if (!exists($ENV{'MRC_LOCAL'})) {
 
 print STDERR ">> ARGUMENTS TO mrc_handler.pl: perl mrc_handler.pl @ARGV\n";
 
-my $local_ffdb           = undef; #/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
-my $local_reference_ffdb = undef; #"/bueno_not_backed_up/sharpton/sifting_families/"; # Location of the reference flatfile data (HMMs, aligns, seqs for each family). The subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir. Below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
+#Initialize vars
 my $localScriptDir       = $ENV{'MRC_LOCAL'} . "/scripts" ; # <-- point to the location of the MRC scripts. Auto-detected from MRC_LOCAL variable.
+my( $conf_file,            $local_ffdb,            $local_reference_ffdb, $project_dir,         $input_pid,
+    $goto,                 $db_username,           $db_pass,              $db_hostname,         $dbname,
+    $schema_name,          $db_prefix_basename,    $hmm_db_split_size,    $blast_db_split_size, $family_subset_list,  
+    $reps_only,            $nr_db,                 $db_suffix,            $is_remote,           $remote_hostname,
+    $remote_user,          $remoteDir,             $remoteExePath,        $use_scratch,         $waittime,
+    $multi,                $mult_row_insert_count, $bulk,                 $bulk_insert_count,   $slim,
+    $use_hmmscan,          $use_hmmsearch,         $use_blast,            $use_last,            $use_rapsearch,
+    $nseqs_per_samp_split, $prerare_count,         $postrare_count,       $trans_method,        $should_split_orfs,
+    $filter_length,        $p_evalue,              $p_coverage,           $p_score,             $evalue,
+    $coverage,             $score,                 $top_hit,              $top_hit_type,        $stage,
+    $hmmdb_build,          $blastdb_build,         $force_db_build,       $force_search,        
+    #non conf-file vars
+    $verbose,
+    $extraBrutalClobberingOfDirectories,
+    $dryRun,
+    );
+my @fcis      = (0, 1, 2); #what family construction ids are allowed to be processed?
+my $check     = 0;
+my $is_strict = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
 
-my $project_dir   = ""; #where are the project files to be processed?
-my $family_subset_list; # path to a file that lists (one per line) which family ids you want to include. Defaults to all. Will probably come back and make this a seperate familyconstruction, e.g. /home/sharpton/projects/MRC/data/subset_perfect_famids.txt
+if( 0 ){
+$local_ffdb           = undef; #/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
+$local_reference_ffdb = undef; #"/bueno_not_backed_up/sharpton/sifting_families/"; # Location of the reference flatfile data (HMMs, aligns, seqs for each family). The subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir. Below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
 
-my $db_username   = undef;
-my $db_pass       = undef;
-my $db_hostname   = undef;
+
+$project_dir   = ""; #where are the project files to be processed?
+
+$db_username   = undef;
+$db_pass       = undef;
+$db_hostname   = undef;
 
 #remote compute (e.g., SGE) vars
-my $is_remote        = 1; # By default, assume we ARE using a remote compute cluster
-my $stage            = 0; # By default, do NOT stage the database (this takes a long time)!
-my $remote_hostname  = undef; #"chef.compbio.ucsf.edu";
-my $remote_user      = undef; #"yourname";
-my $remoteDir        = undef;
-my $remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set of paths to search for executables. Example: /netapp/home/yourname/bin:/somewhere/else/bin
+$is_remote        = 1; # By default, assume we ARE using a remote compute cluster
+$stage            = 0; # By default, do NOT stage the database (this takes a long time)!
+$remote_hostname  = undef; #"chef.compbio.ucsf.edu";
+$remote_user      = undef; #"yourname";
+$remoteDir        = undef;
+$remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set of paths to search for executables. Example: /netapp/home/yourname/bin:/somewhere/else/bin
 #my $rscripts       = "/netapp/home/yourname/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
 
-my $hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-my $blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
-my $nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
-my @fcis                 = (0, 1, 2); #what family construction ids are allowed to be processed?
-my $db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
-my $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
-my $nr_db                = 1; #should we build a non-redundant version of the sequence database?
-my $db_suffix            = "rsdb"; #prerapsearch index can't point to seq file or will overwrite, so append to seq file name 
+$hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
+$blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
+$nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
 
-my $hmmdb_build    = 0;
-my $blastdb_build  = 0;
-my $force_db_build = 0;
-my $force_search   = 0;
-my $check          = 0;
+$db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
+$reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
+$nr_db                = 1; #should we build a non-redundant version of the sequence database?
+$db_suffix            = "rsdb"; #prerapsearch index can't point to seq file or will overwrite, so append to seq file name 
+
+$hmmdb_build    = 0;
+$blastdb_build  = 0;
+$force_db_build = 0;
+$force_search   = 0;
+
 
 #optionally set thresholds to use when parsing search results and loading into database. more conservative thresholds decreases DB size
-my $p_evalue       = undef;
-my $p_coverage     = undef;
-my $p_score        = 40;
+$p_evalue       = undef;
+$p_coverage     = undef;
+$p_score        = 40;
 #optionally set thresholds to use when classifying reads into families.
-my $evalue         = undef; #a float
-my $coverage       = undef; #between 0-1
-my $score          = 20;
-my $is_strict      = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
-my $top_hit        = 1;
-my $top_hit_type   = "read"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
+$evalue         = undef; #a float
+$coverage       = undef; #between 0-1
+$score          = 20;
+$top_hit        = 1;
+$top_hit_type   = "read"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
 
-my $use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
-my $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
-my $use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
-my $use_last       = 0; #should we use last to compare SFam reference sequences to reads?
-my $use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
+$use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
+$use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
+$use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
+$use_last       = 0; #should we use last to compare SFam reference sequences to reads?
+$use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
 
-my $waittime       = 30;
-my $input_pid      = undef;
-my $goto           = undef; #B=Build HMMdb
+$waittime       = 30;
+$input_pid      = undef;
+$goto           = undef; #B=Build HMMdb
 
-my $use_scratch              = 0; #should we use scratch space on remote machine?
+$use_scratch    = 0; #should we use scratch space on remote machine?
 
-my $dbname               = undef; #"Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
-my $schema_name          = undef; #"Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
+$dbname         = undef; #"Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
+$schema_name    = undef; #"Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
 
 #Translation settings
-my $trans_method         = "transeq";
-my $should_split_orfs    = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
+$trans_method         = "transeq";
+$should_split_orfs    = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 if( $should_split_orfs ){
     $trans_method = $trans_method . "_split";
 }
-my $filter_length        = 14; #filters out orfs of this size or smaller
+$filter_length        = 14; #filters out orfs of this size or smaller
 
 #Don't turn on both this AND (slim + bulk).
-my $multi                = 0; #should we multiload our inserts to the database?
-my $bulk_insert_count    = 1000;
+$multi                = 0; #should we multiload our inserts to the database?
+$bulk_insert_count    = 1000;
 #for REALLY big data sets, we streamline inserts into the DB by using bulk loading scripts. Note that this isn't as "safe" as traditional inserts
-my $bulk = 1;
+$bulk = 1;
 #for REALLY, REALLY big data sets, we improve streamlining by only writing familymembers to the database in a standalone familymembers_slim table. 
 #No foreign keys on the table, so could have empty version of database except for these results. 
 #Note that no metareads or orfs will write to DB w/ this option
-my $slim = 1;
+$slim = 1;
 
+$verbose              = 0; # Print extra diagnostic info?
+$dryRun               = 0; # <-- (Default: disabled) If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
 
-my $verbose              = 0; # Print extra diagnostic info?
-my $dryRun               = 0; # <-- (Default: disabled) If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
+$extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
+$prerare_count  = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to thme
+$postrare_count = undef; #when calculating diversity statistics, randomly select this number of raw reads per sample
+
+}
+
+$conf_file       = undef;
 
 #hacky hardcoding on mh_scaffold pilot 2 to test random die bug...
 my %skip_samps = ();
-
-my $extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
 my $sWasSpecified = undef; # The "s" parameter is no longer valid, so we specially detect it with this variable. This is sorta required; "sub {...}" doesn't actually allow program exit it seems.
 
-my $prerare_count  = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to thme
-my $postrare_count = undef; #when calculating diversity statistics, randomly select this number of raw reads per sample
+my %options = ("ffdb"         => \$local_ffdb
+	       , "refdb"      => \$local_reference_ffdb
+	       , "projdir"    => \$project_dir
+	       # Database-server related variables
+	       , "dbuser"     => \$db_username
+	       , "dbpass"     => \$db_pass
+	       , "dbhost"     => \$db_hostname
+	       , "dbname"     => \$dbname
+	       , "dbschema"   => \$schema_name
+	       # FFDB Search database related options
+	       , "dbprefix"   => \$db_prefix_basename
+	       , "hmmsplit"   => \$hmm_db_split_size
+	       , "blastsplit" => \$blast_db_split_size
+	       , "sub"        => \$family_subset_list	  
+	       , "reps-only"  => \$reps_only
+	       , "nr"         => \$nr_db
+	       , "db_suffix"  => \$db_suffix
+	       # Remote computational cluster server related variables
+	       , "remote"     => \$is_remote
+	       , "rhost"      => \$remote_hostname
+	       , "ruser"      => \$remote_user
+	       , "rdir"       => \$remoteDir
+	       , "rpath"      => \$remoteExePath
+	       , "scratch"    => \$use_scratch
+	       , "wait"       => \$waittime        #   <-- in seconds
+	       #db communication method (NOTE: use EITHER multi OR bulk OR neither)
+	       ,    "multi"        => \$multi
+	       ,    "multi_count"  => \$mult_row_insert_count
+	       ,    "bulk"         => \$bulk
+	       ,    "bulk_count"   => \$bulk_insert_count
+	       ,    "slim"         => \$slim
+	       #search methods
+	       ,    "use_hmmscan"   => \$use_hmmscan
+	       ,    "use_hmmsearch" => \$use_hmmsearch
+	       ,    "use_blast"     => \$use_blast
+	       ,    "use_last"      => \$use_last
+	       ,    "use_rapsearch" => \$use_rapsearch
+	       #general options
+	       ,    "seq-split-size" => \$nseqs_per_samp_split
+	       ,    "prerare-samps"  => \$prerare_count
+	       ,    "postrare-samps" => \$postrare_count
+	       #translation options
+	       ,    "trans-method"   => \$trans_method
+	       ,    "split-orfs"     => \$should_split_orfs
+	       ,    "min-orf-len"    => \$filter_length
+	       #search result parsing thresholds (less stringent, optional, defaults to family classification thresholds)
+	       ,    "parse-evalue"   => \$p_evalue
+	       ,    "parse-coverage" => \$p_coverage
+	       ,    "parse-score"    => \$p_score
+	       #family classification thresholds (more stringent)
+	       ,    "class-evalue"   => \$evalue
+	       ,    "class-coverage" => \$coverage
+	       ,    "class-score"    => \$score
+	       ,    "top-hit"        => \$top_hit
+	       ,    "hit-type"       => \$top_hit_type
+    );
 
-GetOptions("ffdb|d=s"        => \$local_ffdb
-	   , "refdb=s"       => \$local_reference_ffdb
-	   , "projdir|i=s"   => \$project_dir
+GetOptions(\%options
+	   , "conf-file|c=s"         => \$conf_file
+	   , "pid=i"                 => \$input_pid          
+	   , "goto|g=s"              => \$goto     
+	    , "ffdb|d=s"             , "refdb=s"            , "projdir|i=s"      
+	    # Database-server related variables
+	    , "dbuser|u=s"           , "dbpass|p=s"         , "dbhost=s"          , "dbname=s"        , "dbschema=s"   
+	    # FFDB Search database related options
+	    , "dbprefix=s"           , "hmmsplit=i"         , "blastsplit=i"      , "sub=s"           , "reps-only!"      , "nr!"             , "db_suffix:s"  
+	    # Remote computational cluster server related variables
+	    , "remote!"              , "rhost=s"            , "ruser=s"           , "rdir=s"          , "rpath=s"         , "scratch!"        , "wait|w=i"    
+	    #db communication method (NOTE: use EITHER multi OR bulk OR neither)
+	    ,    "multi!"            ,    "multi_count:i"   ,    "bulk!"          ,    "bulk_count:i" ,    "slim!"         
+	    #search methods
+	    ,    "use_hmmscan"       ,    "use_hmmsearch"   ,    "use_blast"      ,    "use_last"     ,    "use_rapsearch" 
+	    #general options
+	    ,    "seq-split-size=i"  ,    "prerare-samps:i" ,    "postrare-samps:i" 
+	    #translation options
+	    ,    "trans-method:s"    ,    "split-orfs!"     ,    "min-orf-len:i"    
+	    #search result parsing thresholds (less stringent, optional, defaults to family classification thresholds)
+	    ,    "parse-evalue:f"    ,    "parse-coverage:f",    "parse-score:f"    
+	    #family classification thresholds (more stringent)
+	    ,    "class-evalue:f"    ,    "class-coverage:f",    "class-score:f"   ,    "top-hit!"     ,    "hit-type:s"       
 
-	   # Database-server related variables
-	   , "dbuser|u=s"   => \$db_username
-	   , "dbpass|p=s"   => \$db_pass
-	   , "dbhost=s"     => \$db_hostname
-	   , "dbname=s"     => \$dbname
-	   , "dbschema=s"   => \$schema_name
-
-	   # Search database name
-	   , "dbprefix=s"   => \$db_prefix_basename
-	   , "hmmsplit=i"   => \$hmm_db_split_size
-	   , "blastsplit=i" => \$blast_db_split_size
-	   # Remote computational cluster server related variables
-	   , "rhost=s"     => \$remote_hostname
-	   , "ruser=s"     => \$remote_user
-	   , "rdir=s"      => \$remoteDir
-	   , "rpath=s"     => \$remoteExePath
-
-	   ,              's=s' => \$sWasSpecified #interestingly, you can't have a "sub" here that dies, as execution continues on
-	   ,    "sub=s" => \$family_subset_list
-
+	   #forcing statements
 	   ,    "stage!"       => \$stage # should we "stage" the database onto the remote machine?
 	   ,    "hdb!"         => \$hmmdb_build
 	   ,    "bdb!"         => \$blastdb_build
 	   ,    "forcedb!"     => \$force_db_build
 	   ,    "forcesearch!" => \$force_search
-	   ,    "scratch!"     => \$use_scratch
-	   #search methods
-	   ,    "use_hmmscan"   => \$use_hmmscan
-	   ,    "use_hmmsearch" => \$use_hmmsearch
-	   ,    "use_blast"     => \$use_blast
-	   ,    "use_last"      => \$use_last
-	   ,    "use_rapsearch" => \$use_rapsearch
+	   ,    "verbose|v!"   => \$verbose
+	   ,    "clobber"      => \$extraBrutalClobberingOfDirectories
+	   ,    "dryrun|dry!"  => \$dryRun
+    );
 
-	   ,    "wait|w=i"     => \$waittime        #   <-- in seconds
-	   ,    "remote!"      => \$is_remote
-	   ,    "pid=i"        => \$input_pid
-	   ,    "goto|g=s"     => \$goto
-
-	   ,    "z=i"              => \$nseqs_per_samp_split
-	   ,    "prerare-samps:i"  => \$prerare_count
-	   ,    "postrare-samps:i" => \$postrare_count
-
-	   ,    "e=f"  => \$evalue
-	   ,    "c=f"  => \$coverage
-	   ,    "verbose|v!" => \$verbose
-	   
-	   ,    "clobber" => \$extraBrutalClobberingOfDirectories
-	   ,    "dryrun|dry!" => \$dryRun
-   );
-
-
-#warn($dryRun);
-
-#/scrapp2/alexgw/MRC/MRC_ffdb/
-
+### =========== GRAB INPUTS FROM CONF FILE =================
+#note: command line options TRUMP conf file options!
+if( defined( $conf_file ) ){
+    if( ! -e $conf_file ){ dieWithUsageError( "The path you supplied for --conf-file doesn't exist! You used <$conf_file>\n" ); }
+    my $opt_str = get_conf_file_options( $conf_file, \%options );
+    GetOptionsFromString( $opt_str, \%options,
+	    , "ffdb|d=s"             , "refdb=s"            , "projdir|i=s"      
+	    # Database-server related variables
+	    , "dbuser|u=s"           , "dbpass|p=s"         , "dbhost=s"          , "dbname=s"        , "dbschema=s"   
+	    # FFDB Search database related options
+	    , "dbprefix=s"           , "hmmsplit=i"         , "blastsplit=i"      , "sub=s"           , "reps-only!"      , "nr!"             , "db_suffix:s"  
+	    # Remote computational cluster server related variables
+	    , "remote!"              , "rhost=s"            , "ruser=s"           , "rdir=s"          , "rpath=s"         , "scratch!"        , "wait|w=i"    
+	    #db communication method (NOTE: use EITHER multi OR bulk OR neither)
+	    ,    "multi!"            ,    "multi_count:i"   ,    "bulk!"          ,    "bulk_count:i" ,    "slim!"         
+	    #search methods
+	    ,    "use_hmmscan"       ,    "use_hmmsearch"   ,    "use_blast"      ,    "use_last"     ,    "use_rapsearch" 
+	    #general options
+	    ,    "seq-split-size=i"  ,    "prerare-samps:i" ,    "postrare-samps:i" 
+	    #translation options
+	    ,    "trans-method:s"    ,    "split-orfs!"     ,    "min-orf-len:i"    
+	    #search result parsing thresholds (less stringent, optional, defaults to family classification thresholds)
+	    ,    "parse-evalue:f"    ,    "parse-coverage:f",    "parse-score:f"    
+	    #family classification thresholds (more stringent)
+	    ,    "class-evalue:f"    ,    "class-coverage:f",    "class-score:f"   ,    "top-hit!"     ,    "hit-type:s"       
+	);
+}
 
 ### =========== SANITY CHECKING OF INPUT ARGUMENTS ==========
 
@@ -261,7 +366,10 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 (-d $local_reference_ffdb)       or dieWithUsageError("--refdb (local REFERENCE flat-file database directory path) was specified as --ffdb='$local_ffdb', but that directory appeared not to exist! Note that Perl does NOT UNDERSTAND the tilde (~) expansion for home directories, so please specify the full path in that case. Specify a directory that exists.");
 (defined($db_hostname))          or dieWithUsageError("--dbhost (remote database hostname: example --dbhost='data.youruniversity.edu') MUST be specified!");
 (defined($db_username))          or dieWithUsageError("--dbuser (remote database mysql username: example --dbuser='dataperson') MUST be specified!");
-(defined($db_pass))              or dieWithUsageError("--dbpass (remote database mysql password for user --dbpass='$db_username') MUST be specified here in super-insecure plaintext,\nunless your database does not require a password, which is unusual. If it really is the case that you require NO password, you should specify --dbpass='' . ...");
+(defined($db_pass) || defined($conf_file)) or dieWithUsageError("--dbpass (mysql password for user --dbpass='$db_username') or --conf-file (file containing password) MUST be specified here in super-insecure plaintext,\nunless your database does not require a password, which is unusual. If it really is the case that you require NO password, you should specify --dbpass='' OR include a password in --conf-file ....");
+if( defined( $conf_file ) ){
+    ( -e $conf_file ) or dieWithUsageError("You have specified a password file by using the --conf-file option, but I cannot find that file. You entered <$conf_file>");
+}
 (defined($remote_hostname))      or dieWithUsageError("--rhost (remote computational cluster primary note) must be specified. Example --rhost='main.cluster.youruniversity.edu')!");
 (defined($remote_user))          or dieWithUsageError("--ruser (remote computational cluster username) must be specified. Example username: --ruser='someguy'!");
 
@@ -269,7 +377,7 @@ GetOptions("ffdb|d=s"        => \$local_ffdb
 
 if( $use_rapsearch && !defined( $db_suffix ) ){  dieWithUsageError( "You must specify a database name suffix for indexing when running rapsearch!" ); }
 
-($coverage >= 0.0 && $coverage <= 1.0) or dieWithUsageError("Coverage must be between 0.0 and 1.0 (inclusive). You specified: $coverage.");
+#($coverage >= 0.0 && $coverage <= 1.0) or dieWithUsageError("Coverage must be between 0.0 and 1.0 (inclusive). You specified: $coverage.");
 
 if ((defined($goto) && $goto) && !defined($input_pid)) { dieWithUsageError("If you specify --goto=SOMETHING, you must ALSO specify the --pid to goto!"); }
 
@@ -310,8 +418,8 @@ if( defined( $family_subset_list ) ){
     my $subset_name = basename( $family_subset_list ); 
     $db_prefix_basename = $db_prefix_basename. "_" . $subset_name; 
 }
-(defined($reps_only)) or die "reps_only was not defined!";
-(defined($nr_db)) or die "nr_db was not defined!";
+#(defined($reps_only)) or die "reps_only was not defined!";
+#(defined($nr_db)) or die "nr_db was not defined!";
 (defined($blast_db_split_size)) or die "blast_db_split_size was not defined!";
 my $blastdb_name = $db_prefix_basename . '_' . ($reps_only?'reps_':'') . ($nr_db?'nr_':'') . $blast_db_split_size;
 
@@ -366,7 +474,13 @@ $analysis->set_scripts_dir($localScriptDir);
 $analysis->set_remote_exe_path($remoteExePath);
 $analysis->set_dbi_connection("DBI:mysql:$dbname:$db_hostname", $dbname, $db_hostname); 
 $analysis->set_username($db_username); 
-$analysis->set_password($db_pass); 
+if( defined( $db_pass ) ){
+    $analysis->set_password($db_pass); 
+}
+elsif( defined( $conf_file ) ){
+    my $pass = $analysis->get_password_from_file( $conf_file );
+    $analysis->set_password( $pass );
+}
 $analysis->set_schema_name($schema_name);
 $analysis->build_schema();
 $analysis->set_multiload($multi);

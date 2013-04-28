@@ -1282,10 +1282,8 @@ sub build_search_db{
 	my $family_db_file = undef;
 	
 	if ($type eq "hmm") {
-	    foreach my $fci (@fcis) {
-		my $path = "${ref_ffdb}/fci_${fci}/HMMs/${family}.hmm.gz";
-		if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
-	    }
+	    my $path = "${ref_ffdb}/HMMs/${family}.hmm.gz";
+	    if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
 	    (defined($family_db_file)) or die("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) . " ");
 	    push( @split, $family_db_file );
 	    $count++;
@@ -1302,31 +1300,24 @@ sub build_search_db{
 		$count = 0; # clear this too
 	    }
 	} elsif( $type eq "blast" ) {
-	    foreach my $fci( @fcis ){
-		if (0 == $fci) {
-		    $fci = 1; # <-- short term hack for the merged fci blast directory for 0 and 1
-		}
-		my $path = "$ref_ffdb/fci_${fci}/seqs/${family}.fa.gz";
-		if( -e $path ){
-		    $family_db_file = $path; # <-- save the path, if it exists
-		    if ($reps_only) {
-			#do we only want rep sequences from big families?
-			#first see if there is a reps file for the family
-			my $reps_list_path = "${ref_ffdb}/reps/fci_${fci}/list/${family}.mcl";
-			#if so, see if we need to build the seq file
-			if( -e $reps_list_path ){
-			    #we add the .gz extension in the gzip command inside grab_seqs_from_lookup_list
-			    my $reps_seq_path = "$ref_ffdb/reps/fci_${fci}/seqs/${family}.fa";
-			    if(! -e "${reps_seq_path}.gz" ){
-				print "Building reps sequence file for $family\n";
-				_grab_seqs_from_lookup_list( $reps_list_path, $family_db_file, $reps_seq_path );
-				(-e "${reps_seq_path}.gz") or die("The gzipped file STILL doesn't exist, even after we tried to make it. Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.");
-			    }
-			    $family_db_file = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
+	    my $path = "$ref_ffdb/seqs/${family}.fa.gz";
+	    if( -e $path ){
+		$family_db_file = $path; # <-- save the path, if it exists
+		if ($reps_only) {
+		    #do we only want rep sequences from big families?
+		    #first see if there is a reps file for the family
+		    my $reps_list_path = "${ref_ffdb}/reps/list/${family}.mcl";
+		    #if so, see if we need to build the seq file
+		    if( -e $reps_list_path ){
+			#we add the .gz extension in the gzip command inside grab_seqs_from_lookup_list
+			my $reps_seq_path = "$ref_ffdb/reps/seqs/${family}.fa";
+			if(! -e "${reps_seq_path}.gz" ){
+			    print "Building reps sequence file for $family\n";
+			    _grab_seqs_from_lookup_list( $reps_list_path, $family_db_file, $reps_seq_path );
+			    (-e "${reps_seq_path}.gz") or die("The gzipped file STILL doesn't exist, even after we tried to make it. Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.");
 			}
+			$family_db_file = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
 		    }
-		    #because of the fci hack, if we made it here, we don't want to rerun the above
-#		    last;
 		}
 	    }
 	    (defined($family_db_file)) or die( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" )  . " ");
