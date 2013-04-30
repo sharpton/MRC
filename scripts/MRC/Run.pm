@@ -146,24 +146,12 @@ sub gzip_file($) {
     IO::Compress::Gzip::gzip $file => "${file}.gz" or die "gzip failed: $GzipError ";
 }
 
-
-
-
 sub clean_project{
     my ($self, $project_id) = @_;
     my $samples = $self->MRC::DB::get_samples_by_project_id( $project_id ); # apparently $samples is a scalar datatype that we can iterate over
-    while(my $sample = $samples->next()){ # go through all the samples, I guess!
-	my $sample_id = $sample->sample_id();
-	$self->MRC::DB::delete_search_result_by_sample_id( $sample_id );
-	$self->MRC::DB::delete_family_member_by_sample_id( $sample_id );
-	$self->MRC::DB::delete_orfs_by_sample_id( $sample_id );
-	$self->MRC::DB::delete_reads_by_sample_id( $sample_id );
-	$self->MRC::DB::delete_sample( $sample_id );
-    }
     $self->MRC::DB::delete_project( $project_id );
     $self->MRC::DB::delete_ffdb_project( $project_id );
 }
-
 
 sub exec_remote_cmd($$) {
     my ($self, $remote_cmd) = @_;
@@ -183,10 +171,11 @@ sub exec_remote_cmd($$) {
 sub get_partitioned_samples{
     my ($self, $path) = @_;
     my %samples = ();    
-
+    
     opendir( PROJ, $path ) || die "Can't open the directory $path for read: $!\n";     #open the directory and get the sample names and paths, 
     my @files = readdir(PROJ);
     closedir(PROJ);
+    
 
     foreach my $file (@files) {
 	next if ( $file =~ m/^\./ || $file =~ m/hmmscan/ || $file =~ m/output/); 
@@ -244,8 +233,10 @@ sub load_samples{
 	    if ($errMsg =~ m/duplicate entry/i) {
 		print STDERR ("*" x 80 . "\n");
 		print STDERR ("DATABASE INSERTION ERROR\nCaught an exception when attempting to add sample \"$samp\" for project PID #${pid} to the database.\nThe exception message was:\n$errMsg\n");
-		print STDERR ("Note that the error above was a DUPLICATE ENTRY error.\nThis is a VERY COMMON error, and is due to the database already having a sample/project ID with the same number as the one we are attempting to insert. This most often happens if a run is interrupted---so there is an entry in the database for your project run, but there are no files on the filesystem for it, since it did not complete the run. The solution to this problem is to manually remove the entries for project id #$pid from the Mysql database.\n");
+		print STDERR ("Note that the error above was a DUPLICATE ENTRY error.\nThis is a VERY COMMON error, and is due to the database already having a sample/project ID with the same number as the one we are attempting to insert. This most often happens if a run is interrupted---so there is an entry in the database for your project run, but there are no files on the filesystem for it, since it did not complete the run. The solution to this problem is to manually remove the entries for project id #$pid from the Mysql database. Are you sure that you want to reprocess a dataset from scratch? If so, you can remove the old data from the database via thee different options:\n");
 		print STDERR ("You can do this as follows:\n");
+		print STDERR (" Option A: Rerun your mcr_handler.pl command, but add the --reload option\n" );
+		print STDERR (" Option B: Use MySQL to remove the old data, as follows:\n" );
 		print STDERR ("   1. Go to your database server (probably " . $self->get_db_hostname() . ")\n");
 		print STDERR ("   2. Log into mysql with this command: mysql -u YOURNAME -p   <--- YOURNAME is probably \"" . $self->get_username() . "\"\n");
 		print STDERR ("   3. Type these commands in mysql: use ***THE DATABASE***;   <--- THE DATABASE is probably " . $self->get_db_name() . "\n");
@@ -262,7 +253,8 @@ sub load_samples{
 				       . qq{ --ffdb=} . $self->get_ffdb()
 				       . qq{ --dbname=} . $self->get_db_name()
 				       . qq{ --schema=} . $self->{"schema_name"});
-		print STDERR ("Or maybe run this: $mrcCleanCommand\n");
+		print STDERR (" Option C: Run mrc_cleand_project.pl as follows:\n" );
+		print STDERR ("$mrcCleanCommand\n");
 		print STDERR ("*" x 80 . "\n");
 		die "Terminating: Duplicate database entry error! See above for a possible solution.";
 	    }
@@ -704,7 +696,8 @@ sub classify_reads_old{
     print "Found and inserted $n_hits threshold passing search results into the database\n";
 }
 
-sub classify_reads_bulk{
+#used to be classify_reads_bulk
+sub parse_and_load_search_results_bulk{
     my $self                = shift;
     my $sample_id           = shift;
     my $orf_split_filename  = shift; # just the file name of the split, NOT the full path
@@ -2235,14 +2228,14 @@ sub build_classification_map_slim_old{
     #return $map;
 }
 
-sub build_classification_map{
+sub build_classification_maps{
     my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_ClassID_" . $class_id . ".tab";
-    open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
-    print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
+	my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}.tab";
+	open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
+	print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
 	#how many reads should we count for relative abundance analysis?
 	my $read_count;
 	if(!defined( $post_rare_reads->{$sample_id} ) ){
@@ -2278,8 +2271,9 @@ sub build_classification_map{
 	    #$map->{$self->get_project_id()}->{$sample_id}->{$read_id}->{$orf_id}->{$famid}++; #NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
 	}
 	$self->MRC::DB::disconnect_dbh( $dbh );	
+	close OUT;
     }
-    close OUT;
+
     #return $map;
 }
 
@@ -2320,5 +2314,54 @@ sub _random_sample_from_array{
     return \@picks;
 }
 
+sub delete_prior_project{
+    my $self = shift;
+    foreach my $sample_alt_id( keys ( %{$self->get_sample_hashref() } ) ){
+	my $pid = $self->MRC::DB::get_project_by_sample_alt_id( $sample_alt_id );
+	$self->MRC::Run::clean_project( $pid );
+	last;
+    }    
+    return $self;
+}
+
+sub check_prior_analyses{
+    my ( $self, $reload ) = @_;
+    foreach my $sample_alt_id( keys ( %{$self->get_sample_hashref() } ) ){
+	my $sample = $self->MRC::DB::get_sample_by_alt_id( $sample_alt_id );
+	if( defined( $sample ) ){
+	    warn( "The sample $sample_alt_id already exists in the database under sample_id " . $sample->sample_id() . "!\n" );
+	    if( $reload ){
+		warn( "Since you specified --reload, I am deleting prior versions of this sample from the database" );
+		$self->MRC::DB::delete_sample( $sample->sample_id() );
+	    } else {
+		print STDERR ("*" x 80 . "\n");
+		print STDERR ("Before proceeding, you must either remove this sample from your project or delete the sample's prior data from the database. You can do this as follows:\n");
+		print STDERR (" Option A: Rerun your mcr_handler.pl command, but add the --reload option\n" );
+		print STDERR (" Option B: Use MySQL to remove the old data, as follows:\n" );
+		print STDERR ("   1. Go to your database server (probably " . $self->get_db_hostname() . ")\n");
+		print STDERR ("   2. Log into mysql with this command: mysql -u YOURNAME -p   <--- YOURNAME is probably \"" . $self->get_username() . "\"\n");
+		print STDERR ("   3. Type these commands in mysql: use ***THE DATABASE***;   <--- THE DATABASE is probably " . $self->get_db_name() . "\n");
+		print STDERR ("   4.                        mysql: select * from samples;    <--- just to look at the projects.\n");
+		print STDERR ("   5.                        mysql: delete from samples where sample_id=" . $sample->sample_id . ";    <-- actually deletes this project.\n");
+		print STDERR ("   6. Then you can log out of mysql and hopefully re-run this script successfully!\n");
+		print STDERR ("   7. You MAY also need to delete the entry from the 'samples' table in MySQL that has the same name as this sample/proejct.\n");
+		print STDERR ("   8. Try connecting to mysql, then typing 'select * from samples;' . You should see an OLD project ID (but with the same textual name as this one) that may be preventing you from running another analysis. Delete that id ('delete from samples where sample_id=the_bad_id;'");
+		my $mrcCleanCommand = (qq{perl \$MRC_LOCAL/scripts/mrc_clean_project.pl} 
+				       . qq{ --pid=} . $sample->project_id
+				       . qq{ --dbuser=} . $self->get_username()
+				       . qq{ --dbpass=} . "PUT_YOUR_PASSWORD_HERE"
+				       . qq{ --dbhost=} . $self->get_db_hostname()
+				       . qq{ --ffdb=} . $self->get_ffdb()
+				       . qq{ --dbname=} . $self->get_db_name()
+				       . qq{ --schema=} . $self->{"schema_name"});
+		print STDERR (" Option C: Run mrc_cleand_project.pl as follows:\n" );
+		print STDERR ("$mrcCleanCommand\n");
+		print STDERR ("*" x 80 . "\n");
+		die "Terminating: Duplicate database entry error! See above for a possible solution.";
+	    }
+	}    
+    }
+    return $self;
+}
 
 1;

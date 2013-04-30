@@ -133,6 +133,7 @@ my( $conf_file,            $local_ffdb,            $local_reference_ffdb, $proje
     $verbose,
     $extraBrutalClobberingOfDirectories,
     $dryRun,
+    $reload,
     );
 my @fcis      = (0, 1, 2); #what family construction ids are allowed to be processed?
 my $check     = 0;
@@ -219,6 +220,7 @@ $slim = 1;
 
 $verbose              = 0; # Print extra diagnostic info?
 $dryRun               = 0; # <-- (Default: disabled) If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
+$reload               = 0; # Should we drop a previous run of the project from the database?
 
 $extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
 $prerare_count  = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to thme
@@ -322,6 +324,7 @@ GetOptions(\%options
 	   ,    "verbose|v!"   => \$verbose
 	   ,    "clobber"      => \$extraBrutalClobberingOfDirectories
 	   ,    "dryrun|dry!"  => \$dryRun
+	   ,    "reload!"      => \$reload
     );
 
 ### =========== GRAB INPUTS FROM CONF FILE =================
@@ -589,6 +592,8 @@ else { MRC::dryNotify("Skipped getting the partitioned samples for $project_dir.
 #are of the proper format. We should check data before loading.
 ############
 #Load Data. Project id becomes a project var in load_project
+
+$analysis->MRC::Run::check_prior_analyses( $reload ); #have any of these samples been processed already?
 
 if (!$dryRun) {
     $analysis->MRC::Run::load_project($project_dir, $nseqs_per_samp_split);
@@ -916,10 +921,10 @@ if ($is_remote){
 
 ### ====================================================================
 #PARSE AND LOAD RESULTS
-CLASSIFYREADS:
+PARSESULTS:
     ;
 if ($is_remote){
-    printBanner("CLASSIFYING REMOTE SEARCH RESULTS");
+    printBanner("PARSING REMOTE SEARCH RESULTS");
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){
 	if (defined($skip_samps{ $sample_id })){
 	    warn("skipping $sample_id because it has apparently been processed already.");
@@ -949,7 +954,7 @@ if ($is_remote){
 		#ONLY TAKES BULK-LOAD LIKE FILES NOW. OPTIONALLY DELETE PARSED RESULTS WHEN COMPLETED.
 		# NOTE THAT WE ONLY INSERT ALT_IDS INTO THIS TABLE! NEED TO USE SAMPLE_ID, ALT_ID FROM (metareads || orfs) TO UNIQUELY EXTRACT ORF/READ ID		
 		#$analysis->MRC::Run::classify_reads_old($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
-		$analysis->MRC::Run::classify_reads_bulk( $sample_id, $orf_split_file_name, $class_id, $algo ); #top_hit_type and strict clustering gets used in diversity calcs now
+		$analysis->MRC::Run::parse_and_load_search_results_bulk( $sample_id, $orf_split_file_name, $class_id, $algo ); #top_hit_type and strict clustering gets used in diversity calcs now
 	    }
 	}
     }
@@ -967,10 +972,11 @@ if ($is_remote){
 }
 
 ### ====================================================================
-#calculate diversity statistics
-CALCDIVERSITY:
-    ;
-printBanner("CALCULATING DIVERSITY STATISTICS");
+#classify reads based on search results
+
+CLASSIFYREADS: 
+    ; #might want to eventually store these results in a stand alone mysql table rather than flat file
+printBanner("CLASSIFYING READS");
 my $post_rare_reads = {}; #hash ref that maps samples to read_ids, not just classified reads!
 if( defined( $analysis->post_rarefy) ){
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){ 
@@ -1003,9 +1009,14 @@ foreach my $algo (@algosToRun) {
 #	$analysis->MRC::Run::build_classification_map_slim($class_id, $post_rare_reads);
 #    }
 #    else{
-    $analysis->MRC::Run::build_classification_map($class_id, $post_rare_reads);
+    $analysis->MRC::Run::build_classification_maps($class_id, $post_rare_reads);
 #    }
-    
+
+
+### ====================================================================
+#calculate diversity statistics
+CALCDIVERSITY:
+    ;    
 ##I think it's better to do these in R, where we can also create plots. Plus, subsetting a dataframe is very fast compared to looping in Perl.
 ##but, are there dataframe size limits? I don't think so. This way, we don't need to store the hash class_map in memory, only a pointer to the
 ##file path.

@@ -196,6 +196,8 @@ sub create_sample{
     return $inserted;
 }
 
+    
+
 sub create_metaread{
     my $self = shift;
     my $read_name = shift;
@@ -448,6 +450,13 @@ sub insert_multi_orfs{
     if (defined($dbh->errstr)) {
 	die($dbh->errstr . " ");
     }    
+}
+
+sub get_sample_by_alt_id{
+    my $self = shift;
+    my $sample_alt_id = shift;
+    my $sample = $self->get_schema->resultset('Sample')->find( { sample_alt_id => $sample_alt_id } );
+    return $sample;
 }
 
 sub get_gene_by_id{
