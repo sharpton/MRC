@@ -465,12 +465,12 @@ sub set_family_subset{
     my $check  = shift;
     #if no subset was provided, grab all famids that match our fcis. this could get big, so we might change in the future
     if( !defined( $subset ) ){
-	warn "You did not specify a subset of family ids to process. Processing all families that meet FCI criteria.\n";
+	warn "You did not specify a subset of family ids to process. Processing all families.\n";
 	my @all_ids = ();
-	foreach my $fci( @{ $self->{"fci"} } ){	    
-	    my @ids = $self->{"schema"}->resultset('Family')->search( { familyconstruction_id => $fci } )->get_column( 'famid' )->all;
-	    @all_ids = ( @all_ids, @ids );
-	}
+#	foreach my $fci( @{ $self->{"fci"} } ){	    
+#	    my @ids = $self->{"schema"}->resultset('Family')->search( { familyconstruction_id => $fci } )->get_column( 'famid' )->all;
+#	    @all_ids = ( @all_ids, @ids );
+#	}
 	$self->{"fid_subset"} = \@all_ids;
     }
     else{
@@ -482,7 +482,8 @@ sub set_family_subset{
 	    push( @retained_ids, $_ );
 	}
 	close SUBSET;
-        #let's make sure they're all from the proper family contruction id     
+        #let's make sure they're all from the proper family contruction id
+	#Obsolete
 	if( $check == 1 ){
 	    warn "Checking that families are from the proper FCI.\n";
 	    my $correct_fci = 0;
@@ -504,7 +505,7 @@ sub set_family_subset{
 	}
 	#We've checked their fci in the past. skip this process and accept everything.
 	else{
-	    warn "Skipping check of FCI on the subset of families.\n";
+	    #warn "Skipping check of FCI on the subset of families.\n";
 	    #store the raw array as a reference in our project object
 	    $self->{"fid_subset"} = \@retained_ids;
 	}

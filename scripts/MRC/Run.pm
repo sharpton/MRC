@@ -1251,13 +1251,17 @@ sub build_search_db{
     #save the raw path for the database_length file when using blast
 
     my $db_path_with_name     = "$raw_db_path/$db_name";
+    #get the paths associated with each family
+    my $family_path_hashref = _build_family_ref_path_hash( $ref_ffdb, $type );
     #constrain analysis to a set of families of interest
     my @families   = sort( @{ $self->get_family_subset() });
-    my $n_fams     = @families;
+    if( !@families ){ #is there a subset list? No? then process EVERY family
+	@families = keys( %$family_path_hashref );
+    }
+    my $n_fams = @families;
     my $count      = 0;
     my @split      = (); #array of family HMMs/sequences (compressed)
     my $n_proc     = 0;
-    my @fcis       = @{ $self->get_fcis() };
     #type eq blast specific vars follow
     my $tmp;
     my $tmp_path;
@@ -1269,13 +1273,14 @@ sub build_search_db{
 	$tmp_path = "${db_path_with_name}.tmp";
 	open( TMP, ">$tmp_path" ) || die "Can't open $tmp_path for write: $!\n";
 	$tmp = *TMP;	    
-    }
+    }       
     foreach my $family( @families ){
 	#find the HMM/sequences associated with the family (compressed)
 	my $family_db_file = undef;
 	
 	if ($type eq "hmm") {
-	    my $path = "${ref_ffdb}/HMMs/${family}.hmm.gz";
+#	    my $path = "${ref_ffdb}/HMMs/${family}.hmm.gz";
+	    my $path = $family_path_hashref->{$type}->{$family};
 	    if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
 	    (defined($family_db_file)) or die("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) . " ");
 	    push( @split, $family_db_file );
@@ -1293,23 +1298,29 @@ sub build_search_db{
 		$count = 0; # clear this too
 	    }
 	} elsif( $type eq "blast" ) {
-	    my $path = "$ref_ffdb/seqs/${family}.fa.gz";
+#	    my $path = "$ref_ffdb/seqs/${family}.fa.gz";
+	    my $path = $family_path_hashref->{$type}->{$family};
 	    if( -e $path ){
 		$family_db_file = $path; # <-- save the path, if it exists
 		if ($reps_only) {
 		    #do we only want rep sequences from big families?
 		    #first see if there is a reps file for the family
-		    my $reps_list_path = "${ref_ffdb}/reps/list/${family}.mcl";
+#		    my $reps_list_path = "${ref_ffdb}/reps/list/${family}.mcl";
+		    my $reps_seq_path = $path;
+		    $reps_seq_path    =~ s/seqs_all/seqs_reps/;
+		    $family_db_file   = $reps_seq_path;
 		    #if so, see if we need to build the seq file
-		    if( -e $reps_list_path ){
-			#we add the .gz extension in the gzip command inside grab_seqs_from_lookup_list
-			my $reps_seq_path = "$ref_ffdb/reps/seqs/${family}.fa";
-			if(! -e "${reps_seq_path}.gz" ){
-			    print "Building reps sequence file for $family\n";
-			    _grab_seqs_from_lookup_list( $reps_list_path, $family_db_file, $reps_seq_path );
-			    (-e "${reps_seq_path}.gz") or die("The gzipped file STILL doesn't exist, even after we tried to make it. Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.");
+		    #OBSOLETE
+		    if( 0 ){
+			if( -e $reps_seq_path ){
+			    #we add the .gz extension in the gzip command inside grab_seqs_from_lookup_list
+			    if(! -e "${reps_seq_path}.gz" ){
+				print "Building reps sequence file for $family\n";
+				_grab_seqs_from_lookup_list( $reps_list_path, $family_db_file, $reps_seq_path );
+				(-e "${reps_seq_path}.gz") or die("The gzipped file STILL doesn't exist, even after we tried to make it. Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.");
+			    }
+			    $family_db_file = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
 			}
-			$family_db_file = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
 		    }
 		}
 	    }
@@ -1375,6 +1386,39 @@ sub build_search_db{
 
     print STDERR "Build Search DB: $type DB was successfully built and compressed.\n";
 }
+
+sub _build_family_ref_path_hash{
+    my ( $ref_ffdb, $type ) = @_;
+    #open the ref_ffdb and look for family-related files (hmms and seqs)
+    my @paths = glob( "${ref_ffdb}/*" );
+    my $family_paths = {};
+    foreach my $path( @paths ){ #top level must be dirs. will skip any files here
+	next( if $path =~ m/^\./ );
+	next unless( -d "${path}" );
+	if( $type eq "hmm" ){ #find hmms and build the db
+	    if( $path =~ m/hmms_full/ ){
+		foreach my $hmm( glob( "${path}/(*).hmm" ) ){
+		    my $family = $1;
+		    my $hmm_path = "${path}/${family}.hmm";
+		    $family_paths->{$type}->{$family} = $hmm_path;
+		}
+	    }
+	}
+	if( $type eq "blast" ){ #find the seqs and build the db
+	    if( $path =~ m/seqs_all/ ){ #then this dir contains seqs that we want to process
+		foreach my $fasta( glob( "${path}/(*).fa" ) ){
+		    my $family = $1;
+		    my $seq_path = "${path}/${family}.fa";
+		    $family_paths->{$type}->{$family} = $seq_path;
+		}		
+	    }  
+	}
+    }
+    print Dumper $family_paths;
+    die;
+    return $family_paths;
+}
+
 
 sub cat_db_split{
     my ($db_path, $n_proc, $ffdb, $suffix, $ra_families_array_ptr, $type, $nr_db) = @_;

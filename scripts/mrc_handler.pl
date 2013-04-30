@@ -177,7 +177,7 @@ $force_search   = 0;
 #optionally set thresholds to use when parsing search results and loading into database. more conservative thresholds decreases DB size
 $p_evalue       = undef;
 $p_coverage     = undef;
-$p_score        = 40;
+$p_score        = 35;
 #optionally set thresholds to use when classifying reads into families.
 $evalue         = undef; #a float
 $coverage       = undef; #between 0-1
