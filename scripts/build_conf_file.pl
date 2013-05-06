@@ -182,20 +182,20 @@ GetOptions( \%options,
     );
 
 my $switches = { #optionless args are printed out differently
-    "reps-only" => 1,
-    "nr"        => 1,
-    "remote"    => 1,
-    "scratch"   => 1,
-    "multi"     => 1,
-    "bulk"      => 1,
-    "slim"      => 1,
-    "use_hmmscan"   => 1,
-    "use_hmmsearch" => 1,
-    "use_blast"     => 1,
-    "use_last"      => 1,
-    "use_rapsearch" => 1,
-    "split-orfs"    => 1,
-    "top-hit"       => 1,
+    "reps-only" => 0,
+    "nr"        => 0,
+    "remote"    => 0,
+    "scratch"   => 0,
+    "multi"     => 0,
+    "bulk"      => 0,
+    "slim"      => 0,
+    "use_hmmscan"   => 0,
+    "use_hmmsearch" => 0,
+    "use_blast"     => 0,
+    "use_last"      => 0,
+    "use_rapsearch" => 0,
+    "split-orfs"    => 0,
+    "top-hit"       => 0,
 };
 
 if( !defined( $db_pass ) ){
@@ -214,8 +214,11 @@ print "Looks like we can connect with these database settings. Building conf-fil
 open( OUT, ">$conf_file" ) || die "Can't open $conf_file for write: $!\n";
 foreach my $key( keys( %options ) ){
     if( defined( $switches->{$key} ) ){
-	next if( ${ $options{$key} } == 0  || !defined( $options{$key} ) );
-	print OUT "--${key}\n";
+	if( ${ $options{$key} } == 0  || !defined( $options{$key} ) ){
+	    print OUT "--no${key}\n";
+	} else {
+	    print OUT "--${key}\n";
+	}
     } else {
 	next unless( defined( ${ $options{$key} } ) );
 	my $value = ${ $options{$key} };

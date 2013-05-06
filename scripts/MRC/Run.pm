@@ -1256,7 +1256,7 @@ sub build_search_db{
     #constrain analysis to a set of families of interest
     my @families   = sort( @{ $self->get_family_subset() });
     if( !@families ){ #is there a subset list? No? then process EVERY family
-	@families = keys( %$family_path_hashref );
+	@families = keys( %{ $family_path_hashref->{$type} } );
     }
     my $n_fams = @families;
     my $count      = 0;
@@ -1282,7 +1282,7 @@ sub build_search_db{
 #	    my $path = "${ref_ffdb}/HMMs/${family}.hmm.gz";
 	    my $path = $family_path_hashref->{$type}->{$family};
 	    if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
-	    (defined($family_db_file)) or die("Can't find the HMM corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" ) . " ");
+	    (defined($family_db_file)) or die("Can't find the HMM corresponding to family $family\n" );
 	    push( @split, $family_db_file );
 	    $count++;
 	    #if we've hit our split size, process the split
@@ -1300,18 +1300,19 @@ sub build_search_db{
 	} elsif( $type eq "blast" ) {
 #	    my $path = "$ref_ffdb/seqs/${family}.fa.gz";
 	    my $path = $family_path_hashref->{$type}->{$family};
+	    
 	    if( -e $path ){
 		$family_db_file = $path; # <-- save the path, if it exists
 		if ($reps_only) {
 		    #do we only want rep sequences from big families?
 		    #first see if there is a reps file for the family
-#		    my $reps_list_path = "${ref_ffdb}/reps/list/${family}.mcl";
 		    my $reps_seq_path = $path;
 		    $reps_seq_path    =~ s/seqs_all/seqs_reps/;
 		    $family_db_file   = $reps_seq_path;
 		    #if so, see if we need to build the seq file
 		    #OBSOLETE
 		    if( 0 ){
+			my $reps_list_path = "${ref_ffdb}/reps/list/${family}.mcl";
 			if( -e $reps_seq_path ){
 			    #we add the .gz extension in the gzip command inside grab_seqs_from_lookup_list
 			    if(! -e "${reps_seq_path}.gz" ){
@@ -1324,14 +1325,25 @@ sub build_search_db{
 		    }
 		}
 	    }
-	    (defined($family_db_file)) or die( "Can't find the BLAST database corresponding to family $family when using the following fci:\n" . join( "\t", @fcis, "\n" )  . " ");
-#	    $family_db_file =  $ffdb . "/BLASTs/" . $family . ".fa.gz";
+	    (defined($family_db_file)) or die( "Can't find the BLAST database corresponding to family $family\n" );
 	    #process the families and produce split dbs along the way
-	    if( $nr_db ){
-		my $nr_tmp      = _build_nr_seq_db( $family_db_file, ".fa" );
+	    my $compressed = 0; #auto detect if ref-ffdb family files are compressed or not
+	    if( $family_db_file =~ m/\.gz$/ ){
+		$compressed = 1;
+	    }
+	    my $suffix = ''; #determine the suffix of the family file
+	    if( $family_db_file =~ m/\.faa$/ || $family_db_file =~ /\.faa\.gz$/ ){
+		$suffix = ".faa";
+	    } elsif( $family_db_file =~ m/\.fa$/ || $family_db_file =~ /\.fa\.gz$/ ){
+		$suffix = ".fa";
+	    } else {
+		die ("I could not determine the suffix associated with $family_db_file\n" );
+	    }	   
+	    if( $nr_db ){		
+		my $nr_tmp      = _build_nr_seq_db( $family_db_file, $suffix, $compressed );
 		$family_db_file = $nr_tmp;
 	    }
-	    open(FILE, "zcat --force $family_db_file |") || die "Unable to open the file \"$family_db_file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!	    
+	    open( FILE, "zcat --force $family_db_file |") || die "Unable to open the file \"$family_db_file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!	    	    
 	    while(<FILE>){
 		if ( $_ =~ m/^\>/ ){
 		    $total++;
@@ -1387,35 +1399,73 @@ sub build_search_db{
     print STDERR "Build Search DB: $type DB was successfully built and compressed.\n";
 }
 
-sub _build_family_ref_path_hash{
+#this recurses through all subdirs under ref-ffdb to look for the seqs and hmms of interest. Be careful with how
+#ref-ffdb is structured!
+sub _build_family_ref_path_hash{ 
     my ( $ref_ffdb, $type ) = @_;
     #open the ref_ffdb and look for family-related files (hmms and seqs)
-    my @paths = glob( "${ref_ffdb}/*" );
     my $family_paths = {};
-    foreach my $path( @paths ){ #top level must be dirs. will skip any files here
-	next( if $path =~ m/^\./ );
+    my $recurse_lvl = 1; #we use these two vars to limit the number of dirs we look into. Otherwise, code can get lost.
+    my $recurse_lim = 3; 
+    $family_paths = _get_family_path_from_dir( $ref_ffdb, $type, $recurse_lvl, $recurse_lim, $family_paths ); 
+    return $family_paths; #a hashref
+}
+
+sub _get_family_path_from_dir{
+    my $dir = shift;
+    my $type = shift;
+    my $recurse_lvl  = shift; #how many recursions are we on
+    my $recurse_lim  = shift; #how many total recursions do we allow?
+    my $family_paths = shift; #hashref
+    opendir( DIR, $dir ) || die "Can't opendir on $dir\n";
+#    my @paths = glob( "${path}/*" );
+    my @paths = readdir( DIR );
+    closedir DIR;
+    foreach my $p( @paths ){ #top level must be dirs. will skip any files here
+	next if ( $p =~ m/^\./ );
+	my $path = $dir . "/" . $p;
 	next unless( -d "${path}" );
-	if( $type eq "hmm" ){ #find hmms and build the db
-	    if( $path =~ m/hmms_full/ ){
-		foreach my $hmm( glob( "${path}/(*).hmm" ) ){
+	#are the top level dirs what we're looking for?
+	#print "Looking in $path\n";
+	if( $path =~ m/hmms_full$/ ){
+	    if( $type eq "hmm" ){ #find hmms and build the db		
+		print "Grabbing family paths from $path\n";
+		opendir( SUBDIR, $path ) || die "Can't opendir subdir $path: $!\n";
+		my @files = readdir( SUBDIR );
+		closedir SUBDIR;
+		foreach my $file( @files ){
+		    next if ($file =~ m/tmp/ ); #don't want to grab any tmp files from old, failed run
+		    next unless( $file =~ m/(.*)\.hmm/ );
 		    my $family = $1;
 		    my $hmm_path = "${path}/${family}.hmm";
 		    $family_paths->{$type}->{$family} = $hmm_path;
 		}
 	    }
 	}
-	if( $type eq "blast" ){ #find the seqs and build the db
-	    if( $path =~ m/seqs_all/ ){ #then this dir contains seqs that we want to process
-		foreach my $fasta( glob( "${path}/(*).fa" ) ){
+	elsif( $path =~ m/seqs_all$/ ){ #then this dir contains seqs that we want to process
+	    if( $type eq "blast" ){ #find the seqs and build the db
+		print "Grabbing family paths from $path\n";
+		opendir( SUBDIR, $path ) || die "Can't opendir subdir $path: $!\n";
+		my @files = readdir( SUBDIR );
+		closedir SUBDIR;
+		foreach my $file( @files ){
+		    next if ($file =~ m/tmp/ ); #don't want to grab any tmp files from old, failed run
+		    next unless( $file =~ m/(.*)\.fa/ || $file =~ m/(.*)\.faa/ );
 		    my $family = $1;
-		    my $seq_path = "${path}/${family}.fa";
+		    my $seq_path = "${path}/${file}";
 		    $family_paths->{$type}->{$family} = $seq_path;
 		}		
 	    }  
 	}
+	else{ #don't have what we're looking for in the top level dirs, so let's recurse a level
+	    my $sub_recurse_lvl = $recurse_lvl + 1; #do this so that each of the sister subdirs get processed fairly
+	    if( $sub_recurse_lvl >= $recurse_lim ){
+		#print "Won't go into $path because recursion limit hit. Recursion number is $sub_recurse_lvl\n";
+		next;
+	    }
+	    $family_paths = _get_family_path_from_dir( $path, $type, $sub_recurse_lvl, $recurse_lim, $family_paths ); 
+	}
     }
-    print Dumper $family_paths;
-    die;
     return $family_paths;
 }
 
@@ -1427,22 +1477,31 @@ sub cat_db_split{
     my $fh;
     open( $fh, ">> $split_db_path" ) || die "Can't open $split_db_path for write: $!\n";
     foreach my $family( @families ){
+	my $compressed = 0; #auto detect if ref-ffdb family files are compressed or not
+	if( $family =~ m/\.gz$/ ){
+	    $compressed = 1;
+	}
 	#do we want a nonredundant version of the DB? 
 	if( defined($nr_db) && $nr_db ){
 	    #make a temp file for the nr 
 	    #append famids to seqids within this routine
-	    my $tmp = _build_nr_seq_db( $family, $suffix ); #make a tmp file for the nr
+	    my $tmp = _build_nr_seq_db( $family, $suffix, $compressed ); #make a tmp file for the nr
 	    File::Cat::cat( $tmp, $fh ); # From the docs: "Copies data from EXPR to FILEHANDLE, or returns false if an error occurred. EXPR can be either an open readable filehandle or a filename to use as input."
 	    unlink( $tmp ); #delete the tmp file
 	}
 	#append famids to seqids, don't build NR database
 	elsif( $type eq "blast" ){
-	    my $tmp = _append_famids_to_seqids( $family, $suffix );
+	    my $tmp = _append_famids_to_seqids( $family, $suffix, $compressed );
 	    File::Cat::cat( $tmp, $fh );
 	    unlink( $tmp );
 	}
 	else{
-	    gunzip $family => $fh;
+	    if( $compressed ){
+		gunzip $family => $fh;
+	    }
+	    else{
+		File::Cat::cat( $family, $fh );
+	    }
 	}
     }
     close $fh;
@@ -1452,11 +1511,17 @@ sub cat_db_split{
 sub _append_famids_to_seqids{
     my $family = shift;
     my $suffix = shift;
+    my $compressed = shift;
     my $family_tmp = $family . "_tmp";
-    my $seqin  = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
+    my( $seqin );
+    if( $compressed ){
+	$seqin  = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
+    } else {
+	$seqin  = Bio::SeqIO->new( -file => "$family", -format => 'fasta' );
+    }
     my $seqout = Bio::SeqIO->new( -file => ">$family_tmp", -format => 'fasta' );
     my $dict   = {};
-    my $famid =  _get_famid_from_familydb_path( $family, $suffix );
+    my $famid =  _get_famid_from_familydb_path( $family, $suffix, $compressed );
     while( my $seq = $seqin->next_seq ){
 	my $id       = $seq->display_id();
 	$seq->display_id( $id . "_" . $famid );
@@ -1471,8 +1536,14 @@ sub _append_famids_to_seqids{
 sub _build_nr_seq_db{
     my $family    = shift;
     my $suffix    = shift;
-    my $family_nr = $family . "_nr_tmp";
-    my $seqin   = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
+    my $compressed = shift;
+    my $family_nr  = $family . "_nr_tmp";
+    my $seqin;
+    if( $compressed ){
+	$seqin   = Bio::SeqIO->new( -file => "zcat $family |", -format => 'fasta' );
+    } else {
+	$seqin   = Bio::SeqIO->new( -file => "$family", -format => 'fasta' );
+    }
     my $seqout  = Bio::SeqIO->new( -file => ">$family_nr", -format => 'fasta' );
     my $dict    = {};
     my $famid   =  _get_famid_from_familydb_path( $family, $suffix );
@@ -1499,7 +1570,10 @@ sub _build_nr_seq_db{
 sub _get_famid_from_familydb_path{
     my $path = shift;
     my $suffix = shift;
-    $suffix    = $suffix . ".gz";
+    my $compressed;
+    if( $compressed ){
+	$suffix    = $suffix . ".gz";
+    }
     my $famid  = basename( $path, $suffix );
     return $famid;
 }

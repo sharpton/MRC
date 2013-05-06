@@ -140,44 +140,28 @@ my $check     = 0;
 my $is_strict = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
 
 if( 0 ){
-$local_ffdb           = undef; #/bueno_not_backed_up/sharpton/MRC_ffdb/"; #where will we store project, result and HMM/blast DB data created by this software?
-$local_reference_ffdb = undef; #"/bueno_not_backed_up/sharpton/sifting_families/"; # Location of the reference flatfile data (HMMs, aligns, seqs for each family). The subdirectories for the above should be fci_N, where N is the family construction_id in the Sfams database that points to the families encoded in the dir. Below that are HMMs/ aligns/ seqs/ (seqs for blast), with a file for each family (by famid) within each.
-
-
-$project_dir   = ""; #where are the project files to be processed?
-
-$db_username   = undef;
-$db_pass       = undef;
-$db_hostname   = undef;
-
 #remote compute (e.g., SGE) vars
 $is_remote        = 1; # By default, assume we ARE using a remote compute cluster
 $stage            = 0; # By default, do NOT stage the database (this takes a long time)!
-$remote_hostname  = undef; #"chef.compbio.ucsf.edu";
-$remote_user      = undef; #"yourname";
-$remoteDir        = undef;
-$remoteExePath    = undef; # like a UNIX $PATH -- just a colon-delimited set of paths to search for executables. Example: /netapp/home/yourname/bin:/somewhere/else/bin
-#my $rscripts       = "/netapp/home/yourname/projects/MRC/scripts/"; # this should probably be automatically set to a subdir of remote_ffdb
-
-$hmm_db_split_size    = 500; #how many HMMs per HMMdb split?
-$blast_db_split_size  = 50000; #how many family sequence files per blast db split? keep small to keep mem footprint low
-$nseqs_per_samp_split = 1000000; #how many seqs should each sample split file contain?
-
-$db_prefix_basename   = undef; # "SFams_all_v0"; #set the basename of your database here.
 $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
 $nr_db                = 1; #should we build a non-redundant version of the sequence database?
-$db_suffix            = "rsdb"; #prerapsearch index can't point to seq file or will overwrite, so append to seq file name 
 
 $hmmdb_build    = 0;
 $blastdb_build  = 0;
 $force_db_build = 0;
 $force_search   = 0;
 
+$use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
+$use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
+$use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
+$use_last       = 0; #should we use last to compare SFam reference sequences to reads?
+$use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
 
 #optionally set thresholds to use when parsing search results and loading into database. more conservative thresholds decreases DB size
 $p_evalue       = undef;
 $p_coverage     = undef;
 $p_score        = 35;
+
 #optionally set thresholds to use when classifying reads into families.
 $evalue         = undef; #a float
 $coverage       = undef; #between 0-1
@@ -192,15 +176,8 @@ $use_last       = 0; #should we use last to compare SFam reference sequences to 
 $use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
 
 $waittime       = 30;
-$input_pid      = undef;
-$goto           = undef; #B=Build HMMdb
-
 $use_scratch    = 0; #should we use scratch space on remote machine?
 
-$dbname         = undef; #"Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
-$schema_name    = undef; #"Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
-
-#Translation settings
 $trans_method         = "transeq";
 $should_split_orfs    = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
 if( $should_split_orfs ){
@@ -225,7 +202,6 @@ $reload               = 0; # Should we drop a previous run of the project from t
 $extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
 $prerare_count  = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to thme
 $postrare_count = undef; #when calculating diversity statistics, randomly select this number of raw reads per sample
-
 }
 
 $conf_file       = undef;
@@ -305,7 +281,7 @@ GetOptions(\%options
 	    #db communication method (NOTE: use EITHER multi OR bulk OR neither)
 	    ,    "multi!"            ,    "multi_count:i"   ,    "bulk!"          ,    "bulk_count:i" ,    "slim!"         
 	    #search methods
-	    ,    "use_hmmscan"       ,    "use_hmmsearch"   ,    "use_blast"      ,    "use_last"     ,    "use_rapsearch" 
+	    ,    "use_hmmscan!"       ,    "use_hmmsearch!"   ,    "use_blast!"      ,    "use_last!"     ,    "use_rapsearch!" 
 	    #general options
 	    ,    "seq-split-size=i"  ,    "prerare-samps:i" ,    "postrare-samps:i" 
 	    #translation options
@@ -343,7 +319,7 @@ if( defined( $conf_file ) ){
 	    #db communication method (NOTE: use EITHER multi OR bulk OR neither)
 	    ,    "multi!"            ,    "multi_count:i"   ,    "bulk!"          ,    "bulk_count:i" ,    "slim!"         
 	    #search methods
-	    ,    "use_hmmscan"       ,    "use_hmmsearch"   ,    "use_blast"      ,    "use_last"     ,    "use_rapsearch" 
+	    ,    "use_hmmscan!"       ,    "use_hmmsearch!"   ,    "use_blast!"      ,    "use_last!"     ,    "use_rapsearch!" 
 	    #general options
 	    ,    "seq-split-size=i"  ,    "prerare-samps:i" ,    "postrare-samps:i" 
 	    #translation options
@@ -395,7 +371,16 @@ if( $slim && !$bulk ){
 #try to detect if we need to stage the database or not on the remote server based on runtime options
 if ($is_remote and ($hmmdb_build or $blastdb_build) and !$stage) {
     #$stage = 1;
-    dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");}
+    dieWithUsageError("If you specify hmm_build or blastdb_build AND you are using a remote server, you MUST specify the --stage option to copy/re-stage the database on the remote machine!");
+}
+
+if( $force_db_build && ( !$hmmdb_build && !$blastdb_build ) ){
+    dieWithUsageError("I don't know what kind of database to build. If you specify --forcedb, you must also specific --hbd and/or --bdb");
+}
+
+if( $force_db_build && $is_remote && !$stage ){
+    dieWithUsageError("You are using --forcedb but not telling me that you want to restage the database on the remote server <$remote_hostname>. Disambiguate by using --stage");
+}
 
 unless( defined( $input_pid ) ){ (-d $project_dir) or dieWithUsageError("You must provide a properly structured project directory! Sadly, the specified directory <$project_dir> did not appear to exist, so we cannot continue!\n") };
 
