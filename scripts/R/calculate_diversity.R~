@@ -1,0 +1,28 @@
+# Invoke %  R  --slave  --args  class.map.file  outdir  out.file.stem  <  calculate_diversity.R
+
+Args             <- commandArgs()
+class.id         <- Args[4]
+outdir           <- Args[5]
+out.file.stem    <- Args[6]
+
+#get the classification maps associated with the class.id
+maps     <- list.files(pattern=paste('ClassificationMap_Sample_.*_ClassID_', class.id, '.tab',sep='' ))
+proj.tab <- NULL
+for( a in 1:length(maps) ){
+     samp.tab     <- NULL
+     class.map    <- read.table( file=maps[a], header = TRUE )
+     FAMID_FACTOR <- as.factor( class.map$FAMID )
+     samp         <- unique( class.map$SAMPLE_ID )
+     famids       <- levels( FAMID_FACTOR )
+     counts       <- table( FAMID_FACTOR )
+     read.count   <- class.map$READ_COUNT[1]
+     samp.tab     <- data.frame( class.map$PROJECT_ID[1], samp, counts, read.count, as.numeric(counts)/read.count )
+     colnames(samp.tab) <- c( "PROJECT_ID", "SAMPLE_ID", "FAMILY_ID", "FREQ", "READ_COUNT", "REL_ABUND" )
+     proj.tab <- rbind( proj.tab, samp.tab )
+}
+
+#per sample RA (add to the above)
+qplot( 1:length(REL_ABUND), sort( REL_ABUND ), data = samp.tab, geom="line" )
+
+#Figure out how to plot stacked bar plots of ordered fams across samples
+ggplot( proj.tab, aes( x = FAMILY_ID, y = REL_ABUND, group=SAMPLE_ID ) ) + geom_line()

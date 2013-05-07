@@ -905,11 +905,11 @@ if ($is_remote){
 }
 
 ### ====================================================================
-#PARSE AND LOAD RESULTS
-PARSESULTS:
+#LOAD RESULTS
+LOADRESULTS:
     ;
 if ($is_remote){
-    printBanner("PARSING REMOTE SEARCH RESULTS");
+    printBanner("LOADING REMOTE SEARCH RESULTS");
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){
 	if (defined($skip_samps{ $sample_id })){
 	    warn("skipping $sample_id because it has apparently been processed already.");
