@@ -2351,7 +2351,13 @@ sub build_classification_maps{
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
-	my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}.tab";
+	my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
+	if( defined( $post_rare_reads ) ){
+	    my @samples   = keys( %$post_rare_reads );
+	    my $rare_size = keys( %{ $post_rare_reads->{$samples[0]} } );
+	    $output .= "_Rare_${rare_size}";
+	}
+	$output .= ".tab";
 	open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
 	print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
 	#how many reads should we count for relative abundance analysis?
@@ -2380,7 +2386,7 @@ sub build_classification_maps{
 		my $read_alt_id = $row->{"read_alt_id"};
 		if( defined( $post_rare_reads->{$sample_id} ) ){
 		    next unless defined $post_rare_reads->{$sample_id}->{$read_alt_id};
-		    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $self->post_rarefy(), "\n" );
+		    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $self->postrarefy_samples(), "\n" );
 		}
 		else{
 		    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $read_count, "\n" );
@@ -2406,7 +2412,7 @@ sub get_post_rarefied_reads{
     my @selected_ids = ();
     if( $is_slim ){ #get from the flat file
 	@read_ids = @{ $self->MRC::DB::get_read_ids_from_ffdb( $sample_id ) };
-	@selected_ids = _random_sample_from_array( $read_number, \@read_ids );
+	@selected_ids = @{ _random_sample_from_array( $read_number, \@read_ids ) };
     }
     else{ #get from the database
 	my $reads = get_reads_by_sample_id( $sample_id );
@@ -2414,7 +2420,7 @@ sub get_post_rarefied_reads{
 	    my $read_id = $read->read_id;
 	    push( @read_ids, $read_id );
 	}
-	@selected_ids = _random_sample_from_array( $read_number, \@read_ids );
+	@selected_ids = @{ _random_sample_from_array( $read_number, \@read_ids ) };
     }
     foreach my $selected_id( @selected_ids ){
 	$post_rare_reads->{$sample_id}->{$selected_id}++; #should never be greater than 1.....

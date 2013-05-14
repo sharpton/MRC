@@ -82,15 +82,30 @@ for( a in 1:length(maps) ){
 }
 
 meta.div   <- merge( div.tab, meta, by = "SAMPLE_ID" )
-
+#build per sample bar plots
+for( b in 1:length( colnames(div.tab) ) ){
+          div.type <- colnames(div.tab)[b]
+	  if( div.type == "SAMPLE_ID" ){
+	      next
+	  }
+	  #may want to figure how to automate reordering...
+	  meta.div$SAMPLE_ORDERED <- factor( meta.div$SAMPLE_ID, meta[,1] )
+          ggplot( meta.div, aes_string(  x="SAMPLE_ORDERED", y= div.type ) ) + 
+           geom_bar( stat="identity", aes( fill = DATA_TYPE ) ) +
+           labs( title = paste( "Per sample values for ", div.type, sep="" ) ) +
+           xlab( "SAMPLE_ORDERED" ) +
+           ylab( div.type )
+          file <- paste( outdir, out.file.stem, "_project", project, "_", meta.type, "_by_", div.type, "_boxes.pdf", sep="" )     
+          ggsave( filename = file, plot = last_plot() )    
+}
 #build boxplots, grouping by metadata fields. Not always informative (e.g., when field isn't discrete)
 for( b in 1:length( meta.names ) ){
      for( d in 1:length( div.types ) ){
           div.type  <- div.types[d]
           meta.type <- meta.names[b]
           ggplot( meta.div, aes_string( x = meta.type, y=div.type ) ) + 
-           geom_boxplot() +
-           labs( title = paste( "Shannon entropy by ", meta.names[b], sep="" ) ) +
+           geom_boxplot( aes( fill = DATA_TYPE ) ) +
+           labs( title = paste( div.type, " by ", meta.names[b], sep="" ) ) +
            xlab( meta.type ) +
            ylab( div.type )
           file <- paste( outdir, out.file.stem, "_project", project, "_", meta.type, "_by_", div.type, "_boxes.pdf", sep="" )     
@@ -103,8 +118,8 @@ for( b in 1:length( meta.names ) ){
           div.type  <- div.types[d]
    	  meta.type <- meta.names[b]
 	  ggplot( meta.div, aes_string( x = meta.type, y=div.type ) ) +
-           geom_point() +
-           labs( title    = paste( "Shannon entropy by ", meta.names[b], sep="" ) ) +
+           geom_point( aes( colour = DATA_TYPE ) ) +
+           labs( title    = paste( div.type," by ", meta.names[b], sep="" ) ) +
            xlab( meta.type ) +
            ylab( div.type )
           file <- paste( outdir, out.file.stem, "_project", project, "_", meta.type, "_by_", div.type, "_lines.pdf", sep="" )     

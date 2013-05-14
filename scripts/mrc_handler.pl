@@ -963,11 +963,13 @@ CLASSIFYREADS:
     ; #might want to eventually store these results in a stand alone mysql table rather than flat file
 printBanner("CLASSIFYING READS");
 my $post_rare_reads = {}; #hash ref that maps samples to read_ids, not just classified reads!
-if( defined( $analysis->post_rarefy) ){
+if( defined( $analysis->postrarefy_samples) ){
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){ 
-        $post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->post_rarefy, $slim, $post_rare_reads );
+	print "Randomly selecting " . $analysis->postrarefy_samples . " reads from sample ${sample_id}\n";
+        $post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->postrarefy_samples, $slim, $post_rare_reads );
     }
 }
+print Dumper $post_rare_reads->{"104"};
 my @algosToRun = ();
 if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
 if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
@@ -986,8 +988,8 @@ foreach my $algo (@algosToRun) {
 	$analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
 	)->classification_id();
     print "Calculating diversity using classification_id ${class_id}\n";
-    if( defined( $analysis->post_rarefy ) ){
-	print "Rarefying to $analysis->post_rarefy reads per sample\n";
+    if( defined( $analysis->postrarefy_samples ) ){
+	print "Rarefying to " . $analysis->postrarefy_samples . " reads per sample\n";
     }
     print "Building classification map...\n";  
 #    if( $analysis->is_slim ){

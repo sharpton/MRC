@@ -1068,7 +1068,7 @@ sub prerarefy_samples{
     return $self->{"prerarefy"};    
 }
 
-sub post_rarefy{
+sub postrarefy_samples{
     my( $self, $value ) = @_;
     if( defined( $value ) ){
 	$self->{"postrarefy"} = $value;
