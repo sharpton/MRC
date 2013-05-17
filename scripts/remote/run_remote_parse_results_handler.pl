@@ -12,13 +12,14 @@ warn "This command was run:\n perl run_remote_parse_resultshandler.pl @ARGV";
 my( $scriptpath, $query_seq_dir,     $result_dir,
     $sample_id,  $classification_id, $algo,       $trans_method,
     $proj_dir,   $scripts_dir,       $db_name,    $nsplits,
-    $t_coverage, $t_evalue,          $t_score,
+    $t_coverage, $t_evalue,          $t_score,    
     );
 
 my $waitTimeInSeconds = 5; # default value is 5 seconds between job checks
 
-my $loop_number  = 2; #how many times should we check that the data was run to completion? we restart failed jobs here
-my $force_parse = 0;
+my $loop_number       = 2; #how many times should we check that the data was run to completion? we restart failed jobs here
+my $force_parse       = 0;
+my $delete_raw_switch = 0; #should we delete the raw search results? Decreases file transfer time. Most relevant data in .msyqld files
 
 GetOptions("resultdir|i=s"  => \$result_dir,
 	   "querydir|q=s"   => \$query_seq_dir,	  
@@ -36,6 +37,7 @@ GetOptions("resultdir|i=s"  => \$result_dir,
 	   "proj-dir=s"     => \$proj_dir,
 	   "script-dir=s"   => \$scripts_dir,
 	   "forceparse!"    => \$force_parse,
+	   "delete-raw=i"   => \$delete_raw_switch,
     );
 
 (defined($result_dir) && (-d $result_dir)) or die "The result directory <$result_dir> was not valid on the REMOTE SERVER! Double check it.";
@@ -100,12 +102,13 @@ foreach my $query_seq_file( @query_files ){
     print "     THRESHOLD: SCORE: $t_score\n";
     print "           PROJECTDIR: $proj_dir\n";
     print "           SCRIPTSDIR: $scripts_dir\n";
+    print "           DELETE_RAW: $delete_raw_switch\n";
     print "         ARRAY STRING: $array_string\n";
     print "-"x60 . "\n";
     my $results = run_remote_parse($scriptpath, $query_seq_dir, $query_seq_file, 
 				    $split_sub_result_dir, $result_file_prefix, $result_file_suffix,
 				    $sample_id, $algo, $trans_method,
-				    $t_evalue,  $t_coverage, $t_score, $proj_dir, $scripts_dir,
+				    $t_evalue,  $t_coverage, $t_score, $proj_dir, $scripts_dir, $delete_raw_switch,
 				    $array_string);
     if ($results =~ m/^Your job-array (\d+)\./) { #an array job
 	my $job_id = $1;
@@ -184,12 +187,13 @@ while( $count <= $loop_number + 1 ){ #the last loop will just report any sets th
 	print "     THRESHOLD: SCORE: $t_score\n";
 	print "           PROJECTDIR: $proj_dir\n";
 	print "           SCRIPTSDIR: $scripts_dir\n";
+	print "           DELETE_RAW: $delete_raw_switch\n";
 	print "         ARRAY STRING: $sub_array_string\n";
 	print "-"x60 . "\n";
 	my $results = run_remote_parse( $scriptpath,            $query_seq_dir,       $query_seq_file, 
 					$split_sub_result_dir,  $result_file_prefix,  $result_file_suffix,
 					$sample_id,             $algo,                $trans_method,
-					$t_evalue, $t_coverage, $t_score, $proj_dir,  $scripts_dir,
+					$t_evalue, $t_coverage, $t_score, $proj_dir,  $scripts_dir,  $delete_raw_switch,
 					$sub_array_string,      $split_array);
 	
 	if ($results =~ m/^Your job-array (\d+)\./) { #an array job
@@ -224,8 +228,8 @@ sub run_remote_parse {
     my ($scriptpath,  $query_seq_dir,      $query_seq_file, 
 	$result_dir,  $result_file_prefix, $result_file_suffix,
 	$sample_id,   $algo,               $trans_method,
-	$t_evalue,    $t_coverage,          $t_score, $proj_dir, 
-	$scripts_dir, $array_string,       $split_array)            = @_;
+	$t_evalue,    $t_coverage,         $t_score, $proj_dir, 
+	$scripts_dir, $delete_raw_switch,  $array_string,       $split_array)            = @_;
 
     warn "Processing <$query_seq_file>. Running with array jobs...";
 
@@ -260,7 +264,7 @@ sub run_remote_parse {
 		 $result_dir,  $result_file_prefix,        $result_file_suffix,
 		 $sample_id,   $algo,         $trans_method,
 		 $t_evalue,    $t_coverage,    $t_score,    $proj_dir, 
-		 $scripts_dir, $split_array);     
+		 $scripts_dir, $delete_raw_switch, $split_array);     
 
     warn("We will attempt to execute the following job:\n qsub @args");
 

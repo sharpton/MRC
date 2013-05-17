@@ -128,7 +128,7 @@ my( $conf_file,            $local_ffdb,            $local_reference_ffdb, $proje
     $nseqs_per_samp_split, $prerare_count,         $postrare_count,       $trans_method,        $should_split_orfs,
     $filter_length,        $p_evalue,              $p_coverage,           $p_score,             $evalue,
     $coverage,             $score,                 $top_hit,              $top_hit_type,        $stage,
-    $hmmdb_build,          $blastdb_build,         $force_db_build,       $force_search,        
+    $hmmdb_build,          $blastdb_build,         $force_db_build,       $force_search,        $small_transfer,
     #non conf-file vars
     $verbose,
     $extraBrutalClobberingOfDirectories,
@@ -146,10 +146,11 @@ $stage            = 0; # By default, do NOT stage the database (this takes a lon
 $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
 $nr_db                = 1; #should we build a non-redundant version of the sequence database?
 
-$hmmdb_build    = 0;
-$blastdb_build  = 0;
-$force_db_build = 0;
-$force_search   = 0;
+$hmmdb_build     = 0;
+$blastdb_build   = 0;
+$force_db_build  = 0;
+$force_search    = 0;
+$small_transfer  = 0;
 
 $use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
 $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
@@ -259,6 +260,7 @@ my %options = ("ffdb"         => \$local_ffdb
 	       ,    "parse-evalue"   => \$p_evalue
 	       ,    "parse-coverage" => \$p_coverage
 	       ,    "parse-score"    => \$p_score
+	       ,    "small-transfer" => \$small_transfer
 	       #family classification thresholds (more stringent)
 	       ,    "class-evalue"   => \$evalue
 	       ,    "class-coverage" => \$coverage
@@ -287,7 +289,7 @@ GetOptions(\%options
 	    #translation options
 	    ,    "trans-method:s"    ,    "split-orfs!"     ,    "min-orf-len:i"    
 	    #search result parsing thresholds (less stringent, optional, defaults to family classification thresholds)
-	    ,    "parse-evalue:f"    ,    "parse-coverage:f",    "parse-score:f"    
+ 	   ,    "parse-evalue:f"    ,    "parse-coverage:f",    "parse-score:f"   ,    "small-transfer!"
 	    #family classification thresholds (more stringent)
 	    ,    "class-evalue:f"    ,    "class-coverage:f",    "class-score:f"   ,    "top-hit!"     ,    "hit-type:s"       
 
@@ -319,13 +321,13 @@ if( defined( $conf_file ) ){
 	    #db communication method (NOTE: use EITHER multi OR bulk OR neither)
 	    ,    "multi!"            ,    "multi_count:i"   ,    "bulk!"          ,    "bulk_count:i" ,    "slim!"         
 	    #search methods
-	    ,    "use_hmmscan!"       ,    "use_hmmsearch!"   ,    "use_blast!"      ,    "use_last!"     ,    "use_rapsearch!" 
+	    ,    "use_hmmscan!"       ,    "use_hmmsearch!"   ,    "use_blast!"      ,    "use_last!"     ,    "use_rapsearch!"
 	    #general options
 	    ,    "seq-split-size=i"  ,    "prerare-samps:i" ,    "postrare-samps:i" 
 	    #translation options
 	    ,    "trans-method:s"    ,    "split-orfs!"     ,    "min-orf-len:i"    
 	    #search result parsing thresholds (less stringent, optional, defaults to family classification thresholds)
-	    ,    "parse-evalue:f"    ,    "parse-coverage:f",    "parse-score:f"    
+	    ,    "parse-evalue:f"    ,    "parse-coverage:f",    "parse-score:f"   ,  "small-transfer!",  
 	    #family classification thresholds (more stringent)
 	    ,    "class-evalue:f"    ,    "class-coverage:f",    "class-score:f"   ,    "top-hit!"     ,    "hit-type:s"       
 	);
@@ -484,6 +486,7 @@ $analysis->set_blastdb_name($blastdb_name); # just always set it; why not, right
 $analysis->trans_method( $trans_method );
 #values used for parsing search results and loading into database
 $analysis->parse_evalue( $p_evalue ); $analysis->parse_coverage( $p_coverage ); $analysis->parse_score( $p_score );
+$analysis->small_transfer( $small_transfer );
 #values used for classifying reads into families
 $analysis->set_clustering_strictness($is_strict); $analysis->set_evalue_threshold($evalue); $analysis->set_coverage_threshold($coverage); $analysis->set_score_threshold($score); $analysis->set_remote_status($is_remote);
 if( defined( $prerare_count ) ){ 
@@ -969,7 +972,6 @@ if( defined( $analysis->postrarefy_samples) ){
         $post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->postrarefy_samples, $slim, $post_rare_reads );
     }
 }
-print Dumper $post_rare_reads->{"104"};
 my @algosToRun = ();
 if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
 if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }

@@ -20,7 +20,7 @@ my( $conf_file,            $local_ffdb,            $local_reference_ffdb, $proje
     $nseqs_per_samp_split, $prerare_count,         $postrare_count,       $trans_method,        $should_split_orfs,
     $filter_length,        $p_evalue,              $p_coverage,           $p_score,             $evalue,
     $coverage,             $score,                 $top_hit,              $top_hit_type,        $stage,
-    $hmmdb_build,          $blastdb_build,         $force_db_build,       $force_search,        
+    $hmmdb_build,          $blastdb_build,         $force_db_build,       $force_search,        $small_transfer,
     $verbose,
     $extraBrutalClobberingOfDirectories,
     $dryRun,
@@ -57,6 +57,7 @@ $hmmdb_build    = 0;
 $blastdb_build  = 0;
 $force_db_build = 0;
 $force_search   = 0;
+$small_transfer = 0;
 
 #optionally set thresholds to use when parsing search results and loading into database. more conservative thresholds decreases DB size
 $p_evalue       = undef;
@@ -150,6 +151,7 @@ my %options = ("ffdb"         => \$local_ffdb
 	       ,    "parse-evalue"   => \$p_evalue
 	       ,    "parse-coverage" => \$p_coverage
 	       ,    "parse-score"    => \$p_score
+	       ,    "small-transfer" => \$small_transfer
 	       #family classification thresholds (more stringent)
 	       ,    "class-evalue"   => \$evalue
 	       ,    "class-coverage" => \$coverage
@@ -176,7 +178,7 @@ GetOptions( \%options,
 	    #translation options
 	    ,    "trans-method:s"    ,    "split-orfs!"     ,    "min-orf-len:i"    
 	    #search result parsing thresholds (less stringent, optional, defaults to family classification thresholds)
-	    ,    "parse-evalue:f"    ,    "parse-coverage:f",    "parse-score:f"    
+	    ,    "parse-evalue:f"    ,    "parse-coverage:f",    "parse-score:f"   , "small-transfer!" 
 	    #family classification thresholds (more stringent)
 	    ,    "class-evalue:f"    ,    "class-coverage:f",    "class-score:f"   ,    "top-hit!"     ,    "hit-type:s"       
     );

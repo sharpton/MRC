@@ -10,9 +10,6 @@
 ##$ -o /dev/null
 ##$ -e /dev/null
 
-#$ -o /scrapp2/sharpton/tmp.out
-#$ -o /scrapp2/sharpton/tmp.err
-
 #$ -l mem_free=2G
 
 SEQPATH=$1  # SEQ is query sequence file used in search step
@@ -30,9 +27,10 @@ COVERAGE=${10}
 SCORE=${11}
 PROJDIR=${12}
 SCRIPTS=${13}
+DELETE_RAW=${14}
 
 #use for rerunning stopped jobs
-SPLIT_REPROC_STRING=${14}
+SPLIT_REPROC_STRING=${15}
 
 if [[ $SPLIT_REPROC_STRING && ${SPLIT_REPROC_STRING-x} ]]
 then
@@ -75,13 +73,18 @@ cp -f ${SEQPATH}/${SEQFILE} /scratch/${SEQFILE}       >> ${ALL_OUT_FILE} 2>&1
 
 date                                                                                   >> ${ALL_OUT_FILE} 2>&1
 #need to properly set the run time options
-echo "perl ${SCRIPTS}/parse_results.pl --results-tab=/scratch/${RESNAME} --orfs-file=/scratch/${SEQFILE} --sample-id=${SAMPLE_ID}  --algo=${ALGO} --trans-method=${TRANSMETH} --evalue=${EVALUE} --coverage=${COVERAGE} --score=${SCORE}"            >> ${ALL_OUT_FILE} 2>&1
+echo "perl ${SCRIPTS}/parse_results.pl --results-tab=/scratch/${RESNAME} --orfs-file=/scratch/${SEQFILE} --sample-id=${SAMPLE_ID}  --algo=${ALGO} --trans-method=${TRANSMETH} --evalue=${EVALUE} --coverage=${COVERAGE} --score=${SCORE}\n"            >> ${ALL_OUT_FILE} 2>&1
 perl ${SCRIPTS}/parse_results.pl --results-tab=/scratch/${RESFILE} --orfs-file=/scratch/${SEQFILE} --sample-id=${SAMPLE_ID} --algo=${ALGO} --trans-method=${TRANSMETH} --evalue=${EVALUE} --coverage=${COVERAGE} --score=${SCORE} >> ${ALL_OUT_FILE} 2>&1
 date                                                                                   >> ${ALL_OUT_FILE} 2>&1
 echo "removing input and dbfiles from scratch"   >> ${ALL_OUT_FILE} 2>&1
 rm /scratch/${SEQFILE}                           >> ${ALL_OUT_FILE} 2>&1
 echo "moving results to main"                    >> ${ALL_OUT_FILE} 2>&1
 mv /scratch/${RESFILE}.mysqld ${RESPATH}/        >> ${ALL_OUT_FILE} 2>&1
+#only delete the raw if we successfully parsed data. else, we want to be able to try reparsing....
+if[ $DELETE_RAW ] && [ -s ${RESPATH}/${RESFILE}.mysqld ] 
+then
+    rm ${RESPATH}/${RESFILE}
+fi
 echo "moved to main"                             >> ${ALL_OUT_FILE} 2>&1
 date                                             >> ${ALL_OUT_FILE} 2>&1
 echo "RUN FINISHED"                              >> ${ALL_OUT_FILE} 2>&1

@@ -28,6 +28,7 @@ use Sfams::Schema;
 use File::Basename;
 use File::Cat;
 use File::Copy;
+use File::Path;
 use IPC::System::Simple qw(capture $EXITVAL);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 use IO::Compress::Gzip qw(gzip $GzipError);
@@ -2018,7 +2019,13 @@ sub get_remote_search_results {
 	my $remote_results_output_dir = $self->get_remote_connection() . ':' . File::Spec->catdir($self->get_remote_sample_path($sample_id), "search_results", $type, $in_orfs);
 	my $local_search_res_dir  = File::Spec->catdir($self->get_sample_path($sample_id), "search_results", $type, $in_orfs);
 #	MRC::Run::transfer_file_into_directory($remoteFile, "$local_search_res_dir/");
-	MRC::Run::transfer_directory("$remote_results_output_dir", "$local_search_res_dir");
+	if( $self->small_transfer ){ #only grab mysqld files
+	    print "You have --small-transfer set, so I'm only grabbing the .mysqld files from the remote server.\n";
+	    File::Path::make_path( $local_search_res_dir );
+	    MRC::Run::transfer_file_into_directory("$remote_results_output_dir/*.mysqld", "$local_search_res_dir/");	    
+	} else { #grab everything
+	    MRC::Run::transfer_directory("$remote_results_output_dir", "$local_search_res_dir");
+	}
     }
 }
 
@@ -2354,7 +2361,7 @@ sub build_classification_maps{
 	my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
 	if( defined( $post_rare_reads ) ){
 	    my @samples   = keys( %$post_rare_reads );
-	    my $rare_size = keys( %{ $post_rare_reads->{$samples[0]} } );
+	    my $rare_size = keys( %{ $post_rare_reads->{ $samples[0] } } );
 	    $output .= "_Rare_${rare_size}";
 	}
 	$output .= ".tab";

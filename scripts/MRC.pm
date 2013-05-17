@@ -130,7 +130,7 @@ sub new{
     $self->{"parse_score"}        = undef;
     $self->{"parse_evalue"}       = undef;
     $self->{"parse_threshold"}    = undef;
-    
+    $self->{"xfer_size"}          = 0; #threshold used in some data transfer processes
     bless($self);
     return $self;
 }
@@ -1107,6 +1107,14 @@ sub parse_evalue{
 	$self->{"parse_evalue"} = $value;
     }
     return $self->{"parse_evalue"};
+}
+
+sub small_transfer{
+    my( $self, $value ) = @_;
+    if( defined( $value ) ){
+	$self->{"xfer_size"} = $value;
+    }
+    return $self->{"xfer_size"};
 }
 
 1;
