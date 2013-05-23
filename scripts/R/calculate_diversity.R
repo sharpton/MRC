@@ -7,6 +7,10 @@ class.id         <- Args[4]
 outdir           <- Args[5] #must have trailing slash!
 out.file.stem    <- Args[6]
 metadata.tab     <- Args[7] #need to figure out how to automate building of this! Maybe we change sample table on the fly....
+rare_value       <- Args[8] #need to check if it is defined or not...
+
+#add trailing slash
+outdir <- paste( outdir, "/", sep="" )
 
 #Shannon Entropy Functions
 #from SJ Riesenfeld
@@ -30,7 +34,7 @@ meta       <- read.table( file=metadata.tab, header = TRUE )
 meta.names <- colnames( meta )
 
 #get the classification maps associated with the class.id
-maps     <- list.files(pattern=paste('ClassificationMap_Sample_.*_ClassID_', class.id, '.tab',sep='' ))
+maps     <- list.files(pattern=paste('ClassificationMap_Sample_.*_ClassID_', class.id, '_Rare_', rare_value, '.tab',sep='' ))
 proj.tab <- NULL #cats samp.tabs together
 div.tab  <- NULL #maps sample id to family relative abundance shannon entropy and richness
 div.types <- c( "RICHNESS" , "RELATIVE_RICHNESS", "SHANNON_ENTROPY" )

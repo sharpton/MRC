@@ -553,6 +553,7 @@ if (defined($goto) && $goto) {
 	MRC::dryNotify("Skipped loading samples.");
     }
     $goto = uc($goto); ## upper case it
+    if ($goto eq "T" or $goto eq "TRANSLATE")   { warn "Skipping to TRANSLATE READS step!\n"; goto TRANSLATE; }
     if ($goto eq "B" or $goto eq "BUILD")   { warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
     if ($goto eq "R" or $goto eq "REMOTE")  { warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
     if ($goto eq "S" or $goto eq "SCRIPT")  { warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
@@ -615,8 +616,10 @@ if ($is_remote){
 
 ## ================================================================================
 ## ================================================================================
-#TRANSLATE READS
+TRANSLATE:
+    ;
 # At this point, project, samples and metareads have been loaded into the DB. Now translate the metareads!
+
 printBanner("TRANSLATING READS");
 
 if (!$dryRun) {

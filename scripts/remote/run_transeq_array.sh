@@ -15,8 +15,6 @@
 
 #rather than set -t here, set it at the command line so that the range can vary across samples (different samples will have different number of splits)
 
-echo "************* THIS SCRIPT APPARENTLY SOURCES TOM'S bash profile!!"
-
 # Arguments to the script: seven command-line arguments
 INPATH=$1
 INBASENAME=$2
@@ -38,14 +36,13 @@ then
 fi
 ## JOB_ID and TASK_ID are both *magic* environment variables that are set automatically by the job scheduler! This is some kind of cluster magic.
 
-ALL_OUT_FILE=$LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.allxb
+ALL_OUT_FILE=$LOGS/transeq/${JOB_ID}.${SGE_TASK_ID}.all
 
 qstat -f -j ${JOB_ID}                           > ${ALL_OUT_FILE} 2>&1
 # Note that the '>' above is just ONE caret, to CREATE the file, and all the subequent ones APPEND to the file ('>>')
 uname -a                                       >> ${ALL_OUT_FILE} 2>&1
 echo "****************************"            >> ${ALL_OUT_FILE} 2>&1
 echo "RUNNING TRANSEQ WITH $*"                 >> ${ALL_OUT_FILE} 2>&1
-#source /netapp/home/sharpton/.bash_profile     >> ${ALL_OUT_FILE} 2>&1
 date                                           >> ${ALL_OUT_FILE} 2>&1
 echo  "transeq -trim -frame=6 -sformat1 pearson -osformat2 pearson $INPUT $OUTPUT"         >> ${ALL_OUT_FILE} 2>&1
 transeq -trim -frame=6 -sformat1 pearson -osformat2 pearson $INPUT $OUTPUT                 >> ${ALL_OUT_FILE} 2>&1
