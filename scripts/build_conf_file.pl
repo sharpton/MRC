@@ -230,4 +230,4 @@ foreach my $key( keys( %options ) ){
 close OUT;
 
 `chmod 0600 $conf_file`;
-print "Passfile created here with permissions 0600: $conf_file\n";
+print "Confile created here with permissions 0600: $conf_file\n";

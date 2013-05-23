@@ -16,28 +16,6 @@
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
 
 --
--- Table structure for table `analysis`
---
-
-DROP TABLE IF EXISTS `analysis`;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8 */;
-CREATE TABLE `analysis` (
-  `analysisid` int(10) NOT NULL AUTO_INCREMENT,
-  `project_id` int(10) unsigned NOT NULL,
-  `famid` int(10) NOT NULL,
-  `treeid` int(10) DEFAULT NULL,
-  `statistics` text,
-  PRIMARY KEY (`analysisid`),
-  KEY `projectid` (`project_id`),
-  KEY `famid` (`famid`),
-  KEY `treeid` (`treeid`),
-  CONSTRAINT `analysis_ibfk_2` FOREIGN KEY (`famid`) REFERENCES `family` (`famid`) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `analysis_ibfk_3` FOREIGN KEY (`treeid`) REFERENCES `trees` (`treeid`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=latin1;
-/*!40101 SET character_set_client = @saved_cs_client */;
-
---
 -- Table structure for table `classification_parameters`
 --
 
@@ -75,8 +53,9 @@ CREATE TABLE `metareads` (
   `seq` text DEFAULT NULL,
   PRIMARY KEY (`read_id`),
   UNIQUE KEY `sample_id_read_alt_id` (`sample_id`,`read_alt_id`),
-  KEY `sampleid` (`sample_id`),
-  CONSTRAINT `metareads_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE
+  KEY `sampleid` (`sample_id`)
+  /*,
+  CONSTRAINT `metareads_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE*/
 ) ENGINE=InnoDB AUTO_INCREMENT=71062786 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -90,7 +69,8 @@ DROP TABLE IF EXISTS `orfs`;
 CREATE TABLE `orfs` (
   `orf_id` int(11) unsigned NOT NULL AUTO_INCREMENT,
   `sample_id` int(11) unsigned NOT NULL,
-  `read_id` int(11) unsigned DEFAULT NULL,
+  /*`read_id` int(11) unsigned DEFAULT NULL*/,
+  `read_alt_id` varchar(256) unsigned DEFAULT NULL,
   `orf_alt_id` varchar(256) NOT NULL,
   `start` int(5) DEFAULT NULL,
   `stop` int(5) DEFAULT NULL,
@@ -99,10 +79,13 @@ CREATE TABLE `orfs` (
   `seq` text DEFAULT NULL,
   PRIMARY KEY (`orf_id`),
   UNIQUE KEY `sample_id_orf_alt_id` (`sample_id`,`orf_alt_id`),
-  KEY `readid` (`read_id`),
-  KEY `sample_id` (`sample_id`),
+  UNIQUE KEY `sample_id_read_alt_id` (`sample_id`,`read_alt_id`),
+  /*KEY `read_id` (`read_id`), */
+  KEY `read_alt_id` (`read_alt_id`),
+  KEY `sample_id` (`sample_id`) 
+  /*,
   CONSTRAINT `orfs_ibfk_1` FOREIGN KEY (`read_id`) REFERENCES `metareads` (`read_id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `orfs_ibfk_2` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE
+  CONSTRAINT `orfs_ibfk_2` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE*/
 ) ENGINE=InnoDB AUTO_INCREMENT=22649737 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
