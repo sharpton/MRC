@@ -7,8 +7,8 @@
 #$ -pe smp 2
 #$ -cwd
 #$ -r y
-##$ -o /dev/null
-##$ -e /dev/null
+#$ -o /dev/null
+#$ -e /dev/null
 
 #$ -l mem_free=2G
 
@@ -81,7 +81,7 @@ rm /scratch/${SEQFILE}                           >> ${ALL_OUT_FILE} 2>&1
 echo "moving results to main"                    >> ${ALL_OUT_FILE} 2>&1
 mv /scratch/${RESFILE}.mysqld ${RESPATH}/        >> ${ALL_OUT_FILE} 2>&1
 #only delete the raw if we successfully parsed data. else, we want to be able to try reparsing....
-if[ $DELETE_RAW ] && [ -s ${RESPATH}/${RESFILE}.mysqld ] 
+if [ $DELETE_RAW ] && [ -s ${RESPATH}/${RESFILE}.mysqld ] 
 then
     rm ${RESPATH}/${RESFILE}
 fi
