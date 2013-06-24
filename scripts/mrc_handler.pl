@@ -221,7 +221,7 @@ my %options = ("ffdb"         => \$local_ffdb
 	       , "dbname"     => \$dbname
 	       , "dbschema"   => \$schema_name
 	       # FFDB Search database related options
-	       , "dbprefix"   => \$db_prefix_basename
+	       , "searchdb-prefix"   => \$db_prefix_basename
 	       , "hmmsplit"   => \$hmm_db_split_size
 	       , "blastsplit" => \$blast_db_split_size
 	       , "sub"        => \$family_subset_list	  
@@ -277,7 +277,7 @@ GetOptions(\%options
 	    # Database-server related variables
 	    , "dbuser|u=s"           , "dbpass|p=s"         , "dbhost=s"          , "dbname=s"        , "dbschema=s"   
 	    # FFDB Search database related options
-	    , "dbprefix=s"           , "hmmsplit=i"         , "blastsplit=i"      , "sub=s"           , "reps-only!"      , "nr!"             , "db_suffix:s"  
+	    , "searchdb-prefix=s"           , "hmmsplit=i"         , "blastsplit=i"      , "sub=s"           , "reps-only!"      , "nr!"             , "db_suffix:s"  
 	    # Remote computational cluster server related variables
 	    , "remote!"              , "rhost=s"            , "ruser=s"           , "rdir=s"          , "rpath=s"         , "scratch!"        , "wait|w=i"    
 	    #db communication method (NOTE: use EITHER multi OR bulk OR neither)
@@ -315,7 +315,7 @@ if( defined( $conf_file ) ){
 	    # Database-server related variables
 	    , "dbuser|u=s"           , "dbpass|p=s"         , "dbhost=s"          , "dbname=s"        , "dbschema=s"   
 	    # FFDB Search database related options
-	    , "dbprefix=s"           , "hmmsplit=i"         , "blastsplit=i"      , "sub=s"           , "reps-only!"      , "nr!"             , "db_suffix:s"  
+	    , "searchdb-prefix=s"           , "hmmsplit=i"         , "blastsplit=i"      , "sub=s"           , "reps-only!"      , "nr!"             , "db_suffix:s"  
 	    # Remote computational cluster server related variables
 	    , "remote!"              , "rhost=s"            , "ruser=s"           , "rdir=s"          , "rpath=s"         , "scratch!"        , "wait|w=i"    
 	    #db communication method (NOTE: use EITHER multi OR bulk OR neither)
@@ -403,7 +403,7 @@ warn("Note: --dbschema=SCHEMA was not specified on the command line, so we are u
 # Automatically set the blast database name, if the user didn't specify something already.
 #set ffdb search database naming parameters
 
-(defined($db_prefix_basename)) or die "Note: db_prefix_basename (database basename/prefix) was not specified on the command line (--dbprefix=PREFIX). Using the default value, which is <$db_prefix_basename>.";
+(defined($db_prefix_basename)) or die "Note: db_prefix_basename (search database basename/prefix) was not specified on the command line (--searchdb-prefix=PREFIX).";
 if( defined( $family_subset_list ) ){
     my $subset_name = basename( $family_subset_list ); 
     $db_prefix_basename = $db_prefix_basename. "_" . $subset_name; 
@@ -1090,8 +1090,8 @@ DATABASE ARGUMENTS:
 --dbschema=SCHEMANAME (OPTIONAL argument: default is "Sfams::Schema")
     The schema name.
 
---dbprefix=STRING (Optional: default is "SFams_all_v0")
-    Some kind of prefix/basename. I am confused.
+--searchdb-prefix=STRING (Optional: default is "SFams_all")
+    The prefix string that defines the search databases (sequence and HMM) that we will build.
 
 REMOTE COMPUTATIONAL CLUSTER ARGUMENTS:
 

@@ -69,8 +69,8 @@ DROP TABLE IF EXISTS `orfs`;
 CREATE TABLE `orfs` (
   `orf_id` int(11) unsigned NOT NULL AUTO_INCREMENT,
   `sample_id` int(11) unsigned NOT NULL,
-  /*`read_id` int(11) unsigned DEFAULT NULL*/,
-  `read_alt_id` varchar(256) unsigned DEFAULT NULL,
+  /*`read_id` int(11) unsigned DEFAULT NULL, */
+  `read_alt_id` varchar(256) DEFAULT NULL,
   `orf_alt_id` varchar(256) NOT NULL,
   `start` int(5) DEFAULT NULL,
   `stop` int(5) DEFAULT NULL,

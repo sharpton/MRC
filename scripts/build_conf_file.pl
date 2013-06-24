@@ -5,9 +5,6 @@ use Getopt::Long;
 use DBI;
 use Data::Dumper;
 
-#build_pass_file.pl - This script builds a password file for MySQL connections and sets 0600 permissions on the file such that only root and the user
-#can read it. This is NOT the most secure way to manage the MySQL password via MRC. Future versions will focus on implementing cryptographic hashes
-
 #Initialize vars
 
 my( $conf_file,            $local_ffdb,            $local_reference_ffdb, $project_dir,         $input_pid,
@@ -112,7 +109,7 @@ my %options = ("ffdb"         => \$local_ffdb
 	       , "dbname"     => \$dbname
 	       , "dbschema"   => \$schema_name
 	       # FFDB Search database related options
-	       , "dbprefix"   => \$db_prefix_basename
+	       , "searchdb=prefix"   => \$db_prefix_basename
 	       , "hmmsplit"   => \$hmm_db_split_size
 	       , "blastsplit" => \$blast_db_split_size
 	       , "sub"        => \$family_subset_list	  
@@ -166,7 +163,7 @@ GetOptions( \%options,
 	    # Database-server related variables
 	    , "dbuser|u=s"           , "dbpass|p=s"         , "dbhost=s"          , "dbname=s"        , "dbschema=s"   
 	    # FFDB Search database related options
-	    , "dbprefix=s"           , "hmmsplit=i"         , "blastsplit=i"      , "sub=s"           , "reps-only!"      , "nr!"             , "db_suffix:s"  
+	    , "searchdb-prefix=s"           , "hmmsplit=i"         , "blastsplit=i"      , "sub=s"           , "reps-only!"      , "nr!"             , "db_suffix:s"  
 	    # Remote computational cluster server related variables
 	    , "remote!"              , "rhost=s"            , "ruser=s"           , "rdir=s"          , "rpath=s"         , "scratch!"        , "wait|w=i"    
 	    #db communication method (NOTE: use EITHER multi OR bulk OR neither)
