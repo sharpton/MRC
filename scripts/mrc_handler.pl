@@ -975,7 +975,6 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 #	foreach my $sample_id(@{ $analysis->get_sample_ids() }){ 
 	print "Randomly selecting " . $analysis->postrarefy_samples . " reads from sample ${sample_id}\n";
 	$post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->postrarefy_samples, $slim, $post_rare_reads );
-	print Dumper $post_rare_reads;
 #	}
     }
     my @algosToRun = ();
