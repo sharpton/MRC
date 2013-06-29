@@ -35,7 +35,7 @@ CREATE TABLE `classification_parameters` (
   KEY `score_threshold` (`score_threshold`),
   KEY `method` (`method`),
   KEY `reference_database_name` (`reference_database_name`)
-) ENGINE=InnoDB AUTO_INCREMENT=46 DEFAULT CHARSET=latin1;
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 
@@ -56,7 +56,7 @@ CREATE TABLE `metareads` (
   KEY `sampleid` (`sample_id`)
   /*,
   CONSTRAINT `metareads_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE*/
-) ENGINE=InnoDB AUTO_INCREMENT=71062786 DEFAULT CHARSET=latin1;
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -86,7 +86,7 @@ CREATE TABLE `orfs` (
   /*,
   CONSTRAINT `orfs_ibfk_1` FOREIGN KEY (`read_id`) REFERENCES `metareads` (`read_id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `orfs_ibfk_2` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE*/
-) ENGINE=InnoDB AUTO_INCREMENT=22649737 DEFAULT CHARSET=latin1;
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -101,7 +101,7 @@ CREATE TABLE `project` (
   `name` varchar(64) DEFAULT NULL,
   `description` text,
   PRIMARY KEY (`project_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=87 DEFAULT CHARSET=latin1;
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 
@@ -142,7 +142,7 @@ CREATE TABLE `samples` (
   UNIQUE KEY `project_id_sample_alt_id` (`project_id`,`sample_alt_id`),
   KEY `project_id` (`project_id`),
   CONSTRAINT `samples_ibfk_1` FOREIGN KEY (`project_id`) REFERENCES `project` (`project_id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=97 DEFAULT CHARSET=latin1;
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 

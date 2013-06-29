@@ -396,7 +396,7 @@ warn("Note: --dbname=NAME was not specified on the command line, so we are using
 }
 
 if (!defined($schema_name)) {
-    $schema_name = "SFams::Schema";
+    $schema_name = "MRC::Schema";
 warn("Note: --dbschema=SCHEMA was not specified on the command line, so we are using the default schema name, which is \"$schema_name\".");
 }
 
@@ -613,6 +613,7 @@ if ($is_remote){
 
     $analysis->set_remote_project_log_dir(  File::Spec->catdir( $analysis->get_remote_project_path(), "logs"));
 }
+
 
 ## ================================================================================
 ## ================================================================================
@@ -968,42 +969,40 @@ if ($is_remote){
 CLASSIFYREADS: 
     ; #might want to eventually store these results in a stand alone mysql table rather than flat file
 printBanner("CLASSIFYING READS");
-my $post_rare_reads = {}; #hash ref that maps samples to read_ids, not just classified reads!
-if( defined( $analysis->postrarefy_samples) ){
-    foreach my $sample_id(@{ $analysis->get_sample_ids() }){ 
+foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
+    my $post_rare_reads = {}; #hash ref that maps samples to read_ids, not just classified reads!
+    if( defined( $analysis->postrarefy_samples) ){
+#	foreach my $sample_id(@{ $analysis->get_sample_ids() }){ 
 	print "Randomly selecting " . $analysis->postrarefy_samples . " reads from sample ${sample_id}\n";
-        $post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->postrarefy_samples, $slim, $post_rare_reads );
+	$post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->postrarefy_samples, $slim, $post_rare_reads );
+	print Dumper $post_rare_reads;
+#	}
+    }
+    my @algosToRun = ();
+    if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
+    if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
+    if ($use_blast)     { push(@algosToRun, "blast"); }
+    if ($use_last)      { push(@algosToRun, "last"); }
+    if ($use_rapsearch) { push(@algosToRun, "rapsearch"); }
+    foreach my $algo (@algosToRun) {
+	my ( $class_id, $db_name );
+	if( $algo eq "hmmsearch" || $algo eq "hmmscan" ){
+	    $db_name = $hmmdb_name;
+	}
+	if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch" ){
+	    $db_name = $blastdb_name;
+	}
+	$class_id = $analysis->MRC::DB::get_classification_id(
+	    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
+	    )->classification_id();
+	print "Calculating diversity using classification_id ${class_id}\n";
+	if( defined( $analysis->postrarefy_samples ) ){
+	    print "Rarefying to " . $analysis->postrarefy_samples . " reads per sample\n";
+	}
+	print "Building classification map...\n";  
+	$analysis->MRC::Run::build_classification_maps_by_sample($sample_id, $class_id, $post_rare_reads);
     }
 }
-my @algosToRun = ();
-if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
-if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
-if ($use_blast)     { push(@algosToRun, "blast"); }
-if ($use_last)      { push(@algosToRun, "last"); }
-if ($use_rapsearch) { push(@algosToRun, "rapsearch"); }
-foreach my $algo (@algosToRun) {
-    my ( $class_id, $db_name );
-    if( $algo eq "hmmsearch" || $algo eq "hmmscan" ){
-	$db_name = $hmmdb_name;
-    }
-    if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch" ){
-	$db_name = $blastdb_name;
-    }
-    $class_id = $analysis->MRC::DB::get_classification_id(
-	$analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
-	)->classification_id();
-    print "Calculating diversity using classification_id ${class_id}\n";
-    if( defined( $analysis->postrarefy_samples ) ){
-	print "Rarefying to " . $analysis->postrarefy_samples . " reads per sample\n";
-    }
-    print "Building classification map...\n";  
-#    if( $analysis->is_slim ){
-#	$analysis->MRC::Run::build_classification_map_slim($class_id, $post_rare_reads);
-#    }
-#    else{
-    $analysis->MRC::Run::build_classification_maps($class_id, $post_rare_reads);
-#    }
-
 
 ### ====================================================================
 #calculate diversity statistics
@@ -1014,8 +1013,7 @@ CALCDIVERSITY:
 ##file path.
     
 #R functions called here via wrappers in Run
-    
-}
+   
 
 
 ### ====================================================================

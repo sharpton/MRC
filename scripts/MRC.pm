@@ -14,7 +14,8 @@ package MRC;
 
 use MRC::DB;
 use MRC::Run;
-use SFams::Schema;
+#use SFams::Schema;
+use MRC::Schema;
 use Data::Dumper;
 use File::Basename;
 use File::Path;

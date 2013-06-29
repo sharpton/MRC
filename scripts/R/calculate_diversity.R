@@ -7,15 +7,14 @@ class.id         <- Args[4]
 outdir           <- Args[5] #must have trailing slash!
 out.file.stem    <- Args[6]
 metadata.tab     <- Args[7] #need to figure out how to automate building of this! Maybe we change sample table on the fly....
-rare_value       <- Args[8] #need to check if it is defined or not...
+rare.value       <- Args[8] #need to check if it is defined or not...
 
 #add trailing slash
 outdir <- paste( outdir, "/", sep="" )
-
+dir.create( file.path( outdir), showWarnings = FALSE )
 #Shannon Entropy Functions
 #from SJ Riesenfeld
 sh.entropy <- function(v,base=2) {
-
   p = as.numeric(v) / sum(v)
   sh.entropy = sum(sapply(v, coord.sh.entropy, base))
   return (sh.entropy)
@@ -29,15 +28,23 @@ coord.sh.entropy <- function(x, base=2) {
   }
 }
 
+#Good's coverage
+#takes list of abundances per family and total number of reads across sample
+goods.coverage <- function( abunds, count ) {
+  singletons = length( subset( abunds, abunds == 1 ) )
+  coverage   = 1 - ( singletons / count )
+  return( coverage )
+}
+
 #get the metadata
 meta       <- read.table( file=metadata.tab, header = TRUE )
 meta.names <- colnames( meta )
 
 #get the classification maps associated with the class.id
-maps     <- list.files(pattern=paste('ClassificationMap_Sample_.*_ClassID_', class.id, '_Rare_', rare_value, '.tab',sep='' ))
+maps     <- list.files(pattern=paste('ClassificationMap_Sample_.*_ClassID_', class.id, '_Rare_', rare.value, '.tab',sep='' ))
 proj.tab <- NULL #cats samp.tabs together
 div.tab  <- NULL #maps sample id to family relative abundance shannon entropy and richness
-div.types <- c( "RICHNESS" , "RELATIVE_RICHNESS", "SHANNON_ENTROPY" )
+div.types <- c( "RICHNESS" , "RELATIVE_RICHNESS", "SHANNON_ENTROPY", "GOODS_COVERAGE" )
 
 for( a in 1:length(maps) ){
      #build a new sample classification table
@@ -61,7 +68,8 @@ for( a in 1:length(maps) ){
      richness     <- length( unique( famids ) )              
      rel.richness <- richness / read.count
      shannon      <- sh.entropy( samp.tab$RELATIVE_ABUNDANCE )
-     samp.div     <- data.frame( SAMPLE_ID=samp, NUM_READS=read.count, CLASS_READS=class.count, CLASS_RATIO=class.ratio, RICHNESS=richness, RELATIVE_RICHNESS=rel.richness, SHANNON_ENTROPY=shannon )
+     goods        <- goods.coverage( samp.tab$ABUNDANCE, samp.tab$READ_COUNT[1] )
+     samp.div     <- data.frame( SAMPLE_ID=samp, NUM_READS=read.count, CLASS_READS=class.count, CLASS_RATIO=class.ratio, RICHNESS=richness, RELATIVE_RICHNESS=rel.richness, SHANNON_ENTROPY=shannon, GOODS_COVERAGE=goods)
      div.tab      <- rbind( div.tab, samp.div )
 
      #Make Sample Plots
@@ -88,7 +96,7 @@ for( a in 1:length(maps) ){
 meta.div   <- merge( div.tab, meta, by = "SAMPLE_ID" )
 #build per sample bar plots
 for( b in 1:length( colnames(div.tab) ) ){
-          div.type <- colnames(div.tab)[b]
+proj.tab <- NULL #cats samp.tabs together           div.type <- colnames(div.tab)[b]
 	  if( div.type == "SAMPLE_ID" ){
 	      next
 	  }
@@ -132,4 +140,28 @@ for( b in 1:length( meta.names ) ){
 }
 
 #Figure out how to plot stacked bar plots of ordered fams across samples
-#ggplot( proj.tab, aes( x = FAMILY_ID, y = REL_ABUND, group=SAMPLE_ID ) ) + geom_line()
+#order samples by the relative abundance of families across all samples
+#sort(proj.tab$RELATIVE_ABUNDANCE, decreasing=TRUE)
+proj.tab$FAMILY <- as.numeric(as.vector(proj.tab$FAMILY_ID)) #get rid of family levels
+
+proj.sort       <- proj.tab[with(proj.tab, order(-RELATIVE_ABUNDANCE)),]
+proj.tab$FAMILY <- factor( proj.tab$FAMILY_ID, proj.sort$FAMILY_ID) #will spit warnings, safe to ignore
+#get rid of unused factor levels (https://stat.ethz.ch/pipermail/r-help/2009-November/216878.html)
+proj.tab$FAMILY <- factor( proj.tab$FAMILY ) #will spit warnings, safe to ignore. Will no longer get warnings on these factors afterwards
+
+library(reshape2)
+proj.sort.m    <- melt( proj.sort, id=c("SAMPLE_ID", "FAMILY") )
+proj.sort.m.ra <- subset( proj.sort.m, proj.sort.m$variable == "RELATIVE_ABUNDANCE" )
+proj.ra.cast   <- acast( proj.sort.m.ra, SAMPLE_ID ~ FAMILY ~ variable )
+###PICK UP HERE!
+
+
+
+ggplot( proj.sort.m.ra[1:100,], aes( x = FAMILY, y = value, fill = as.character(SAMPLE_ID) ) ) + geom_bar( stat = "identity", position = "dodge" ) +
+      ylab( "Relative Abundance" ) +
+      xlab( "Family Rank" ) +
+      theme( axis.text.x = element_blank() ) +
+      labs( title = paste( "Protein Family Frequencies Across all Samples" ) )
+
+
+

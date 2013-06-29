@@ -22,7 +22,8 @@ package MRC::DB;
 
 use strict;
 
-use Sfams::Schema;
+#use Sfams::Schema;
+#use MRC::Schema;
 use Data::Dumper;
 use File::Basename;
 use File::Copy;
@@ -241,7 +242,20 @@ sub bulk_import{
 	    chomp $_;
 	    if( $_ =~ m/^\>(.*?)(\s|$)/ ){
 		my $read_alt_id = $1;
-		push ( @rows, "$sample_id,$read_alt_id" );
+		my $tot_chars   = (); #need to keep track of the raw sequence string for seeking
+		my $seq         = ();
+		my $in          = 0; #have we moved past current sequence header and into seq?
+		while( <SEQS> ){ #let's get the sequence for this header
+		    if( $in && ( $_ =~ m/^\>/ || eof ) ){ #check to see if current line is the next seq. if so, break loop.
+			$seq =~ s/\n//g;
+			seek( SEQS, -length( $tot_chars ), 1 );
+			last;
+		    }
+		    $in = 1;
+		    $tot_chars = $tot_chars . $_; #keep track of the file bits
+		    $seq       = $seq . $_; #append the sequence
+		}
+		push ( @rows, "$sample_id,$read_alt_id,$seq" );
 		$count++;
 	    }
 	    if( eof || $count == $nrows ){
@@ -250,7 +264,7 @@ sub bulk_import{
 		print OUT join( "\n", @rows );
 		close OUT;
 		my $sql = "LOAD DATA LOCAL INFILE '" . $out . "' INTO TABLE " . $table . " FIELDS TERMINATED BY ',' " . 
-		    "LINES TERMINATED BY '\\n' ( sample_id, read_alt_id )";
+		    "LINES TERMINATED BY '\\n' ( sample_id, read_alt_id, seq )";
 		#join(",", @fields) . ")";
 		my $sth = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
 		$inserts = $inserts + $sth;
@@ -813,11 +827,26 @@ sub get_number_reads_in_sample{
 sub get_reads_by_sample_id{
     my $self = shift;
     my $sample_id = shift;
-    my $reads = $self->get_schema->resultset('Metaread')->search(
-	{
-	    sample_id => $sample_id,
+    my $get_random = shift; #1 or 0, may be undef
+    my $rand_row_num = shift; #num rows to grab if get_random is set
+    my $reads;
+    if( defined( $get_random ) && $get_random ){
+	if( !defined( $rand_row_num ) ){
+	    $rand_row_num = 1;
 	}
-    );
+	$reads = $self->get_schema->resultset('Metaread')->search(
+	    {
+		sample_id => $sample_id,
+	    }
+	    )->rand( $rand_row_num );
+    }
+    else{
+	$reads = $self->get_schema->resultset('Metaread')->search(
+	    {
+		sample_id => $sample_id,
+	    }
+	    );
+    }	
     return $reads;
 }
 

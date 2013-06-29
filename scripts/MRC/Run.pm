@@ -268,34 +268,33 @@ sub load_samples{
 	    my $tmp    = "/tmp/" . $samp . ".sql";	    
 	    my $table  = "metareads";
 	    my $nrows  = 10000;
-	    my @fields = ( "sample_id", "read_alt_id" );
+	    my @fields = ( "sample_id", "read_alt_id", "seq" );
 	    my $fks    = { "sample_id" => $sid }; #foreign keys and fields not in file 
-	    unless( $self->is_slim() ){
+            #unless( $self->is_slim() ){ #we require reads to be loaded so that we can scale rarefaction analysis later
 		$self->MRC::DB::bulk_import( $table, $samples{$samp}->{"path"}, $tmp, $nrows, $fks, \@fields );
-	    }
+	    #} #from the commented unless block above
 	}
 	else{
 	    #could speed this up by getting out of bioperl...
 	    my $seqs                = Bio::SeqIO->new( -file => $samples{$samp}->{"path"}, -format => 'fasta' );
 	    my $numReads            = 0;
-	    unless( $self->is_slim() ){
-		if ($self->is_multiload()) {
-		    my @read_names = (); # empty list to start...
-		    while (my $read = $seqs->next_seq()) {
-			my $read_name = $read->display_id();
-			push( @read_names, $read_name );
-			$numReads++;
-		    }
-		    $self->MRC::DB::create_multi_metareads( $sid, \@read_names );
-		} else{
-		    while (my $read = $seqs->next_seq()) { ## If we AREN'T multi-loading, then do this...
-			my $read_name = $read->display_id();
-			$self->MRC::DB::create_metaread($read_name, $sid);
-			$numReads++;
-		    }
-		}
-	    }
-	    MRC::notify("Loaded $numReads reads for sample $sid into the database.");
+	    #unless( $self->is_slim() ){ #we require reads to be loaded so that we can scale rarefaction analysis later
+    	      if ($self->is_multiload()) {
+		  my @read_names = (); # empty list to start...
+		  while (my $read = $seqs->next_seq()) {
+		      my $read_name = $read->display_id();
+		      push( @read_names, $read_name );
+		      $numReads++;
+		  }
+		  $self->MRC::DB::create_multi_metareads( $sid, \@read_names );
+	      } else{
+		  while (my $read = $seqs->next_seq()) { ## If we AREN'T multi-loading, then do this...
+		      my $read_name = $read->display_id();
+		      $self->MRC::DB::create_metaread($read_name, $sid);
+		      $numReads++;
+		  }
+	      }
+	      MRC::notify("Loaded $numReads reads for sample $sid into the database.");
 	}
     }
     $self->set_samples(\%samples);
@@ -1723,7 +1722,7 @@ sub translate_reads_remote($$$$$) {
     my $remote_script_dir = $self->get_remote_script_dir();
 
     my $local_copy_of_remote_handler  = File::Spec->catfile($self->get_scripts_dir(), "remote", "run_transeq_handler.pl");
-    my $local_copy_of_remote_script   = File::Spec->catfile($self->get_scripts_dir(), "remote", "run_transeq_array.sh"); # what is going on here
+    my $local_copy_of_remote_script   = File::Spec->catfile($self->get_scripts_dir(), "remote", "run_transeq_array.sh"); 
     my $transeqPerlRemote = File::Spec->catfile($remote_script_dir, "run_transeq_handler.pl");
     
     MRC::Run::transfer_file_into_directory($local_copy_of_remote_handler, "$connection:$remote_script_dir/"); # transfer the script into the remote directory
@@ -2356,7 +2355,7 @@ sub build_classification_map_slim_old{
 sub build_classification_maps{
     my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
     #create the outfile
-    #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
+    #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MA
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
 	my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
 	if( defined( $post_rare_reads ) ){
@@ -2405,6 +2404,58 @@ sub build_classification_maps{
 	close OUT;
     }
 
+    #return $map;
+}
+
+sub build_classification_maps_by_sample{
+    my ($self, $sample_id, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
+    #create the outfile
+    #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
+    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
+    if( defined( $post_rare_reads ) ){
+	my @samples   = keys( %$post_rare_reads );
+	my $rare_size = keys( %{ $post_rare_reads->{ $samples[0] } } );
+	$output .= "_Rare_${rare_size}";
+    }
+    $output .= ".tab";
+    open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
+    print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
+    #how many reads should we count for relative abundance analysis?
+    my $read_count;
+    if(!defined( $post_rare_reads->{$sample_id} ) ){
+	print( "Calculating classification results using all reads loaded into the database\n" );
+	$read_count = @{ $self->MRC::DB::get_read_ids_from_ffdb( $sample_id ) }; #need this for relative abundance calculations
+    }
+    #now get the classified results for this sample
+    my $dbh  = $self->MRC::DB::build_dbh();
+    my $members_rs = $self->MRC::DB::get_classified_orfs_by_sample( $sample_id, $class_id, $dbh );
+    #did mysql return any results for this query?
+    my $nrows = 0;
+    $nrows    = $members_rs->rows();
+    print "MySQL return $nrows rows for the above query.\n";
+    if( $nrows == 0 ){
+	warn "Since we returned no rows for this classification query, you might want to check the stringency of your classification parameters.\n";
+	next;
+    }
+    my $max_rows = 10000;
+    while( my $rows = $members_rs->fetchall_arrayref( {}, $max_rows ) ){
+	foreach my $row( @$rows ){
+	    my $orf_alt_id = $row->{"orf_alt_id"};		
+	    #while( my $member = $members_rs->next() ){
+	    my $famid       = $row->{"famid"};
+	    my $read_alt_id = $row->{"read_alt_id"};
+	    if( defined( $post_rare_reads->{$sample_id} ) ){
+		next unless defined $post_rare_reads->{$sample_id}->{$read_alt_id};
+		print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $self->postrarefy_samples(), "\n" );
+	    }
+	    else{
+		print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $read_count, "\n" );
+	    }
+	}
+	#$map->{$self->get_project_id()}->{$sample_id}->{$read_id}->{$orf_id}->{$famid}++; #NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
+    }
+    $self->MRC::DB::disconnect_dbh( $dbh );	
+    close OUT;
     #return $map;
 }
 
