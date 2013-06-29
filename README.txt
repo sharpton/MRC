@@ -1,5 +1,6 @@
 OVERVIEW
 
+
 MRC is a metagenomic and metatranscriptomic data and analysis management workflow. In brief, it interfaces with a database of protein families and classifies translated metagenomic/metatrnascriptomic sequence reads into families. Classified reads are considered homologs of the family and the family's functional annotation is transferred to the read. The raw sequence read data, translated peptides, and classification results are all stored in a relational MySQL database, which is queried to calculate functional diversity, such as protein family richness and relative abundance.
 
 MRC handles the communication between three different servers throughout the workflow: 
