@@ -24,7 +24,6 @@ use strict;
 use MRC;
 use MRC::DB;
 use Data::Dumper;
-use Sfams::Schema;
 use File::Basename;
 use File::Cat;
 use File::Copy;
@@ -247,11 +246,11 @@ sub load_samples{
 		print STDERR ("   7. You MAY also need to delete the entry from the 'samples' table in MySQL that has the same name as this sample/proejct.\n");
 		print STDERR ("   8. Try connecting to mysql, then typing 'select * from samples;' . You should see an OLD project ID (but with the same textual name as this one) that may be preventing you from running another analysis. Delete that id ('delete from samples where sample_id=the_bad_id;'");
 		my $mrcCleanCommand = (qq{perl \$MRC_LOCAL/scripts/mrc_clean_project.pl} 
-				       . qq{ --pid=} . $pid
+				       . qq{ --pid=}    . $pid
 				       . qq{ --dbuser=} . $self->get_username()
 				       . qq{ --dbpass=} . "PUT_YOUR_PASSWORD_HERE"
 				       . qq{ --dbhost=} . $self->get_db_hostname()
-				       . qq{ --ffdb=} . $self->get_ffdb()
+				       . qq{ --ffdb=}   . $self->get_ffdb()
 				       . qq{ --dbname=} . $self->get_db_name()
 				       . qq{ --schema=} . $self->{"schema_name"});
 		print STDERR (" Option C: Run mrc_cleand_project.pl as follows:\n" );
@@ -348,7 +347,7 @@ sub back_load_samples{
     my %samples = ();
     foreach my $file( @files ){
 	next if ( $file =~ m/^\./ || $file =~ m/logs/ || $file =~ m/hmmscan/ || $file =~ m/output/ || $file =~ m/\.sh/ );
-	my $sample_id = $file; # hmm.
+	my $sample_id = $file;
 	my $samp    = $self->MRC::DB::get_sample_by_sample_id( $sample_id );
 #	my $sample_name = $samp->name();
 #	$samples{$sample_name}->{"id"} = $sample_id;
@@ -762,7 +761,8 @@ sub find_orf_fam_tophit{ #for each orf to family mapping, find the top hit
 	    $famid  = $4;
 	    $score  = $5;
 	} else {
-	    die( "Can't parse orf_alt_id, famid, or score from $result_file where line is $_\n" );
+	   warn( "Can't parse orf_alt_id, famid, or score from $result_file where line is $_\n" );
+	   next;
 	}
 	if( !defined($orf_fam_tophit->{$orf}->{$famid} ) ){
 	    $orf_fam_tophit->{$orf}->{$famid}->{'score'} = $score;
@@ -1269,19 +1269,30 @@ sub build_search_db{
     my $seqs  = {};
     my $id    = ();
     my $seq   = '';	   
+    my $redunts;
+    #build a map of family lengths
+    open( FAMLENS, ">${raw_db_path}/family_lengths.tab" ) || die "Can't open ${raw_db_path}/family_lengths.tab for write: $!\n";
+    #blast requires tmp files for creation of NR database
     if( $type eq "blast" ){
 	$tmp_path = "${db_path_with_name}.tmp";
 	open( TMP, ">$tmp_path" ) || die "Can't open $tmp_path for write: $!\n";
 	$tmp = *TMP;	    
+	#need a home to list redundant sequence mappings if $nr_db
+	if( $nr_db ){
+	    my $redunt_path = "${raw_db_path}/redundant_sequence_pairings.tab";
+	    open( REDUNTS, ">${redunt_path}" ) || die "Can't open ${redunt_path} for write:$!\n";
+	    $redunts = *REDUNTS;
+	}
     }       
     foreach my $family( @families ){
 	#find the HMM/sequences associated with the family (compressed)
 	my $family_db_file = undef;
-	
+	my $family_length  = undef;
 	if ($type eq "hmm") {
 #	    my $path = "${ref_ffdb}/HMMs/${family}.hmm.gz";
 	    my $path = $family_path_hashref->{$type}->{$family};
 	    if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
+	    $family_length = _get_family_length( $family_db_file, $type ); #get the family length from the HMM file
 	    (defined($family_db_file)) or die("Can't find the HMM corresponding to family $family\n" );
 	    push( @split, $family_db_file );
 	    $count++;
@@ -1299,8 +1310,7 @@ sub build_search_db{
 	    }
 	} elsif( $type eq "blast" ) {
 #	    my $path = "$ref_ffdb/seqs/${family}.fa.gz";
-	    my $path = $family_path_hashref->{$type}->{$family};
-	    
+	    my $path = $family_path_hashref->{$type}->{$family};	    
 	    if( -e $path ){
 		$family_db_file = $path; # <-- save the path, if it exists
 		if ($reps_only) {
@@ -1318,7 +1328,9 @@ sub build_search_db{
 			    if(! -e "${reps_seq_path}.gz" ){
 				print "Building reps sequence file for $family\n";
 				_grab_seqs_from_lookup_list( $reps_list_path, $family_db_file, $reps_seq_path );
-				(-e "${reps_seq_path}.gz") or die("The gzipped file STILL doesn't exist, even after we tried to make it. Error grabbing representative sequences from $reps_list_path. Trying to place in $reps_seq_path.");
+				(-e "${reps_seq_path}.gz") or 
+				    die("The gzipped file STILL doesn't exist, even after we tried to make it. Error grabbing " .
+					"representative sequences from $reps_list_path. Trying to place in $reps_seq_path.");
 			    }
 			    $family_db_file = "${reps_seq_path}.gz"; #add the .gz path because of the compression we use in grab_seqs_from_loookup_list
 			}
@@ -1340,13 +1352,17 @@ sub build_search_db{
 		die ("I could not determine the suffix associated with $family_db_file\n" );
 	    }	   
 	    if( $nr_db ){		
-		my $nr_tmp      = _build_nr_seq_db( $family_db_file, $suffix, $compressed );
+		
+		my $nr_tmp      = _build_nr_seq_db( $family_db_file, $suffix, $compressed, $redunts );
 		$family_db_file = $nr_tmp;
 	    }
-	    open( FILE, "zcat --force $family_db_file |") || die "Unable to open the file \"$family_db_file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!	    	    
+	    open( FILE, "zcat --force $family_db_file |") || die "Unable to open the file \"$family_db_file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
+	    my $fam_init_len = $length; #used to calculate $family_length
+	    my $fam_nseqs    = 0; #used to calculate $family_length
 	    while(<FILE>){
 		if ( $_ =~ m/^\>/ ){
 		    $total++;
+		    $fam_nseqs++;
 		    #no longer need _append_famids_to_seqids, we just do it here now
 		    chomp $_;
 		    if( defined( $id ) ){ #then we've seen a seq before, add that one to the hash
@@ -1385,18 +1401,49 @@ sub build_search_db{
 		#we don't want to keep the copy of the tmp nr file that we created, which was pushed into $family_db_file above
 		unlink( $family_db_file );
 	    }
+	    #calculate the family's length
+	    $family_length = ( $length - $fam_init_len ) / $fam_nseqs; #average length of total sequence found in family
 	}
 	else { 
 	    die "invalid type: <$type>"; 
-	
 	}
+	if( defined( $family_length ) ){
+	    print FAMLENS join( "\t", $family, $family_length, "\n" );
+	} else {
+	    die "Cannot calculate a family lenth for $family\n";
+	}       
+    }
+    close FAMLENS;
+    if( $nr_db ){
+	close $redunts;
     }
     #print out the database length
-    open( LEN, "> ${raw_db_path}/database_length.txt" ) || die "Can't open ${raw_db_path}/database_length.txt for write: $!\n";
+    open( LEN, ">${raw_db_path}/database_length.txt" ) || die "Can't open ${raw_db_path}/database_length.txt for write: $!\n";
     print LEN $length;
     close LEN;
 
     print STDERR "Build Search DB: $type DB was successfully built and compressed.\n";
+}
+
+sub _get_family_length{
+    my ( $family_db_file, $type ) = @_;
+    my $family_length;
+    if( $type eq "hmm" ){
+	open( FILE, "zcat --force $family_db_file |") || die "Unable to open the file \"$family_db_file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
+	while(<FILE>){
+	    chomp $_;
+	    if( $_ =~ m/LENG\s+(\d+)/){
+		$family_length = $1;
+		last;
+	    }
+	}
+    } elsif( $type eq "blast" ){
+	#we calculate length in build_search_db since we open files there anyhow
+    }
+    else{
+	die "Passed an unknown type to _get_family_length (received ${type})\n";
+    }    
+    return $family_length;
 }
 
 #this recurses through all subdirs under ref-ffdb to look for the seqs and hmms of interest. Be careful with how
@@ -1481,8 +1528,8 @@ sub cat_db_split{
 	if( $family =~ m/\.gz$/ ){
 	    $compressed = 1;
 	}
-	#do we want a nonredundant version of the DB? 
-	if( defined($nr_db) && $nr_db ){
+	#do we want a nonredundant version of the DB? OBSOLETE. DO THIS VIA build_search_db now
+	if( $type eq "blast" && defined($nr_db) && $nr_db ){
 	    #make a temp file for the nr 
 	    #append famids to seqids within this routine
 	    my $tmp = _build_nr_seq_db( $family, $suffix, $compressed ); #make a tmp file for the nr
@@ -1537,6 +1584,7 @@ sub _build_nr_seq_db{
     my $family    = shift;
     my $suffix    = shift;
     my $compressed = shift;
+    my $dups_list_file = shift;
     my $family_nr  = $family . "_nr_tmp";
     my $seqin;
     if( $compressed ){
@@ -1556,9 +1604,12 @@ sub _build_nr_seq_db{
 	#if we haven't seen this seq before, print it out
 	if( !defined( $dict->{$sequence} ) ){
 	    $seqout->write_seq( $seq );
-	    $dict->{$sequence}++;
-	} else {
-#	    print "Removing duplication sequence $id\n";
+	    $dict->{$sequence} = $id;
+	} else { #print out the duplicate sequence pairings
+	    if( defined( $dups_list_file ) ){
+		my $retained_id = $dict->{$sequence};
+		print $dups_list_file join( "\t", $family, $retained_id, $id, "\n" );
+	    }
 	}
     }    
     my $gzip_nr = $family_nr . ".gz";
@@ -2414,7 +2465,8 @@ sub build_classification_maps_by_sample{
     my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
     if( defined( $post_rare_reads ) ){
 	my @samples   = keys( %$post_rare_reads );
-	my $rare_size = keys( %{ $post_rare_reads->{ $samples[0] } } );
+	#my $rare_size = keys( %{ $post_rare_reads->{ $samples[0] } } );
+	my $rare_size = keys( %{ $post_rare_reads->{ $sample_id } } );
 	$output .= "_Rare_${rare_size}";
     }
     $output .= ".tab";

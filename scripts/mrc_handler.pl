@@ -554,7 +554,7 @@ if (defined($goto) && $goto) {
     }
     $goto = uc($goto); ## upper case it
     if ($goto eq "T" or $goto eq "TRANSLATE")   { warn "Skipping to TRANSLATE READS step!\n"; goto TRANSLATE; }
-    if ($goto eq "B" or $goto eq "BUILD")   { warn "Skipping to HMMdb building step!\n"; goto BUILDHMMDB; }
+    if ($goto eq "B" or $goto eq "BUILD")   { warn "Skipping to searchdb building step!\n"; goto BUILDSEARCHDB; }
     if ($goto eq "R" or $goto eq "REMOTE")  { warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
     if ($goto eq "S" or $goto eq "SCRIPT")  { warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
     if ($goto eq "H" or $goto eq "HMM")     { warn "Skipping to hmmscan step!\n"; goto HMMSCAN; }
@@ -676,7 +676,7 @@ unless( $slim){
 
 ## ================================================================================
 ## ================================================================================
-BUILDHMMDB:
+BUILDSEARCHDB:
     ; # <-- this keeps emacs from indenting the code stupidly. Ugh!
 #if( ! -d $analysis->MRC::DB::get_hmmdb_path() ){
 #    $hmmdb_build = 1;
@@ -694,7 +694,7 @@ if ($hmmdb_build){
 #if( ! -d $analysis->MRC::DB::get_blastdb_path() ){
 #    $blastdb_build = 1;
 #    $stage         = 1;
-#}`
+#}
 
 if ($blastdb_build) {
     if (!$use_blast && !$use_last && !$use_rapsearch) {
@@ -704,6 +704,8 @@ if ($blastdb_build) {
     #need to build the nr module here
     $analysis->MRC::Run::build_search_db($blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only, $nr_db);
 }
+
+die;
 
 ### ====================================================================
 ### might want to seperate transfering and indexing of the database
