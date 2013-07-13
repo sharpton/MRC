@@ -556,8 +556,8 @@ if (defined($goto) && $goto) {
     if ($goto eq "T" or $goto eq "TRANSLATE")   { warn "Skipping to TRANSLATE READS step!\n"; goto TRANSLATE; }
     if ($goto eq "B" or $goto eq "BUILD")   { warn "Skipping to searchdb building step!\n"; goto BUILDSEARCHDB; }
     if ($goto eq "R" or $goto eq "REMOTE")  { warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
-    if ($goto eq "S" or $goto eq "SCRIPT")  { warn "Skipping to building hmmscan script step!\n"; goto BUILDHMMSCRIPT; }
-    if ($goto eq "H" or $goto eq "HMM")     { warn "Skipping to hmmscan step!\n"; goto HMMSCAN; }
+    if ($goto eq "S" or $goto eq "SCRIPT")  { warn "Skipping to building hmmscan script step!\n"; goto BUILDSEARCHSCRIPT; }
+    if ($goto eq "X" or $goto eq "SEARCH")  { warn "Skipping to hmmscan step!\n"; goto EXECUTESEARCH; }
     if ($goto eq "P" or $goto eq "PARSE")   { warn "Skipping to get remote hmmscan results step!\n"; goto PARSERESULTS; }
     if ($goto eq "G" or $goto eq "GET")     { warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
     if ($goto eq "C" or $goto eq "CLASSIFY"){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
@@ -705,7 +705,6 @@ if ($blastdb_build) {
     $analysis->MRC::Run::build_search_db($blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only, $nr_db);
 }
 
-die;
 
 ### ====================================================================
 ### might want to seperate transfering and indexing of the database
@@ -762,7 +761,7 @@ if ($is_remote && $stage){
 }
 
 ### ====================================================================
-BUILDHMMSCRIPT:
+BUILDSEARCHSCRIPT:
     ;
 if ($is_remote) {
     my $projID = $analysis->get_project_id();
@@ -824,8 +823,8 @@ if ($is_remote) {
 }
 
 ### ====================================================================
-#RUN HMMSCAN
-HMMSCAN:
+#RUN HMMSCAN/BLAST/LAST/RAPSEARCH
+EXECUTESEARCH:
     ;
 if ($is_remote){
     printBanner("RUNNING REMOTE SEARCH");
@@ -942,7 +941,7 @@ if ($is_remote){
 		    $db_name = $blastdb_name;
 		}
 		$class_id = $analysis->MRC::DB::get_classification_id(
-		    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $db_name, $algo, $top_hit_type,
+		    $p_evalue, $p_coverage, $p_score, $db_name, $algo, $top_hit_type,
 		    )->classification_id();
 		print "Classification_id for this run using $algo is $class_id\n";    
 		#ONLY TAKES BULK-LOAD LIKE FILES NOW. OPTIONALLY DELETE PARSED RESULTS WHEN COMPLETED.
@@ -972,12 +971,13 @@ CLASSIFYREADS:
     ; #might want to eventually store these results in a stand alone mysql table rather than flat file
 printBanner("CLASSIFYING READS");
 foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-    my $post_rare_reads = {}; #hash ref that maps samples to read_ids, not just classified reads!
-    if( defined( $analysis->postrarefy_samples) ){
-#	foreach my $sample_id(@{ $analysis->get_sample_ids() }){ 
-	print "Randomly selecting " . $analysis->postrarefy_samples . " reads from sample ${sample_id}\n";
-	$post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->postrarefy_samples, $slim, $post_rare_reads );
-#	}
+    #storing arrays of millions of objects is a memory beast. May be better to do in MySQL, so let's sidestep the block below
+    my $post_rare_reads = undef; #hash ref that maps samples to read_ids, not just classified reads!
+    if( 0 ){
+	if( defined( $analysis->postrarefy_samples) ){
+	    print "Randomly selecting " . $analysis->postrarefy_samples . " reads from sample ${sample_id}\n";
+	    $post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->postrarefy_samples, $slim, $post_rare_reads );
+	}
     }
     my @algosToRun = ();
     if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
@@ -994,7 +994,7 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	    $db_name = $blastdb_name;
 	}
 	$class_id = $analysis->MRC::DB::get_classification_id(
-	    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $hmmdb_name, $algo, $top_hit_type,
+	    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $db_name, $algo, $top_hit_type,
 	    )->classification_id();
 	print "Calculating diversity using classification_id ${class_id}\n";
 	if( defined( $analysis->postrarefy_samples ) ){

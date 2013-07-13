@@ -984,7 +984,7 @@ sub get_families_with_orfs_by_sample{
 
 #This is a complicated series of queries for DBIx. I'm sure someone knows how to do this efficiently in DBIx, but I don't. So, I'll use DBI.
 sub get_classified_orfs_by_sample{
-    my ( $self, $sample_id, $class_id, $dbh ) = @_;
+    my ( $self, $sample_id, $class_id, $dbh, $count ) = @_; #if count is defined, subsample using the metareads table
     #get the classification parameters
     my $class_params = $self->MRC::DB::get_classification_parameters( $class_id );
     my $class_method = $class_params->method;
@@ -996,22 +996,45 @@ sub get_classified_orfs_by_sample{
 	die( "Could not parse the classification method string from classification_parameters table. Got <${class_method}>\n" );
     }
     my $sql; #will differ depending on what we want to grab.
-    $sql = "SELECT MAX( score ) AS score, orf_alt_id, read_alt_id, sample_id, famid FROM searchresults WHERE sample_id = ${sample_id} ";
-    if( defined( $class_params->evalue_threshold ) ){
-	$sql .= " AND evalue <= " . $class_params->evalue_threshold . " ";
-    }
-    if( defined( $class_params->score_threshold ) ){
-	$sql .= " AND score >= " . $class_params->score_threshold . " ";
-    }
-    if( defined( $class_params->coverage_threshold) ){
-	$sql .= " AND orf_coverage >= " . $class_params->coverage_threshold . " ";
-    }
-    if( $best_type eq "best_read" ){
-	$sql .= " GROUP BY read_alt_id ORDER BY score DESC ";
-    } elsif( $best_type eq "best_orf" ){
-	$sql .= " GROUP BY orf_alt_id ORDER BY score DESC ";
-    } else {
-	die( "There seems to be a best_type in your database that I don't know about. We parsed <${best_type}> from the method string <{$class_method}> using class_id $class_id\n" );
+    if( !defined( $count ) ){ #grab results for all reads
+	$sql = "SELECT MAX( score ) AS score, orf_alt_id, read_alt_id, sample_id, famid FROM searchresults WHERE sample_id = ${sample_id} ";
+	if( defined( $class_params->evalue_threshold ) ){
+	    $sql .= " AND evalue <= " . $class_params->evalue_threshold . " ";
+	}
+	if( defined( $class_params->score_threshold ) ){
+	    $sql .= " AND score >= " . $class_params->score_threshold . " ";
+	}
+	if( defined( $class_params->coverage_threshold) ){
+	    $sql .= " AND orf_coverage >= " . $class_params->coverage_threshold . " ";
+	}
+	if( $best_type eq "best_read" ){
+	    $sql .= " GROUP BY read_alt_id ORDER BY score DESC ";
+	} elsif( $best_type eq "best_orf" ){
+	    $sql .= " GROUP BY orf_alt_id ORDER BY score DESC ";
+	} else {
+	    die( "There seems to be a best_type in your database that I don't know about. We parsed <${best_type}> from the method string <{$class_method}> using class_id $class_id\n" );
+	}
+    } else{
+	$sql  = "SELECT MAX( score ) AS score, orf_alt_id, tab2.read_alt_id, tab2.sample_id, famid FROM ";
+	$sql .= "( SELECT * FROM metareads WHERE sample_id = ${sample_id} ORDER BY RAND() LIMIT ${count} ) tab1 ";
+	$sql .= "JOIN searchresults tab2 on tab1.read_alt_id = tab2.read_alt_id ";
+	$sql .= "WHERE tab2.sample_id = ${sample_id} "; #redundant, but enable easy extension of the clauses below
+	if( defined( $class_params->evalue_threshold ) ){
+	    $sql .= " AND evalue <= " . $class_params->evalue_threshold . " ";
+	}
+	if( defined( $class_params->score_threshold ) ){
+	    $sql .= " AND score >= " . $class_params->score_threshold . " ";
+	}
+	if( defined( $class_params->coverage_threshold) ){
+	    $sql .= " AND orf_coverage >= " . $class_params->coverage_threshold . " ";
+	}
+	if( $best_type eq "best_read" ){
+	    $sql .= " GROUP BY read_alt_id ORDER BY score DESC ";
+	} elsif( $best_type eq "best_orf" ){
+	    $sql .= " GROUP BY orf_alt_id ORDER BY score DESC ";
+	} else {
+	    die( "There seems to be a best_type in your database that I don't know about. We parsed <${best_type}> from the method string <{$class_method}> using class_id $class_id\n" );
+	}
     }
     print "$sql\n";
     my $sth = $dbh->prepare($sql) || die "SQL Error: $DBI::errstr\n";

@@ -12,6 +12,8 @@
 
 #$ -l mem_free=2G
 
+ulimit -c 0 #suppress core dumps
+
 SEQPATH=$1  # SEQ is query sequence file used in search step
 SEQFILE=$2
 RESPATH=$3 # RES is result table file produced in search step. Need prefix and suffix for array task naming convention (see below)

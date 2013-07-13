@@ -75,8 +75,8 @@ $use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequence
 
 $use_scratch          = 0; #should we use scratch space on remote machine?
 
-$dbname               = undef; #"Sfams_hmp"; #lite";   #might have multiple DBs with same schema.  Which do you want to use here
-$schema_name          = undef; #"Sfams::Schema"; #eventually, we'll need to disjoin schema and DB name (they'll all use Sfams schema, but have diff DB names)
+$dbname               = undef; #"MRC_MetaHIT";   #might have multiple DBs with same schema.  Which do you want to use here
+$schema_name          = undef; #"MRC::Schema"; 
 
 #Translation settings
 $trans_method         = "transeq";

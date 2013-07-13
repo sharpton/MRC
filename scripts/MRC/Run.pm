@@ -2459,7 +2459,7 @@ sub build_classification_maps{
 }
 
 sub build_classification_maps_by_sample{
-    my ($self, $sample_id, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
+    my ($self, $sample_id, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads. Note that we no longer use post_rare_reads to rarefy (see MRC::DB::get_classified_orfs_by_sample)
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
     my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
@@ -2474,13 +2474,16 @@ sub build_classification_maps_by_sample{
     print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
     #how many reads should we count for relative abundance analysis?
     my $read_count;
-    if(!defined( $post_rare_reads->{$sample_id} ) ){
+    if(!defined( $self->postrarefy_samples() ) ){
 	print( "Calculating classification results using all reads loaded into the database\n" );
-	$read_count = @{ $self->MRC::DB::get_read_ids_from_ffdb( $sample_id ) }; #need this for relative abundance calculations
+#	$read_count = @{ $self->MRC::DB::get_read_ids_from_ffdb( $sample_id ) }; #need this for relative abundance calculations
+	$read_count = $self->MRC::DB::get_reads_by_sample_id( $sample_id )->count();
+    } else{
+	$read_count = $self->postrarefy_samples();
     }
     #now get the classified results for this sample
     my $dbh  = $self->MRC::DB::build_dbh();
-    my $members_rs = $self->MRC::DB::get_classified_orfs_by_sample( $sample_id, $class_id, $dbh );
+    my $members_rs = $self->MRC::DB::get_classified_orfs_by_sample( $sample_id, $class_id, $dbh, $self->postrarefy_samples() );
     #did mysql return any results for this query?
     my $nrows = 0;
     $nrows    = $members_rs->rows();
@@ -2489,22 +2492,29 @@ sub build_classification_maps_by_sample{
 	warn "Since we returned no rows for this classification query, you might want to check the stringency of your classification parameters.\n";
 	next;
     }
-    my $max_rows = 10000;
+    my $max_rows  = 10000;
+    my $must_pass = 0; #how many reads get dropped from SQL result set because not sampled in rarefaction stage. Should not be used any longer.
     while( my $rows = $members_rs->fetchall_arrayref( {}, $max_rows ) ){
 	foreach my $row( @$rows ){
 	    my $orf_alt_id = $row->{"orf_alt_id"};		
 	    #while( my $member = $members_rs->next() ){
 	    my $famid       = $row->{"famid"};
 	    my $read_alt_id = $row->{"read_alt_id"};
+	    #only on if we're rarefying in perl. Should be obsolete
 	    if( defined( $post_rare_reads->{$sample_id} ) ){
-		next unless defined $post_rare_reads->{$sample_id}->{$read_alt_id};
-		print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $self->postrarefy_samples(), "\n" );
+		if( !(defined $post_rare_reads->{$sample_id}->{$read_alt_id} ) ){
+		    $must_pass++;
+		    next;
+		}
 	    }
-	    else{
-		print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $read_count, "\n" );
-	    }
+	    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $read_count, "\n" );
 	}
 	#$map->{$self->get_project_id()}->{$sample_id}->{$read_id}->{$orf_id}->{$famid}++; #NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
+    }
+    if( 0 ){ #we no longer rarefy in perl, so the mysql outputs above should be the correct values
+	if( $must_pass > 0 ){
+	    print "Had to pass on ${must_pass} reads selected from the above SQL query because they were not sampled during rarefaction analysis\n";
+	}
     }
     $self->MRC::DB::disconnect_dbh( $dbh );	
     close OUT;
@@ -2522,6 +2532,11 @@ sub get_post_rarefied_reads{
     my @selected_ids = ();
     if( $is_slim ){ #get from the flat file
 	@read_ids = @{ $self->MRC::DB::get_read_ids_from_ffdb( $sample_id ) };
+	#make sure we're not asking for more sampled reads than there are reads in the DB
+	if( scalar( @read_ids ) < $read_number ){
+	    warn( "You are asking for $read_number sampled reads but I can only find " . scalar(@read_ids) . " for sample ${sample_id}. Exiting\n" );
+	    die;
+	}
 	@selected_ids = @{ _random_sample_from_array( $read_number, \@read_ids ) };
     }
     else{ #get from the database
@@ -2530,6 +2545,11 @@ sub get_post_rarefied_reads{
 	    my $read_id = $read->read_id;
 	    push( @read_ids, $read_id );
 	}
+	#make sure we're not asking for more sampled reads than there are reads in the DB
+	if( scalar( @read_ids ) < $read_number ){
+	    warn( "You are asking for $read_number sampled reads but I can only find " . scalar(@read_ids) . " for sample ${sample_id}. Exiting\n" );
+	    die;
+	}       
 	@selected_ids = @{ _random_sample_from_array( $read_number, \@read_ids ) };
     }
     foreach my $selected_id( @selected_ids ){
