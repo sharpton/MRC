@@ -34,7 +34,6 @@ __PACKAGE__->table("metareads");
 
   data_type: 'integer'
   extra: {unsigned => 1}
-  is_foreign_key: 1
   is_nullable: 0
 
 =head2 read_alt_id
@@ -59,12 +58,7 @@ __PACKAGE__->add_columns(
     is_nullable => 0,
   },
   "sample_id",
-  {
-    data_type => "integer",
-    extra => { unsigned => 1 },
-    is_foreign_key => 1,
-    is_nullable => 0,
-  },
+  { data_type => "integer", extra => { unsigned => 1 }, is_nullable => 0 },
   "read_alt_id",
   { data_type => "varchar", is_nullable => 0, size => 256 },
   "seq",
@@ -99,41 +93,9 @@ __PACKAGE__->set_primary_key("read_id");
 
 __PACKAGE__->add_unique_constraint("sample_id_read_alt_id", ["sample_id", "read_alt_id"]);
 
-=head1 RELATIONS
 
-=head2 orfs
-
-Type: has_many
-
-Related object: L<MRC::Schema::Result::Orf>
-
-=cut
-
-__PACKAGE__->has_many(
-  "orfs",
-  "MRC::Schema::Result::Orf",
-  { "foreign.read_id" => "self.read_id" },
-  { cascade_copy => 0, cascade_delete => 0 },
-);
-
-=head2 sample
-
-Type: belongs_to
-
-Related object: L<MRC::Schema::Result::Sample>
-
-=cut
-
-__PACKAGE__->belongs_to(
-  "sample",
-  "MRC::Schema::Result::Sample",
-  { sample_id => "sample_id" },
-  { is_deferrable => 1, on_delete => "CASCADE", on_update => "CASCADE" },
-);
-
-
-# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-06-24 14:58:12
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:sPpEj52WofMH8Ay6o2v/1g
+# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-08-21 17:06:17
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:zhOrSBjmR5kIaQwvZb4zeQ
 
 
 # You can replace this text with custom code or comments, and it will be preserved on regeneration

@@ -34,15 +34,13 @@ __PACKAGE__->table("orfs");
 
   data_type: 'integer'
   extra: {unsigned => 1}
-  is_foreign_key: 1
   is_nullable: 0
 
-=head2 read_id
+=head2 read_alt_id
 
-  data_type: 'integer'
-  extra: {unsigned => 1}
-  is_foreign_key: 1
+  data_type: 'varchar'
   is_nullable: 1
+  size: 256
 
 =head2 orf_alt_id
 
@@ -88,19 +86,9 @@ __PACKAGE__->add_columns(
     is_nullable => 0,
   },
   "sample_id",
-  {
-    data_type => "integer",
-    extra => { unsigned => 1 },
-    is_foreign_key => 1,
-    is_nullable => 0,
-  },
-  "read_id",
-  {
-    data_type => "integer",
-    extra => { unsigned => 1 },
-    is_foreign_key => 1,
-    is_nullable => 1,
-  },
+  { data_type => "integer", extra => { unsigned => 1 }, is_nullable => 0 },
+  "read_alt_id",
+  { data_type => "varchar", is_nullable => 1, size => 256 },
   "orf_alt_id",
   { data_type => "varchar", is_nullable => 0, size => 256 },
   "start",
@@ -143,46 +131,23 @@ __PACKAGE__->set_primary_key("orf_id");
 
 __PACKAGE__->add_unique_constraint("sample_id_orf_alt_id", ["sample_id", "orf_alt_id"]);
 
-=head1 RELATIONS
+=head2 C<sample_id_read_alt_id>
 
-=head2 read
+=over 4
 
-Type: belongs_to
+=item * L</sample_id>
 
-Related object: L<MRC::Schema::Result::Metaread>
+=item * L</read_alt_id>
 
-=cut
-
-__PACKAGE__->belongs_to(
-  "read",
-  "MRC::Schema::Result::Metaread",
-  { read_id => "read_id" },
-  {
-    is_deferrable => 1,
-    join_type     => "LEFT",
-    on_delete     => "CASCADE",
-    on_update     => "CASCADE",
-  },
-);
-
-=head2 sample
-
-Type: belongs_to
-
-Related object: L<MRC::Schema::Result::Sample>
+=back
 
 =cut
 
-__PACKAGE__->belongs_to(
-  "sample",
-  "MRC::Schema::Result::Sample",
-  { sample_id => "sample_id" },
-  { is_deferrable => 1, on_delete => "CASCADE", on_update => "CASCADE" },
-);
+__PACKAGE__->add_unique_constraint("sample_id_read_alt_id", ["sample_id", "read_alt_id"]);
 
 
-# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-06-24 14:58:12
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:8N5xb7LmR+tIyIo5cWq3nQ
+# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-08-21 17:06:17
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:XkhzSmyZ0TVjqg3/Q3Di7Q
 
 
 # You can replace this text with custom code or comments, and it will be preserved on regeneration

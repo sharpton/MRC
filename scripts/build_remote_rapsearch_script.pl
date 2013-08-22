@@ -67,6 +67,8 @@ if( $use_bigmem ){
     print OUT "#\$ -l mem_free=${memory}\n";
 }
 
+print OUT "ulimit -c 0\n"; #suppress core dumps
+
 #GET VARS FROM COMMAND LINE
 print OUT join( "\n", "INPATH=\$1", "INPUT=\$2", "DBPATH=\$3", "OUTPATH=\$4", "OUTSTEM=\$5", "\n" );
 if ($use_array){
@@ -95,12 +97,13 @@ if ($use_array){
 print OUT join( "\n", "PROJDIR=" . $projectdir, "LOGS=\${PROJDIR}/logs", "\n" );
 
 #CHECK TO SEE IF DATA ALREADY EXISTS IN OUTPUT LOCATION. IF SO, SKIP
-print OUT join( "\n",
-		"if [ -e \${OUTPATH}/\${OUTPUT} ]",
-		"then",
-		"exit",
-		"fi",
-		"\n" );
+#Failed jobs means that we can't do this any more. Have to be intellegenet about how we restart jobs (see above block: INT_TASK_ID)
+#print OUT join( "\n",
+#		"if [ -e \${OUTPATH}/\${OUTPUT} ]",
+#		"then",
+#		"exit",
+#		"fi",
+#		"\n" );
 
 my $RAP_ALL;
 if( $use_array ){

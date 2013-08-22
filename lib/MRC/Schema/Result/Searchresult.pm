@@ -23,7 +23,7 @@ __PACKAGE__->table("searchresults");
 
 =head1 ACCESSORS
 
-=head2 searchresults_id
+=head2 searchresult_id
 
   data_type: 'integer'
   is_auto_increment: 1
@@ -45,19 +45,24 @@ __PACKAGE__->table("searchresults");
 
   data_type: 'integer'
   extra: {unsigned => 1}
-  is_foreign_key: 1
   is_nullable: 0
+
+=head2 target_id
+
+  data_type: 'varchar'
+  is_nullable: 0
+  size: 256
 
 =head2 famid
 
-  data_type: 'integer'
+  data_type: 'varchar'
   is_nullable: 0
+  size: 256
 
 =head2 classification_id
 
   data_type: 'integer'
   extra: {unsigned => 1}
-  is_foreign_key: 1
   is_nullable: 0
 
 =head2 score
@@ -75,36 +80,35 @@ __PACKAGE__->table("searchresults");
   data_type: 'float'
   is_nullable: 1
 
+=head2 aln_length
+
+  data_type: 'float'
+  is_nullable: 1
+
 =cut
 
 __PACKAGE__->add_columns(
-  "searchresults_id",
+  "searchresult_id",
   { data_type => "integer", is_auto_increment => 1, is_nullable => 0 },
   "orf_alt_id",
   { data_type => "varchar", is_nullable => 0, size => 256 },
   "read_alt_id",
   { data_type => "varchar", is_nullable => 0, size => 256 },
   "sample_id",
-  {
-    data_type => "integer",
-    extra => { unsigned => 1 },
-    is_foreign_key => 1,
-    is_nullable => 0,
-  },
+  { data_type => "integer", extra => { unsigned => 1 }, is_nullable => 0 },
+  "target_id",
+  { data_type => "varchar", is_nullable => 0, size => 256 },
   "famid",
-  { data_type => "integer", is_nullable => 0 },
+  { data_type => "varchar", is_nullable => 0, size => 256 },
   "classification_id",
-  {
-    data_type => "integer",
-    extra => { unsigned => 1 },
-    is_foreign_key => 1,
-    is_nullable => 0,
-  },
+  { data_type => "integer", extra => { unsigned => 1 }, is_nullable => 0 },
   "score",
   { data_type => "float", is_nullable => 1 },
   "evalue",
   { data_type => "double precision", is_nullable => 1 },
   "orf_coverage",
+  { data_type => "float", is_nullable => 1 },
+  "aln_length",
   { data_type => "float", is_nullable => 1 },
 );
 
@@ -112,13 +116,13 @@ __PACKAGE__->add_columns(
 
 =over 4
 
-=item * L</searchresults_id>
+=item * L</searchresult_id>
 
 =back
 
 =cut
 
-__PACKAGE__->set_primary_key("searchresults_id");
+__PACKAGE__->set_primary_key("searchresult_id");
 
 =head1 UNIQUE CONSTRAINTS
 
@@ -127,6 +131,8 @@ __PACKAGE__->set_primary_key("searchresults_id");
 =over 4
 
 =item * L</orf_alt_id>
+
+=item * L</target_id>
 
 =item * L</famid>
 
@@ -140,44 +146,18 @@ __PACKAGE__->set_primary_key("searchresults_id");
 
 __PACKAGE__->add_unique_constraint(
   "orf_fam_sample_class_id",
-  ["orf_alt_id", "famid", "sample_id", "classification_id"],
-);
-
-=head1 RELATIONS
-
-=head2 classification
-
-Type: belongs_to
-
-Related object: L<MRC::Schema::Result::ClassificationParameter>
-
-=cut
-
-__PACKAGE__->belongs_to(
-  "classification",
-  "MRC::Schema::Result::ClassificationParameter",
-  { classification_id => "classification_id" },
-  { is_deferrable => 1, on_delete => "CASCADE", on_update => "CASCADE" },
-);
-
-=head2 sample
-
-Type: belongs_to
-
-Related object: L<MRC::Schema::Result::Sample>
-
-=cut
-
-__PACKAGE__->belongs_to(
-  "sample",
-  "MRC::Schema::Result::Sample",
-  { sample_id => "sample_id" },
-  { is_deferrable => 1, on_delete => "CASCADE", on_update => "CASCADE" },
+  [
+    "orf_alt_id",
+    "target_id",
+    "famid",
+    "sample_id",
+    "classification_id",
+  ],
 );
 
 
-# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-06-24 14:58:12
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:8cpJRuFnCvIQnGgbH6HVPg
+# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-08-21 17:06:17
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:LApDxkpjD4D6hzGINeBAQw
 
 
 # You can replace this text with custom code or comments, and it will be preserved on regeneration

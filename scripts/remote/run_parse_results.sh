@@ -44,10 +44,10 @@ fi
 RESFILE=${RESNAME_PRE}_${INT_TASK_ID}${RESNAME_SUFF}
 LOGS=${PROJDIR}/logs
 
-if [ -e ${RESPATH}/${RESFILE}.mysqld ]
-then
-exit
-fi
+#if [ -e ${RESPATH}/${RESFILE}.mysqld ]
+#then
+#exit
+#fi
 
 ALL_OUT_FILE=${LOGS}/parse_results/${JOB_ID}.${INT_TASK_ID}.all
 echo ${ALL_OUT_FILE}
@@ -55,27 +55,27 @@ echo ${ALL_OUT_FILE}
 qstat -f -j ${JOB_ID}                                > ${ALL_OUT_FILE} 2>&1
 uname -a                                            >> ${ALL_OUT_FILE} 2>&1
 echo "****************************"                 >> ${ALL_OUT_FILE} 2>&1
-echo "RUNNING RAPSEARCH WITH $*"                    >> ${ALL_OUT_FILE} 2>&1
+echo "RUNNING PARSE_SEARCH_RESULTS WITH $*"         >> ${ALL_OUT_FILE} 2>&1
 echo "INT_TASK_ID IS ${INT_TASK_ID}"                >> ${ALL_OUT_FILE} 2>&1
 date                                                >> ${ALL_OUT_FILE} 2>&1
 
 files=$(ls /scratch/${SEQFILE}* 2> /dev/null | wc -l )   >> ${ALL_OUT_FILE} 2>&1
-echo $files                                         >> ${ALL_OUT_FILE} 2>&1
+echo $files                                              >> ${ALL_OUT_FILE} 2>&1
 if [ "$files" != "0" ]; then
     echo "Removing cache files"
     rm /scratch/${SEQFILE}*
 else
     echo "No cache files..."
-fi                                               >> ${ALL_OUT_FILE} 2>&1
+fi                                                       >> ${ALL_OUT_FILE} 2>&1
 
-echo "Copying search result file to scratch"     >> ${ALL_OUT_FILE} 2>&1
-cp -f ${RESPATH}/${RESFILE} /scratch/                       >> ${ALL_OUT_FILE} 2>&1
-echo "Copying sequence file to scratch"          >> ${ALL_OUT_FILE} 2>&1
-cp -f ${SEQPATH}/${SEQFILE} /scratch/${SEQFILE}       >> ${ALL_OUT_FILE} 2>&1
+echo "Copying search result file to scratch"             >> ${ALL_OUT_FILE} 2>&1
+cp -f ${RESPATH}/${RESFILE} /scratch/                    >> ${ALL_OUT_FILE} 2>&1
+echo "Copying sequence file to scratch"                  >> ${ALL_OUT_FILE} 2>&1
+cp -f ${SEQPATH}/${SEQFILE} /scratch/${SEQFILE}          >> ${ALL_OUT_FILE} 2>&1
 
-date                                                                                   >> ${ALL_OUT_FILE} 2>&1
+date                                                     >> ${ALL_OUT_FILE} 2>&1
 #need to properly set the run time options
-echo "perl ${SCRIPTS}/parse_results.pl --results-tab=/scratch/${RESNAME} --orfs-file=/scratch/${SEQFILE} --sample-id=${SAMPLE_ID}  --algo=${ALGO} --trans-method=${TRANSMETH} --evalue=${EVALUE} --coverage=${COVERAGE} --score=${SCORE}\n"            >> ${ALL_OUT_FILE} 2>&1
+echo "perl ${SCRIPTS}/parse_results.pl --results-tab=/scratch/${RESNAME} --orfs-file=/scratch/${SEQFILE} --sample-id=${SAMPLE_ID}  --algo=${ALGO} --trans-method=${TRANSMETH} --evalue=${EVALUE} --coverage=${COVERAGE} --score=${SCORE}"            >> ${ALL_OUT_FILE} 2>&1
 perl ${SCRIPTS}/parse_results.pl --results-tab=/scratch/${RESFILE} --orfs-file=/scratch/${SEQFILE} --sample-id=${SAMPLE_ID} --algo=${ALGO} --trans-method=${TRANSMETH} --evalue=${EVALUE} --coverage=${COVERAGE} --score=${SCORE} >> ${ALL_OUT_FILE} 2>&1
 date                                                                                   >> ${ALL_OUT_FILE} 2>&1
 echo "removing input and dbfiles from scratch"   >> ${ALL_OUT_FILE} 2>&1
@@ -83,7 +83,7 @@ rm /scratch/${SEQFILE}                           >> ${ALL_OUT_FILE} 2>&1
 echo "moving results to main"                    >> ${ALL_OUT_FILE} 2>&1
 mv /scratch/${RESFILE}.mysqld ${RESPATH}/        >> ${ALL_OUT_FILE} 2>&1
 #only delete the raw if we successfully parsed data. else, we want to be able to try reparsing....
-if [ $DELETE_RAW ] && [ -s ${RESPATH}/${RESFILE}.mysqld ] 
+if [ $DELETE_RAW -eq "1" ] && [ -s ${RESPATH}/${RESFILE}.mysqld ] 
 then
     rm ${RESPATH}/${RESFILE}
 fi

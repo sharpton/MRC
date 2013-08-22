@@ -8,7 +8,8 @@ use DBIx::Class::Schema::Loader qw/ make_schema_at /;
 
 my ( $username, $password );
 my $dumppath = "./lib";
-my $dbname   = "SFams";
+my $dbname   = "MRC_dev";
+my $libname  = "MRC";
 my $hostname = "localhost";
 
 GetOptions(
@@ -17,9 +18,10 @@ GetOptions(
     "d:s" => \$dumppath,
     "n:s" => \$dbname,
     "h:s" => \$hostname,
+    "l:s" => \$libname,
     );
 
-my $schemaname = $dbname . "::Schema";
+my $schemaname = $libname . "::Schema";
 
 make_schema_at(
     $schemaname,

@@ -391,8 +391,7 @@ unless( defined( $input_pid ) ){ (-d $project_dir) or dieWithUsageError("You mus
 ### =========== Automatic setting of default parameters ========
 
 if (!defined($dbname)) {
-    $dbname = "SFams";
-warn("Note: --dbname=NAME was not specified on the command line, so we are using the default database name, which is \"$dbname\".");
+    die("Note: --dbname=NAME was not specified on the command line, so I don't know which mysql database to talk to. Exiting\n");
 }
 
 if (!defined($schema_name)) {
@@ -462,6 +461,7 @@ my $analysis = MRC->new();  #Initialize the project
 
 $analysis->set_scripts_dir($localScriptDir);
 $analysis->set_remote_exe_path($remoteExePath);
+$analysis->db_name( $dbname );
 $analysis->set_dbi_connection("DBI:mysql:$dbname:$db_hostname", $dbname, $db_hostname); 
 $analysis->set_username($db_username); 
 if( defined( $db_pass ) ){
@@ -554,14 +554,15 @@ if (defined($goto) && $goto) {
     }
     $goto = uc($goto); ## upper case it
     if ($goto eq "T" or $goto eq "TRANSLATE")   { warn "Skipping to TRANSLATE READS step!\n"; goto TRANSLATE; }
-    if ($goto eq "B" or $goto eq "BUILD")   { warn "Skipping to searchdb building step!\n"; goto BUILDSEARCHDB; }
-    if ($goto eq "R" or $goto eq "REMOTE")  { warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
-    if ($goto eq "S" or $goto eq "SCRIPT")  { warn "Skipping to building hmmscan script step!\n"; goto BUILDSEARCHSCRIPT; }
-    if ($goto eq "X" or $goto eq "SEARCH")  { warn "Skipping to hmmscan step!\n"; goto EXECUTESEARCH; }
-    if ($goto eq "P" or $goto eq "PARSE")   { warn "Skipping to get remote hmmscan results step!\n"; goto PARSERESULTS; }
-    if ($goto eq "G" or $goto eq "GET")     { warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
-    if ($goto eq "C" or $goto eq "CLASSIFY"){ warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
-    if ($goto eq "O" or $goto eq "OUTPUT")  { warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
+    if ($goto eq "B" or $goto eq "BUILD")   {     warn "Skipping to searchdb building step!\n"; goto BUILDSEARCHDB; }
+    if ($goto eq "R" or $goto eq "REMOTE")  {     warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
+    if ($goto eq "S" or $goto eq "SCRIPT")  {     warn "Skipping to building hmmscan script step!\n"; goto BUILDSEARCHSCRIPT; }
+    if ($goto eq "X" or $goto eq "SEARCH")  {     warn "Skipping to hmmscan step!\n"; goto EXECUTESEARCH; }
+    if ($goto eq "P" or $goto eq "PARSE")   {     warn "Skipping to get remote hmmscan results step!\n"; goto PARSERESULTS; }
+    if ($goto eq "G" or $goto eq "GET")     {     warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
+    if ($goto eq "L" or $goto eq "LOADRESULTS"){  warn "Skipping to get remote hmmscan results step!\n"; goto LOADRESULTS; }
+    if ($goto eq "C" or $goto eq "CLASSIFY"){     warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
+    if ($goto eq "O" or $goto eq "OUTPUT")  {     warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
     die "QUITTING DUE TO INVALID --goto OPTION: (specifically, the option was \"$goto\"). If we got to here in the code, it means there was an INVALID FLAG PASSED TO THE GOTO OPTION.";
 }
 
@@ -648,7 +649,7 @@ unless( $slim){
     printBanner("LOADING TRANSLATED READS");
     foreach my $sample_id (@{ $analysis->get_sample_ids() }){
 	my $projID = $analysis->get_project_id();
-	my $in_orf_dir = "$local_ffdb/projects/$projID/$sample_id/orfs";
+	my $in_orf_dir = "$local_ffdb/projects/$dbname/$projID/$sample_id/orfs";
 	my $orfCount = 0;
 	foreach my $in_orfs(@{ $analysis->MRC::DB::get_split_sequence_paths($in_orf_dir, 1) }){
 	    warn "Processing orfs in <$in_orfs>...";
@@ -738,21 +739,21 @@ if ($is_remote && $stage){
 	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
 	if ($use_blast){
 	    print "Building remote formatdb script...\n";
-	    my $formatdb_script_path = "$local_ffdb/projects/$projID/run_formatdb.sh";
+	    my $formatdb_script_path = "$local_ffdb/projects/$dbname/$projID/run_formatdb.sh";
 	    exec_and_die_on_nonzero("perl $localScriptDir/build_remote_formatdb_script.pl -o $formatdb_script_path -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	    MRC::Run::transfer_file($formatdb_script_path, ($analysis->get_remote_connection() . ":" . $analysis->get_remote_formatdb_script()));
 	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_formatdb_script() );
 	}
 	if ($use_last){
 	    print "Building remote lastdb script...\n";
-	    my $lastdb_script = "$local_ffdb/projects/$projID/run_lastdb.sh";
+	    my $lastdb_script = "$local_ffdb/projects/$dbname/$projID/run_lastdb.sh";
 	    exec_and_die_on_nonzero("perl $localScriptDir/build_remote_lastdb_script.pl -o $lastdb_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch");
 	    MRC::Run::transfer_file($lastdb_script, ($analysis->get_remote_connection() . ":" . $analysis->get_remote_lastdb_script()));
 	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_lastdb_script() ); #this will work for last
 	}
 	if ($use_rapsearch){
 	    print "Building remote prerapsearch script...\n";
-	    my $prerapsearch_script = "$local_ffdb/projects/$projID/run_prerapsearch.sh";
+	    my $prerapsearch_script = "$local_ffdb/projects/$dbname/$projID/run_prerapsearch.sh";
 	    exec_and_die_on_nonzero("perl $localScriptDir/build_remote_prerapsearch_script.pl -o $prerapsearch_script -n $nsplits --name $blastdb_name -p $project_path -s $use_scratch --suf $db_suffix");
 	    MRC::Run::transfer_file($prerapsearch_script, ($analysis->get_remote_connection() . ":" . $analysis->get_remote_prerapsearch_script()));
 	    $analysis->MRC::Run::format_remote_blast_dbs( $analysis->get_remote_prerapsearch_script() ); #this will work for rapsearch
@@ -768,7 +769,7 @@ if ($is_remote) {
     my $project_path = $analysis->get_remote_project_path();
     if ($use_hmmscan){
 	printBanner("BUILDING REMOTE HMMSCAN SCRIPT");
-	my $h_script       = "$local_ffdb/projects/$projID/run_hmmscan.sh";
+	my $h_script       = "$local_ffdb/projects/$dbname/$projID/run_hmmscan.sh";
 	my $n_hmm_searches = $analysis->MRC::DB::get_number_hmmdb_scans($hmm_db_split_size);
 	my $nsplits        = $analysis->MRC::DB::get_number_db_splits("hmm");
 	print "number of hmm searches: $n_hmm_searches\n";
@@ -778,7 +779,7 @@ if ($is_remote) {
     }
     if ($use_hmmsearch){
 	printBanner("BUILDING REMOTE HMMSEARCH SCRIPT");
-	my $h_script   = "$local_ffdb/projects/$projID/run_hmmsearch.sh";
+	my $h_script   = "$local_ffdb/projects/$dbname/$projID/run_hmmsearch.sh";
 #	my $n_hmm_searches  = $analysis->MRC::DB::get_number_hmmdb_scans($hmm_db_split_size);
 	my $n_sequences = $analysis->MRC::DB::get_number_sequences($nseqs_per_samp_split);
 	my $nsplits     = $analysis->MRC::DB::get_number_db_splits("hmm");
@@ -789,7 +790,7 @@ if ($is_remote) {
     }
     if ($use_blast){
 	printBanner("BUILDING REMOTE BLAST SCRIPT");
-	my $b_script   = "$local_ffdb/projects/$projID/run_blast.sh";
+	my $b_script   = "$local_ffdb/projects/$dbname/$projID/run_blast.sh";
 	my $db_length  = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
 	my $nsplits    = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
@@ -800,7 +801,7 @@ if ($is_remote) {
     if ($use_last){
 	printBanner("BUILDING REMOTE LAST SCRIPT");
 	#we use the blast script code as a template given the similarity between the methods, so there are some common var names between the block here and above
-	my $last_local     = "$local_ffdb/projects/$projID/run_last.sh";
+	my $last_local     = "$local_ffdb/projects/$dbname/$projID/run_last.sh";
 	my $db_length    = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
 	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
@@ -811,7 +812,7 @@ if ($is_remote) {
     if ($use_rapsearch){
 	printBanner("BUILDING REMOTE RAPSEARCH SCRIPT");
 	#we use the blast script code as a template given the similarity between the methods, so there are some common var names between the block here and above
-	my $rap_local    = "$local_ffdb/projects/$projID/run_rapsearch.sh";
+	my $rap_local    = "$local_ffdb/projects/$dbname/$projID/run_rapsearch.sh";
 	my $db_length    = $analysis->MRC::DB::get_blast_db_length($blastdb_name);
 	my $nsplits      = $analysis->MRC::DB::get_number_db_splits("blast");
 	print "database length is $db_length\n";
@@ -944,7 +945,7 @@ if ($is_remote){
 		    $p_evalue, $p_coverage, $p_score, $db_name, $algo, $top_hit_type,
 		    )->classification_id();
 		print "Classification_id for this run using $algo is $class_id\n";    
-		#ONLY TAKES BULK-LOAD LIKE FILES NOW. OPTIONALLY DELETE PARSED RESULTS WHEN COMPLETED.
+	 	#ONLY TAKES BULK-LOAD LIKE FILES NOW. OPTIONALLY DELETE PARSED RESULTS WHEN COMPLETED.
 		# NOTE THAT WE ONLY INSERT ALT_IDS INTO THIS TABLE! NEED TO USE SAMPLE_ID, ALT_ID FROM (metareads || orfs) TO UNIQUELY EXTRACT ORF/READ ID		
 		#$analysis->MRC::Run::classify_reads_old($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
 		$analysis->MRC::Run::parse_and_load_search_results_bulk( $sample_id, $orf_split_file_name, $class_id, $algo ); #top_hit_type and strict clustering gets used in diversity calcs now
@@ -958,11 +959,13 @@ if ($is_remote){
 	my %hmmdbs = %{ $analysis->MRC::DB::get_hmmdbs($hmmdb_name) };
 	foreach my $hmmdb(keys(%hmmdbs)){
 	    my $projID = $analysis->get_project_id();
-	    my $hsc_results = "$local_ffdb/projects/$projID/$sample_id/search_results/${sample_id}_v_${hmmdb}.hsc";
+	    my $hsc_results = "$local_ffdb/projects/$dbname/$projID/$sample_id/search_results/${sample_id}_v_${hmmdb}.hsc";
 	    $analysis->MRC::Run::classify_reads($sample_id, $hsc_results, $evalue, $coverage);
 	}
     }
 }
+
+die;
 
 ### ====================================================================
 #classify reads based on search results
@@ -1002,6 +1005,7 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	}
 	print "Building classification map...\n";  
 	$analysis->MRC::Run::build_classification_maps_by_sample($sample_id, $class_id, $post_rare_reads);
+	$analysis->MRC::Run::calculate_abunances( $sample_id, $abundance_type, $normalization_type );
     }
 }
 

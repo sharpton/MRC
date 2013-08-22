@@ -91,15 +91,17 @@ sub new{
     $self->{"fci"}         = undef; #family construction ids that are allowed to be processed. array reference
     $self->{"workdir"}     = undef; #master path to MRC scripts
     $self->{"ffdb"}        = undef; #master path to the flat file database
-    $self->{"ffdb"}        = undef; #master path to the reference dabase flat file data is located
     $self->{"dbi"}         = undef; #DBI string to interact with DB
     $self->{"user"}        = undef; #username to interact with DB
     $self->{"pass"}        = undef; #password to interact with DB
-    $self->{"projectpath"} = undef;
+    $self->{"dbname"}      = undef; #name of the mysql database to talk to
+    $self->{"projectpath"} = undef; #path to the raw data
     $self->{"projectname"} = undef;
     $self->{"project_id"}  = undef;
     $self->{"proj_desc"}   = undef;
+    $self->{"proj_dir"}    = undef; #path to project directory in ffdb
     $self->{"samples"}     = undef; #hash relating sample names to paths   
+    $self->{"metadata"}    = undef; #string encoding the sample metadata table loaded from file
     $self->{"rusername"}   = undef;
     $self->{"r_ip"}        = undef;
     $self->{"remote_script_dir"}    = undef;
@@ -287,6 +289,16 @@ sub set_project_path{
 }
 sub get_project_path{ my $self = shift;    return $self->{"projectpath"}; }
 
+sub project_dir{
+    my $self = shift;
+    my $path = shift;
+    if( defined( $path ) ){
+	$self->{"proj_dir"} = $path;
+    }
+    return $self->{"proj_dir"};
+}
+
+
 =head2 get_sample_path
 
  Title   : get_sample_path
@@ -303,7 +315,8 @@ sub get_sample_path($) { # note the mandatory (numeric?) argument!
     (defined($self->get_ffdb())) or die "ffdb was not defined! This can't be called until AFTER you call set_ffdb.";
     (defined($sample_id)) or die "get_sample_path has ONE MANDATORY argument! It can NOT be called with an undefined input sample_id! In this case, Sample id was not defined!";
     (defined($self->get_project_id())) or die "Project ID was not defined!";
-    return(File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "$sample_id")); # concatenates items into a filesystem path
+    (defined($self->db_name())) or die "Database name was not defined!";
+    return(File::Spec->catfile($self->get_ffdb(), "projects", $self->db_name(), $self->get_project_id(), "$sample_id")); # concatenates items into a filesystem path
 }
 
 =head2 set_username 
@@ -340,6 +353,15 @@ sub set_password{
     $self->{"pass"} = $path;
 }
 sub get_password { my $self = shift; return $self->{"pass"}; }
+
+sub db_name{
+    my $self = shift;
+    my $text = shift;
+    if( defined( $text ) ){
+	$self->{"dbname"} = $text;      
+    }
+    return $self->{"dbname"};
+}
 
 sub get_password_from_file{
     my ( $self, $passfile ) = @_;
@@ -565,39 +587,44 @@ sub get_sample_hashref {
     return $samples;
 }
 
-=head2 set_project_desc
+=head2 project_desc
 
- Title   : set_project_desc
- Usage   : $analysis->set_project_desc( $projet_description_text );
- Function: Obtain the project description and store in the MRC object
- Example : my $description = $analysis->set_project_description( "A metagenomic study of the Global Open Ocean, 28 samples total" );
+ Title   : project_desc
+ Usage   : $analysis->project_desc( $projet_description_text );
+ Function: Obtain or retrieve the project description and store in the MRC object
+ Example : my $description = $analysis->project_description( "A metagenomic study of the Global Open Ocean, 28 samples total" );
  Returns : The project description (string)
  Args    : The project description (string)
 
 =cut 
 
-sub set_project_desc{
+sub project_desc{
     my $self = shift;
     my $text = shift;
-    $self->{"proj_desc"} = $text;
+    if( defined( $text ) ){
+	$self->{"proj_desc"} = $text;
+    }
     return $self->{"proj_desc"};    
 }
 
-=head2 get_project_desc
+=head2 sample_metadata
 
- Title   : get_project_desc
- Usage   : $analysis->get_project_desc( );
- Function: Obtain the project description from the MRC object. The DB is not touched here.
- Example : my $description = $analysis->get_project_desc();
- Returns : The project description (string)
- Args    : None
+ Title   : sample_metadta
+ Usage   : $analysis->sample_metadata( $sample_metadata_table_text );
+ Function: Obtain or retrieve the sample metadata table associated with the project and store in the MRC object. 
+ Example : my $metadata_table_string = $analysis->sample_metadata()
+ Returns : The sample metadata tab delimited table (string)
+ Args    : The sample metadata tab delimited table (string)
 
 =cut 
 
-sub get_project_desc{
+sub sample_metadata{
     my $self = shift;
-    my $desc = $self->{"proj_desc"};
-    return $desc;
+    my $text = shift;
+    if( defined( $text ) ){
+	$self->{"metadata"} = $text;
+    }
+    return $self->{"metadata"};    
 }
 
 =head2 set_hmmdb_name
@@ -746,7 +773,8 @@ sub get_remote_project_path{
    my ($self) = @_;
    (defined($self->get_remote_ffdb())) or warn "get_remote_project_path: Remote ffdb path was NOT defined at this point, but we requested it anyway!\n";
    (defined($self->get_project_id())) or warn "get_remote_project_path: Project ID was NOT defined at this point, but we requested it anyway!.\n";
-   my $path = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/";
+   (defined($self->db_name())) or warn "get_remote_project_path: Database name was NOT defined at this point, but we requested it anyway!.\n";
+   my $path = $self->get_remote_ffdb() . "/projects/" . $self->db_name . "/" . $self->get_project_id() . "/";
    return $path;
 }
 
@@ -763,7 +791,7 @@ sub get_remote_project_path{
 
 sub get_remote_sample_path{
     my ( $self, $sample_id ) = @_;
-    my $path = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/" . $sample_id . "/";
+    my $path = $self->get_remote_ffdb() . "/projects/" . $self->db_name() . "/" . $self->get_project_id() . "/" . $sample_id . "/";
     return $path;
 }
 

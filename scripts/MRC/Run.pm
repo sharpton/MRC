@@ -170,30 +170,65 @@ sub exec_remote_cmd($$) {
 #currently uses @suffix with basename to successfully parse off .fa. may need to change
 sub get_partitioned_samples{
     my ($self, $path) = @_;
-    my %samples = ();    
-    
+    my %samples = ();        
     opendir( PROJ, $path ) || die "Can't open the directory $path for read: $!\n";     #open the directory and get the sample names and paths, 
     my @files = readdir(PROJ);
     closedir(PROJ);
-    
-
     foreach my $file (@files) {
 	next if ( $file =~ m/^\./ || $file =~ m/hmmscan/ || $file =~ m/output/); 
 	next if ( -d "$path/$file" ); # skip directories, apparently
-	if($file =~ m/DESCRIPT\.txt/){ # <-- see if there's a description file
-	    my $text = ''; # blank
+	#if there's a project description file, grab the information
+	if($file =~ m/project_description\.txt/){ # <-- see if there's a description file
+	    my $text = '';
 	    open(DESC, "$path/$file") || die "Can't open project description file $file for read: $!. Project is $path.\n";
 	    while(<DESC>){
-		chomp($_);
-		$text .= " " . $_; # append the line
+		$text .= $_; # append the line
 	    }
 	    close(DESC);
-	    $self->set_project_desc($text);
-	} else {
+	    undef $text if( $text eq '' );
+	    $self->project_desc($text);
+	} elsif( $file =~ m/sample_metadata\.tab/ ){  #if there's a sample metadata table, grab the information
+	    my $text = '';
+	    open( META, "$path/$file" ) || die "Can't open sample metadata table for read: $!. Project is $path.\n";
+	    while(<META>){
+		$text .= $_;
+	    }
+	    #check that the file is properly formatted	   
+	    if( $text !~ m/^Sample_name/ ){
+		die( "You did not specify a properly formatted sample_metadata.tab file. Please ensure that the first row contains properly " .
+		     "formatted column labels. See the manual for more information\n" );
+	    }	   
+	    my @rows  = split( "\n", $text );
+	    my $ncols = 0;
+	    foreach my $row( @rows ){
+		my @cols = split( "\t", $row );
+		my $row_n_col = scalar( @cols );
+		if( $ncols == 0 ){
+		    $ncols = $row_n_col;
+		} elsif( $ncols != $row_n_col) {
+		    die( "You do not have an equal number of tab-delimited columns in every row of your sample_metadata.tab file. Please double check " .
+			 "your format. See the manual for more information\n" );
+		} else { #looks good
+		    next;
+		}
+	    }
+	    close META;
+	    undef $text if( $text eq '' );
+	    $self->sample_metadata($text);
+	}
+	else {
 	    #get sample name here, simple parse on the period in file name
     	    my $thisSample = basename($file, (".fa", ".fna"));
 	    $samples{$thisSample}->{"path"} = "$path/$file";
-	}
+	}	
+    }
+    if( !defined( $self->project_desc() ) ){
+	warn( "You didn't provide a project description file, which is optional. " .
+	      "Note that you can describe your project in the database via a project_description.txt file. See manual for more informaiton\n" );
+    }
+    if( !defined( $self->sample_metadata() ) ){
+	warn( "You didn't provide a sample metadata file, which is optional. " . 
+	      "Note that you can describe your samples in the database via a sample_metadata.tab file. See manual for more informaiton\n" );
     }
     warn("Adding samples to analysis object at path <$path>.");
     $self->set_samples( \%samples );
@@ -203,7 +238,7 @@ sub get_partitioned_samples{
 sub load_project{
     my ($self, $path, $nseqs_per_samp_split) = @_;    # $nseqs_per_samp_split is how many seqs should each sample split file contain?
     my ($name, $dir, $suffix) = fileparse( $path );     #get project name and load
-    my $proj = $self->MRC::DB::create_project($name, $self->get_project_desc() );
+    my $proj = $self->MRC::DB::create_project($name, $self->project_desc() );
     #store vars in object
     $self->set_project_path($path);
     $self->set_project_id($proj->project_id());
@@ -220,11 +255,40 @@ sub load_samples{
     my $numSamples = scalar( keys(%samples) );
     my $plural = ($numSamples == 1) ? '' : 's'; # pluralize 'samples'
     MRC::notify("Run.pm: load_samples: Processing $numSamples sample${plural} associated with project PID #" . $self->get_project_id() . " ");
+    my $metadata = {};
+    #if it exists, grab each sample's metadata
+    if( defined( $self->sample_metadata ) ){
+	my @rows = split( "\n", $self->sample_metadata );
+	my $header = shift( @rows );
+	my @colnames = split( "\t", $header );
+	foreach my $row( @rows ){ #all rows except the header
+	    print $row . "\n";
+	    my @cols = split( "\t", $row );
+	    my $samp_alt_id = $cols[0];
+	    my $metadata_string;
+	    for( my $i=1; $i < scalar(@cols); $i++){
+		my $key   = $colnames[$i];
+		my $value = $cols[$i]; 
+		if( $i == 1 ){
+		    $metadata_string = $key . "=" . $value;
+		} else {
+		    $metadata_string = join( ",", $metadata_string, $key . "=" . $value );
+		}
+	    }
+	    print "$metadata_string\n";
+	    $metadata->{$samp_alt_id} = $metadata_string;       
+	}
+    }
+    #load each sample
     foreach my $samp( keys( %samples ) ){
 	my $pid = $self->get_project_id();
 	my $insert;	
+	my $metadata_string;
+	if( defined( $self->sample_metadata ) ){
+	    $metadata_string = $metadata->{$samp};
+	}	
 	eval { # <-- this is like a "try" (in the "try/catch" sense)
-	    $insert = $self->MRC::DB::create_sample($samp, $pid );
+	    $insert = $self->MRC::DB::create_sample($samp, $pid, $metadata_string );
 	};
 	if ($@) { # <-- this is like a "catch" block in the try/catch sense. "$@" is the exception message (a human-readable string).
 	    # Caught an exception! Probably create_sample complained about a duplicate entry in the database!
@@ -321,8 +385,9 @@ sub back_load_project(){
     my $self = shift;
     my $project_id = shift;
     my $ffdb = $self->get_ffdb();
+    my $dbname = $self->db_name();
     $self->set_project_id( $project_id );
-    $self->set_project_path("$ffdb/projects/$project_id");
+    $self->set_project_path("$ffdb/projects/$dbname/$project_id");
     if( $self->is_remote ){
 	$self->set_remote_hmmscan_script(      $self->get_remote_project_path() . "/run_hmmscan.sh" );
 	$self->set_remote_hmmsearch_script(    $self->get_remote_project_path() . "/run_hmmsearch.sh" );
@@ -738,7 +803,7 @@ sub parse_and_load_search_results_bulk{
 	my $tmp    = "/tmp/" . $sample_id . ".sql";	    
 	my $table  = "searchresults";
 	my $nrows  = 10000;
-	my @fields = ( "orf_alt_id", "read_alt_id", "sample_id", "famid", "score", "evalue", "orf_coverage", "classification_id" );
+	my @fields = ( "orf_alt_id", "read_alt_id", "sample_id", "target_id", "famid", "score", "evalue", "orf_coverage", "aln_length", "classification_id" );
 	my $fks    = { "sample_id"         => $sample_id, 
 		       "classification_id" => $class_id,
 	};	   #do we need this? seems safer, and easier to insert, remove samples/classifications from table this way, but also a little slower with extra key check. those tables are small.
@@ -1756,8 +1821,8 @@ sub compress_hmmdb{
 #copy a project's ffdb over to the remote server
 sub load_project_remote {
     my ($self) = @_;
-    my $project_dir_local = File::Spec->catdir($self->get_ffdb(), "projects", $self->get_project_id());
-    my $remote_dir  = $self->get_remote_connection() . ":" . File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id());
+    my $project_dir_local = File::Spec->catdir($self->get_ffdb(), "projects", $self->db_name(), $self->get_project_id());
+    my $remote_dir  = $self->get_remote_connection() . ":" . File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->db_name(),  $self->get_project_id());
     warn("Pushing $project_dir_local to the remote (" . $self->get_remote_server() . ") server's ffdb location in <$remote_dir>\n");
     my $results = MRC::Run::transfer_directory($project_dir_local, $remote_dir);
     return $results;
@@ -1788,13 +1853,13 @@ sub translate_reads_remote($$$$$) {
 
     my $numReadsTranslated = 0;
     foreach my $sample_id( @{$self->get_sample_ids()} ) {
-	my $remote_raw_dir    = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "raw");
-	my $remote_output_dir = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->get_project_id(), $sample_id, "orfs");
+	my $remote_raw_dir    = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->db_name, $self->get_project_id(), $sample_id, "raw");
+	my $remote_output_dir = File::Spec->catdir($self->get_remote_ffdb(), "projects", $self->db_name, $self->get_project_id(), $sample_id, "orfs");
 	MRC::notify("Translating reads on the REMOTE machine, from $remote_raw_dir to $remote_output_dir...");
 	if ($should_we_split_orfs) {
 	    # Split the ORFs!
-	    my $local_unsplit_dir  =        $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # This is where the files will be tranferred BACK to. Should NOT end in a slash!
-	    my $remote_unsplit_dir = $self->get_remote_ffdb() . "/projects/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # Should NOT end in a slash!
+	    my $local_unsplit_dir  =        $self->get_ffdb() . "/projects/" . $self->db_name . "/" . $self->get_project_id() . "/$sample_id/unsplit_orfs"; # This is where the files will be tranferred BACK to. Should NOT end in a slash!
+	    my $remote_unsplit_dir = $self->get_remote_ffdb() . "/projects/" . $self->db_name . "/" .  $self->get_project_id() . "/$sample_id/unsplit_orfs"; # Should NOT end in a slash!
 	    my $remote_cmd = "\'" . "perl ${transeqPerlRemote} " . " -i $remote_raw_dir" . " -o $remote_output_dir" . " -w $waitTimeInSeconds" . " -l $logsdir" . " -s $remote_script_dir" . " -u $remote_unsplit_dir" . " -f $filter_length" . "\'";
 	    my $response = execute_ssh_cmd($connection, $remote_cmd);
 	    MRC::notify("Translation result text, if any was: \"$response\"");
@@ -1826,10 +1891,11 @@ sub translate_reads_remote_ping{
     my $pid         = $self->get_project_id();
     my $remote_ffdb = $self->get_remote_ffdb();
     my $local_ffdb  = $self->get_ffdb();
+    my $db_name     = $self->db_name();
     my %jobs = ();
     foreach my $sample_id( @{$self->get_sample_ids()} ){
-	my $remote_input  = "$remote_ffdb/projects/$pid/$sample_id/raw.fa";
-	my $remote_output = "$remote_ffdb/projects/$pid/$sample_id/orfs.fa";
+	my $remote_input  = "$remote_ffdb/projects/$db_name/$pid/$sample_id/raw.fa";
+	my $remote_output = "$remote_ffdb/projects/$db_name/$pid/$sample_id/orfs.fa";
 	my $transeqShRemoteLocation = $self->get_remote_script_dir() . "/run_transeq.sh";
 	my $results = execute_ssh_cmd( $connection, "\'qsub $transeqShRemoteLocation $remote_input $remote_output\'");
 	if ($results =~ m/^Your job (\d+) / ){
@@ -1845,7 +1911,7 @@ sub translate_reads_remote_ping{
     MRC::notify( "Reads were translated in approximately $time seconds on remote server");
     MRC::notify("Pulling translated reads from remote server"); # <-- consider that a completed job doesn't mean a *successful* run!
     while (my ($jobKey, $sample_id) = each(%jobs)) {
-	MRC::Run::transfer_file("$connection:$remote_ffdb/projects/$pid/$sample_id/orfs.fa", "$local_ffdb/projects/$pid/$sample_id/orfs.fa"); # retrieve the file from remote->local
+	MRC::Run::transfer_file("$connection:$remote_ffdb/projects/$db_name/$pid/$sample_id/orfs.fa", "$local_ffdb/projects/$db_name/$pid/$sample_id/orfs.fa"); # retrieve the file from remote->local
     }
 }
 
@@ -2209,7 +2275,7 @@ sub get_remote_search_results {
 
 sub build_PCA_data_frame{
     my ($self, $class_id) = @_;
-    my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "output", "PCA_data_frame_${class_id}.tab");
+    my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->db_name, $self->get_project_id(), "output", "PCA_data_frame_${class_id}.tab");
     open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $! ";
     print OUT join("\t", "OPF", @{ $self->get_sample_ids() }, "\n" );
     my %opfs_by_famid_map   = ();
@@ -2256,7 +2322,7 @@ sub calculate_project_richness {
 	next if( defined( $hit_fams->{$famid} ) );
 	$hit_fams->{$famid}++;
     }
-    my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "output", "project_richness_${class_id}.tab");
+    my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->db_name, $self->get_project_id(), "output", "project_richness_${class_id}.tab");
     open( OUT, ">$output" ) || die "Can't open $output for write: $! ";
     print OUT join( "\t", "opf", "\n" );
     foreach my $famid( keys( %$hit_fams ) ){
@@ -2267,7 +2333,7 @@ sub calculate_project_richness {
 
 sub calculate_sample_richness{
     my ($self, $class_id) = @_;
-    my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->get_project_id(), "output", "sample_richness_${class_id}.tab");
+    my $output = File::Spec->catfile($self->get_ffdb(), "projects", $self->db_name, $self->get_project_id(), "output", "sample_richness_${class_id}.tab");
     open( OUT, ">$output" ) || die "Can't open $output for write: $!";    
     print OUT join("\t", "sample", "opf", "\n"); # <-- print to OUT!
     #identify which families were uniquely hit in each sample
@@ -2301,7 +2367,7 @@ sub calculate_project_relative_abundance{
     }
     print "creating outfile...\n";
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/project_relative_abundance_" . $class_id . ".tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->db_name . "/" . $self->get_project_id() . "/output/project_relative_abundance_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in calculate_project_relative_abundance: $!";    
     print OUT join( "\t", "opf", "r_abundance", "hits", "total_orfs", "\n" );
     #dump the famids that were found in the project to the output
@@ -2318,7 +2384,7 @@ sub calculate_sample_relative_abundance{
     my $self     = shift;
     my $class_id = shift;
     #create the outfile
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/sample_relative_abundance_" . $class_id . ".tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->db_name . "/" . $self->get_project_id() . "/output/sample_relative_abundance_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in calculate_sample_relative_abundance: $!";
     print OUT join( "\t", "sample", "opf", "r_abundance", "hits", "sample_orfs", "\n" );
     #identify number of times each family hit in each sample. also, how many reads were classified.
@@ -2343,7 +2409,7 @@ sub build_classification_map_old{
     my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/classification_map_" . $class_id . ".tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->db_name . "/" . $self->get_project_id() . "/output/classification_map_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
     print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
@@ -2375,7 +2441,7 @@ sub build_classification_map_slim_old{
     my ($self, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_ClassID_" . $class_id . ".tab";
+    my $output = $self->get_ffdb() . "/projects/" . $self->db_name . "/" . $self->get_project_id() . "/output/ClassificationMap_ClassID_" . $class_id . ".tab";
     open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
     print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
@@ -2408,7 +2474,7 @@ sub build_classification_maps{
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MA
     foreach my $sample_id( @{ $self->get_sample_ids() } ){
-	my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
+	my $output = $self->get_ffdb() . "/projects/" . $self->db_name . "/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
 	if( defined( $post_rare_reads ) ){
 	    my @samples   = keys( %$post_rare_reads );
 	    my $rare_size = keys( %{ $post_rare_reads->{ $samples[0] } } );
@@ -2462,16 +2528,17 @@ sub build_classification_maps_by_sample{
     my ($self, $sample_id, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads. Note that we no longer use post_rare_reads to rarefy (see MRC::DB::get_classified_orfs_by_sample)
     #create the outfile
     #my $map    = {}; #maps project_id -> sample_id -> read_id -> orf_id -> famid NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
-    my $output = $self->get_ffdb() . "/projects/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
-    if( defined( $post_rare_reads ) ){
+    my $output = $self->get_ffdb() . "/projects/" . $self->db_name . "/" . $self->get_project_id() . "/output/ClassificationMap_Sample_${sample_id}_ClassID_${class_id}";
+    if( defined( $self->postrarefy_samples ) ){
 	my @samples   = keys( %$post_rare_reads );
 	#my $rare_size = keys( %{ $post_rare_reads->{ $samples[0] } } );
-	my $rare_size = keys( %{ $post_rare_reads->{ $sample_id } } );
+	my $rare_size = $self->postrarefy_samples;
 	$output .= "_Rare_${rare_size}";
     }
     $output .= ".tab";
+    print "Building a classification map for sample ${sample_id}. Will dump results to ${output}\n";
     open( OUT, ">$output" ) || die "Can't open $output for write in build_classification_map: $!";    
-    print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "FAMID", "READ_COUNT", "\n" );
+    print OUT join("\t", "PROJECT_ID", "SAMPLE_ID", "READ_ID", "ORF_ID", "TARGET_ID", "FAMID", "ALN_LENGTH", "READ_COUNT", "\n" );
     #how many reads should we count for relative abundance analysis?
     my $read_count;
     if(!defined( $self->postrarefy_samples() ) ){
@@ -2481,8 +2548,10 @@ sub build_classification_maps_by_sample{
     } else{
 	$read_count = $self->postrarefy_samples();
     }
-    #now get the classified results for this sample
+    #classify reads
     my $dbh  = $self->MRC::DB::build_dbh();
+    $self->MRC::DB::classify_orfs_by_sample( $sample_id, $class_id, $dbh, $self->postrarefy_samples() );
+    #now get the classified results for this sample, build classification map
     my $members_rs = $self->MRC::DB::get_classified_orfs_by_sample( $sample_id, $class_id, $dbh, $self->postrarefy_samples() );
     #did mysql return any results for this query?
     my $nrows = 0;
@@ -2497,30 +2566,90 @@ sub build_classification_maps_by_sample{
     while( my $rows = $members_rs->fetchall_arrayref( {}, $max_rows ) ){
 	foreach my $row( @$rows ){
 	    my $orf_alt_id = $row->{"orf_alt_id"};		
-	    #while( my $member = $members_rs->next() ){
 	    my $famid       = $row->{"famid"};
 	    my $read_alt_id = $row->{"read_alt_id"};
-	    #only on if we're rarefying in perl. Should be obsolete
-	    if( defined( $post_rare_reads->{$sample_id} ) ){
-		if( !(defined $post_rare_reads->{$sample_id}->{$read_alt_id} ) ){
-		    $must_pass++;
-		    next;
-		}
-	    }
-	    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $famid, $read_count, "\n" );
-	}
-	#$map->{$self->get_project_id()}->{$sample_id}->{$read_id}->{$orf_id}->{$famid}++; #NO LONGER NEEDED SINCE WE USE R TO PARSE MAP
-    }
-    if( 0 ){ #we no longer rarefy in perl, so the mysql outputs above should be the correct values
-	if( $must_pass > 0 ){
-	    print "Had to pass on ${must_pass} reads selected from the above SQL query because they were not sampled during rarefaction analysis\n";
+	    my $target_id   = $row->{"target_id"};
+	    ny $aln_length  = $row->{"aln_length"};
+	    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $target_id, $famid, $aln_length, $read_count, "\n" );
 	}
     }
     $self->MRC::DB::disconnect_dbh( $dbh );	
     close OUT;
-    #return $map;
 }
 
+sub calculate_abundances{
+    my ($sample_id, $abun_type, $norm_type ) = @_;
+    my $abundance_type_id = $self->MRC::DB::get_abundance_type_id( $abun_type, $norm_type );
+    my $members_rs = $self->MRC::DB::get_classified_orfs_by_sample( $sample_id, $class_id, $dbh, $self->postrarefy_samples() );
+    #did mysql return any results for this query?
+    my $nrows = 0;
+    $nrows    = $members_rs->rows();
+    print "MySQL return $nrows rows for the above query.\n";
+    if( $nrows == 0 ){
+	warn "Since we returned no rows for this classification query, you might want to check the stringency of your classification parameters.\n";
+	next;
+    }
+    my $max_rows   = 10000;
+    my $must_pass  = 0; #how many reads get dropped from SQL result set because not sampled in rarefaction stage. Should not be used any longer.
+    my $abundances = {}; #maps families to abundances
+    #question: can perl handle the math below? Perhaps we should do this in SQL instead?
+    #could call R from Perl if necessary...
+    #alternatively, we could touch the database with updates as we progress, keeping only the totals in memory
+    while( my $rows = $members_rs->fetchall_arrayref( {}, $max_rows ) ){
+	foreach my $row( @$rows ){
+	    my $orf_alt_id = $row->{"orf_alt_id"};		
+	    my $famid       = $row->{"famid"};
+	    my $read_alt_id = $row->{"read_alt_id"};
+	    my $target_id   = $row->{"target_id"};
+	    my $aln_length  = $row->{"aln_length"};
+	    if( $abund_type eq 'binary' ){
+		my $raw;
+		if( $norm_type eq 'none' ){
+		    $raw = 1;
+		} elsif( $norm_type eq 'target_length' ){
+		    $raw = 1 / $target_length;
+		} elsif( $norm_type eq 'family_length' ){
+		    $raw = 1 / $family_length;
+		} else{
+		    die( "You selected a normalization type that I am not familiar with (<${norm_type}>). Must be either 'none', 'target_length', or 'family_length'\n" );
+		}			    
+		$abundances->{$famid}->{"raw"} += $raw;
+		$abundances->{"total"}++; #we want RPKM like abundances here, so we don't carry the length of the gene/family in the total 		
+
+	    } elsif( $abund_type eq 'coverage' ){ #number of bases in read that match the family
+		my $coverage;
+		#have to accumulate coverage totals for normalization as we loop
+		if( $norm_type eq 'none' ){
+		    $coverage = $aln_length;
+		} elsif( $norm_type eq 'target_length' ){
+		    $coverage = $aln_length / $target_length;
+		} elsif( $norm_type eq 'family_length' ){
+		    $coverage = $aln_length / $family_length;
+		} else{
+		    die( "You selected a normalization type that I am not familiar with (<${norm_type}>). Must be either 'none', 'target_length', or 'family_length'\n" );
+		}
+		$abundance->{$famid}->{"raw"} += $coverage;
+		$abundance->{"total"} += $coverage;
+	    } else{
+		die( "You are trying to calculate a type of abundance that I'm not aware of. Reveived <${abund_type}>. Exiting\n" );		
+	    }	   
+	}
+    }
+    #now that all of the classified reads are processed, calculate relative abundances
+    my $total = $abundances->{"total"};
+    foreach my $famid( keys( %{ $abundances } ) ){
+	next if( $famid eq "total" );
+	my $raw = $abundances->{$famid}->{"raw"};
+	my $ra  = $raw / $total;
+	$abundances->{$famid}->{"ra"} = $ra;
+	#now, insert the data into mysql.
+    }
+
+   
+
+    $self->MRC::DB::disconnect_dbh( $dbh );	
+    
+}
 
 sub get_post_rarefied_reads{
     my( $self, $sample_id, $read_number, $is_slim, $post_rare_reads ) = @_;

@@ -17,9 +17,9 @@ my( $scriptpath, $query_seq_dir,     $result_dir,
 
 my $waitTimeInSeconds = 5; # default value is 5 seconds between job checks
 
-my $loop_number       = 2; #how many times should we check that the data was run to completion? we restart failed jobs here
+my $loop_number       = 10; #how many times should we check that the data was run to completion? we restart failed jobs here
 my $force_parse       = 0;
-my $delete_raw_switch = 0; #should we delete the raw search results? Decreases file transfer time. Most relevant data in .msyqld files
+my $delete_raw_switch = 0; #should we delete the raw search results? Decreases file transfer time. Most relevant data stored in .msyqld files
 
 GetOptions("resultdir|i=s"  => \$result_dir,
 	   "querydir|q=s"   => \$query_seq_dir,	  
@@ -64,62 +64,63 @@ opendir( IN, $query_seq_dir ) || die "Can't opendir $query_seq_dir for read in r
 my @query_files = readdir( IN );
 closedir( IN );
 #loop over the split orf seq files, which represent launching a queue job for each
-foreach my $query_seq_file( @query_files ){
-    next if( $query_seq_file =~ m/^\./  ); # skip the '.' and '..' and other dot files
-    if( $query_seq_file =~ m/\.tmp\d*$/ ){ #if we have an old rapsearch run that we're reprocessing, we can't process the *.tmp files!
-	next; #this is safer than unlink; what is user has strange file extention? let's just pass. can delete by hand if abs. necessary
-	#unlink( $query_seq_file );
-    }
-
-    #need to set naming conventions for qsub script. These are same conventions used in run_remote_search_handler.pl
-    my $result_file_prefix = get_prefix( $query_seq_file, $db_name );
-    my $result_file_suffix = get_suffix( $algo );
-
-    #modify result_dir here such that the output is placed into each split's subdir w/in $result_dir
-    my $split_sub_result_dir = File::Spec->catdir($result_dir, $query_seq_file);
-    if( ! -d $split_sub_result_dir ){
-	warn( "I could not find the following search result directory: ${split_sub_result_dir}\n" );
-	      next;
-    }
-    #prep the array string for the array job option
-    my $array_string = "1-${nsplits}";
-    #run the jobs!
-    print "-"x60 . "\n";
-    print " RUN REMOTE PARSE RESULTS HANDLER.PL arguments for <${query_seq_file}>\n";
-    print "          LOOP NUMBER: 0\n";
-    print "          SCRIPT PATH: $scriptpath\n";
-    print "        QUERY SEQ DIR: $query_seq_dir\n";
-    print "       QUERY SEQ FILE: $query_seq_file\n";
-    print "      RESULT FILE DIR: $split_sub_result_dir\n";
-    print "   RESULT FILE PREFIX: $result_file_prefix\n";
-    print "   RESULT FILE SUFFIX: $result_file_suffix\n";
-    print "            SAMPLE_ID: $sample_id\n";
+if( $force_parse ){ 
+    foreach my $query_seq_file( @query_files ){
+	next if( $query_seq_file =~ m/^\./  ); # skip the '.' and '..' and other dot files
+	if( $query_seq_file =~ m/\.tmp\d*$/ ){ #if we have an old rapsearch run that we're reprocessing, we can't process the *.tmp files!
+	    next; #this is safer than unlink; what is user has strange file extention? let's just pass. can delete by hand if abs. necessary
+	    #unlink( $query_seq_file );
+	}
+	#need to set naming conventions for qsub script. These are same conventions used in run_remote_search_handler.pl
+	my $result_file_prefix = get_prefix( $query_seq_file, $db_name );
+	my $result_file_suffix = get_suffix( $algo );
+	
+	#modify result_dir here such that the output is placed into each split's subdir w/in $result_dir
+	my $split_sub_result_dir = File::Spec->catdir($result_dir, $query_seq_file);
+	if( ! -d $split_sub_result_dir ){
+	    warn( "I could not find the following search result directory: ${split_sub_result_dir}\n" );
+	    next;
+	}
+	#prep the array string for the array job option
+	my $array_string = "1-${nsplits}";
+	#run the jobs!
+	print "-"x60 . "\n";
+	print " RUN REMOTE PARSE RESULTS HANDLER.PL arguments for <${query_seq_file}>\n";
+	print "          LOOP NUMBER: 0\n";
+	print "          SCRIPT PATH: $scriptpath\n";
+	print "        QUERY SEQ DIR: $query_seq_dir\n";
+	print "       QUERY SEQ FILE: $query_seq_file\n";
+	print "      RESULT FILE DIR: $split_sub_result_dir\n";
+	print "   RESULT FILE PREFIX: $result_file_prefix\n";
+	print "   RESULT FILE SUFFIX: $result_file_suffix\n";
+	print "            SAMPLE_ID: $sample_id\n";
 #    print "    CLASSIFICATION_ID: $classification_id\n";
-    print "     SEARCH ALGORITHM: $algo\n";
-    print "   TRANSLATION METHOD: $trans_method\n";
-    print "    THRESHOLD: EVALUE: $t_evalue\n";
-    print "  THRESHOLD: COVERAGE: $t_coverage\n";
-    print "     THRESHOLD: SCORE: $t_score\n";
-    print "           PROJECTDIR: $proj_dir\n";
-    print "           SCRIPTSDIR: $scripts_dir\n";
-    print "           DELETE_RAW: $delete_raw_switch\n";
-    print "         ARRAY STRING: $array_string\n";
-    print "-"x60 . "\n";
-    my $results = run_remote_parse($scriptpath, $query_seq_dir, $query_seq_file, 
-				    $split_sub_result_dir, $result_file_prefix, $result_file_suffix,
-				    $sample_id, $algo, $trans_method,
-				    $t_evalue,  $t_coverage, $t_score, $proj_dir, $scripts_dir, $delete_raw_switch,
-				    $array_string);
-    if ($results =~ m/^Your job-array (\d+)\./) { #an array job
-	my $job_id = $1;
-	$jobs{$job_id}++;
-    } #Your job 8119214 ("run_rapsearch.sh") has been submitted 
-    elsif ($results =~ m/^Your job (\d+) /) { #not an array job
-	my $job_id = $1;
-	$jobs{$job_id}++;
-    } 
-    else {
-	die "Remote server did not return a properly formatted job id when running run_parse_search_results.sh on (remote) localhost. Got $results instead!";
+	print "     SEARCH ALGORITHM: $algo\n";
+	print "   TRANSLATION METHOD: $trans_method\n";
+	print "    THRESHOLD: EVALUE: $t_evalue\n";
+	print "  THRESHOLD: COVERAGE: $t_coverage\n";
+	print "     THRESHOLD: SCORE: $t_score\n";
+	print "           PROJECTDIR: $proj_dir\n";
+	print "           SCRIPTSDIR: $scripts_dir\n";
+	print "           DELETE_RAW: $delete_raw_switch\n";
+	print "         ARRAY STRING: $array_string\n";
+	print "-"x60 . "\n";
+	my $results = run_remote_parse($scriptpath, $query_seq_dir, $query_seq_file, 
+				       $split_sub_result_dir, $result_file_prefix, $result_file_suffix,
+				       $sample_id, $algo, $trans_method,
+				       $t_evalue,  $t_coverage, $t_score, $proj_dir, $scripts_dir, $delete_raw_switch,
+				       $array_string);
+	if ($results =~ m/^Your job-array (\d+)\./) { #an array job
+	    my $job_id = $1;
+	    $jobs{$job_id}++;
+	} #Your job 8119214 ("run_rapsearch.sh") has been submitted 
+	elsif ($results =~ m/^Your job (\d+) /) { #not an array job
+	    my $job_id = $1;
+	    $jobs{$job_id}++;
+	} 
+	else {
+	    die "Remote server did not return a properly formatted job id when running run_parse_search_results.sh on (remote) localhost. Got $results instead!";
+	}
     }
 }
 
@@ -129,9 +130,13 @@ my $time = remote_job_listener(\@job_ids, $waitTimeInSeconds);
 
 #all of the jobs are done. Let's make sure they've all produced output. If not, rerun those jobs
 my $count = 1;
+my %complete_batches = ();
 while( $count <= $loop_number + 1 ){ #the last loop will just report any sets that still look broken despite the attempt to restart them
     #get get the search_results
+    my $empty_batches = 1; #if none of the query files need to be rerun, we'll stop the loop early. if need rerun, this sets to zero below
     foreach my $query_seq_file( @query_files ){
+	next if( $complete_batches{$query_seq_file} );
+	print "$query_seq_file\n";
 	my $task_count = 0;
 	my $split_array = '';
 	next if( $query_seq_file =~ m/^\./  ); # skip the '.' and '..' and other dot files
@@ -139,18 +144,24 @@ while( $count <= $loop_number + 1 ){ #the last loop will just report any sets th
 	    next; #this is safer than unlink; what is user has strange file extention? let's just pass. can delete by hand if abs. necessary
 	    #unlink( $query_seq_file );
 	}
+	print " $query_seq_file\n";
         #need to set naming conventions for qsub script. These are same conventions used in run_remote_search_handler.pl
 	my $result_file_prefix = get_prefix( $query_seq_file, $db_name );
 	my $result_file_suffix = get_suffix( $algo );
 
 	my $split_sub_result_dir = File::Spec->catdir($result_dir, $query_seq_file);
+	print "$split_sub_result_dir\n";
+	if( ! -d $split_sub_result_dir ){
+	    warn( "I could not find the following search result directory: ${split_sub_result_dir}\n" );
+	    next;
+	}
 	for( my $i=1; $i<=$nsplits; $i++ ){
 	    #does the output file exist? This may not be a pefect check for crashed jobs! Future search algs may break this logic
 	    my $has_match = 0;
-	    my @split_res_files = glob( "${split_sub_result_dir}/${query_seq_file}-${db_name}_${i}*.mysqld" ); #we have to glob because rapsearch
+	    my @split_res_files = glob( "${split_sub_result_dir}/${query_seq_file}-${db_name}_${i}.*.mysqld" ); #we have to glob because rapsearch
 	    for my $file( @split_res_files ){
-		next if( $query_seq_file =~ m/\.mysqld$/ ); #don't want to count rapsearch tmp files, which are incomplete outputs from what we can tell
-		if( -e $file ){
+		next if( $file !~ m/\.mysqld$/ );
+		if( -e $file && !( -z $file ) ){ #if the file is empty, try again in case perl created file handle before job crash
 		    $has_match = 1;
 		}
 	    }
@@ -163,9 +174,14 @@ while( $count <= $loop_number + 1 ){ #the last loop will just report any sets th
 		print "Looks like we need to retry ${query_seq_file} against database split ${i}...\n";
 		$split_array .= "${i},";
 		$task_count++;
+		$empty_batches = 0;
 	    }
 	}	
-	next if( $task_count == 0 || $count == $loop_number + 1 ); #there were no failed jobs, it seems... or we're past the number of requested loops	
+#	next if( $task_count == 0 || $count == $loop_number + 1 ); #there were no failed jobs, it seems... or we're past the number of requested loops	
+	if( $task_count == 0 ){
+	    $complete_batches{$query_seq_file} = 1; #no jobs were run for this query seq file, so don't process it in future loops
+	    next;
+	}
 	my $sub_array_string = "1-${task_count}";
 	$split_array         =~ s/\,$//;
 	#submit the jobs!
@@ -208,6 +224,7 @@ while( $count <= $loop_number + 1 ){ #the last loop will just report any sets th
 	    die "Remote server did not return a properly formatted job id when running run_parse_search_results.sh on (remote) localhost. Got $results instead!";
 	}
     }
+    last if $empty_batches; #no jobs were run, so stop the while loop
     #At this point, we have a lot ofjobs in the queue. Let's monitor the queue and report back to local when jobs are complete 
     #this is a loop specific listener
     my @job_ids = keys(%jobs);

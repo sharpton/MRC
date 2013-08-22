@@ -38,6 +38,23 @@ CREATE TABLE `classification_parameters` (
 ) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
+--
+-- Table structure for table `abundance_parameters`
+--
+
+DROP TABLE IF EXISTS `abundance_parameters`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `abundance_parameters` (
+  `abundance_type_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `abundance_type` double DEFAULT NULL, /*binary, alignment length corrected*/
+  `normalization_type` float DEFAULT NULL, /*e.g., target length, family length, none*/
+  PRIMARY KEY (`abundance_type_id`),
+  KEY `abundance_type` (`abundance_type`),
+  KEY `normalization_type` (`normalization_type`)
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
 
 --
 -- Table structure for table `metareads`
@@ -117,26 +134,7 @@ CREATE TABLE `samples` (
   `project_id` int(11) unsigned DEFAULT NULL,
   `sample_alt_id` varchar(256) NOT NULL,
   `name` varchar(128) DEFAULT NULL,
-  `description` text,
-  `country` varchar(256) DEFAULT NULL,
-  `gender` varchar(64) DEFAULT NULL,
-  `age` int(10) unsigned DEFAULT NULL COMMENT 'Age of patient that sample was taken from',
-  `bmi` decimal(5,2) DEFAULT NULL COMMENT 'Body Mass Index',
-  `ibd` tinyint(1) DEFAULT NULL COMMENT 'Irritable Bowel Syndrome',
-  `crohn_disease` tinyint(1) DEFAULT NULL COMMENT 'Crohn''s disease',
-  `ulcerative_colitis` tinyint(1) DEFAULT NULL COMMENT 'ulcerative colitis',
-  `location` varchar(256) DEFAULT NULL,
-  `datesampled` varchar(25) DEFAULT NULL COMMENT 'date_sampled',
-  `site_id` varchar(256) DEFAULT NULL,
-  `region` varchar(256) DEFAULT NULL,
-  `depth` varchar(256) DEFAULT NULL,
-  `water_depth` varchar(256) DEFAULT NULL,
-  `salinity` varchar(256) DEFAULT NULL,
-  `temperature` varchar(256) DEFAULT NULL,
-  `volume_filtered` varchar(256) DEFAULT NULL,
-  `chlorophyll_density` varchar(512) DEFAULT NULL,
-  `annual_chlorophyll_density` varchar(512) DEFAULT NULL,
-  `other_metadata` text,
+  `metadata` text, /*comma-delimited, key=value pairings for sample, assembled from sample_metadata.tab*/
   PRIMARY KEY (`sample_id`),
   UNIQUE KEY `sample_alt_id` (`sample_alt_id`),
   UNIQUE KEY `project_id_sample_alt_id` (`project_id`,`sample_alt_id`),
@@ -154,25 +152,119 @@ DROP TABLE IF EXISTS `searchresults`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `searchresults` (
-  `searchresults_id` int(11) NOT NULL AUTO_INCREMENT,
+  `searchresult_id` int(11) NOT NULL AUTO_INCREMENT,
   `orf_alt_id` varchar(256) NOT NULL, /*FASTER FOR WORKFLOW IF WE STORE ALT_ID*/
   `read_alt_id` varchar(256) NOT NULL, /*FASTER FOR WORKFLOW IF WE STORE ALT_ID*/
   `sample_id` int(11) unsigned NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
-  `famid` int(10) NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `target_id` varchar(256) NOT NULL, 
+  `famid` varchar(256) NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
   `classification_id` int(10) unsigned NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
   `score` float DEFAULT NULL,
   `evalue` double DEFAULT NULL,
   `orf_coverage` float DEFAULT NULL,
-  PRIMARY KEY (`searchresults_id`),
+  `aln_length` float DEFAULT NULL,
+  PRIMARY KEY (`searchresult_id`),
+  UNIQUE KEY `orf_fam_sample_class_id` (`orf_alt_id`,`target_id`,`famid`,`sample_id`,`classification_id`), /*THIS IS FOR SAFETY*/ 
+  KEY `orfalt_sample_id` (`orf_alt_id`,`sample_id`),
+  KEY `famid` (`famid`),
+  KEY `readalt_sample_id` (`read_alt_id`,`sample_id`),
+  KEY `sampleid` (`sample_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `classifications`
+--
+
+DROP TABLE IF EXISTS `classifications`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `classifications` (
+  `result_id` int(11) NOT NULL AUTO_INCREMENT,
+  `orf_alt_id` varchar(256) NOT NULL, /*FASTER FOR WORKFLOW IF WE STORE ALT_ID*/
+  `read_alt_id` varchar(256) NOT NULL, /*FASTER FOR WORKFLOW IF WE STORE ALT_ID*/
+  `sample_id` int(11) unsigned NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `target_id` varchar(256) NOT NULL, 
+  `famid` varchar(256) NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `classification_id` int(10) unsigned NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `aln_length` float DEFAULT NULL,
+  `score` float DEFAULT NULL,
+  PRIMARY KEY (`result_id`),
   UNIQUE KEY `orf_fam_sample_class_id` (`orf_alt_id`,`famid`,`sample_id`,`classification_id`), /*THIS IS FOR SAFETY*/ 
   KEY `orfalt_sample_id` (`orf_alt_id`,`sample_id`),
   KEY `famid` (`famid`),
   KEY `readalt_sample_id` (`read_alt_id`,`sample_id`),
-  KEY `sampleid` (`sample_id`),
-  CONSTRAINT `searchresults_ibfk_1` FOREIGN KEY (`sample_id`) REFERENCES `samples` (`sample_id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `searchresults_ibfk_2` FOREIGN KEY (`classification_id`) REFERENCES `classification_parameters` (`classification_id`) ON DELETE CASCADE ON UPDATE CASCADE
+  KEY `sampleid` (`sample_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table abundances`
+--
+
+DROP TABLE IF EXISTS `abundances`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `abundances` (
+  `abundance_id` int(11) NOT NULL AUTO_INCREMENT,
+  `sample_id`  int(11) unsigned NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `famid` varchar(256) NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `abundance` float NOT NULL, /*FASTER FOR WORKFLOW IF WE STORE ALT_ID*/
+  `relative_abundance` float NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
+  `abundance_type_id` int(10) unsigned NOT NULL, 
+  PRIMARY KEY (`abundance_id`),
+  UNIQUE KEY `fam_sample_type_id` (`sample_id`,`famid`,`abundance_type_id`), /*THIS IS FOR SAFETY*/ 
+  KEY `fam_sample_id` (`famid`,`sample_id`),
+  KEY `type_sample_id` (`abunance_type_id`,`sample_id`),
+  KEY `famid` (`famid`),
+  KEY `sampleid` (`sample_id`),
+  KEY `abundancetype` (`abundance_type_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+--
+-- Table structure for table `familymembers`
+--
+
+DROP TABLE IF EXISTS `familymembers`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `familymembers` (
+  `member_id` int(11) NOT NULL AUTO_INCREMENT, /*INTERNAL ID*/
+  `famid` varchar(256) NOT NULL, /*LOADED FROM FLAT FILES*/
+  `target_id` varchar(256) NOT NULL, /*LOADED FROM FLAT FILES*, IN SOME DBS, WE HAVE MULTIPLE TARGET_ID, FAMID MAPPINGS (e.g, KEGG)*/
+  `target_length` int(11) DEFAULT NULL, /*HOW LONG IS THE TARGET SEQUENCE, NULL FOR HMMS*/
+  PRIMARY KEY (`member_id`),
+  UNIQUE KEY `member_id` (`member_id`), /*THIS IS FOR SAFETY*/
+  KEY `famid` (`famid`),
+  KEY `target_id` (`target_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+
+
+--
+-- Table structure for table `annotations`
+--
+
+DROP TABLE IF EXISTS `annotations`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `annotations` (
+  `annotation_id` int(11) NOT NULL AUTO_INCREMENT,
+  `famid` varchar(256) NOT NULL, /*famid DOES NOT HAVE TO BE UNIQUE - CAN MAP TO MULTIPLE ANNOTATIONS WITHIN AN ANNOTATION TYPE*/
+  `family_length` int(11) DEFAULT NULL, /*EITHER LENGTH OF HMM OR MEAN FAMILY MEMBER LENGTH*/
+  `family_size` int(11) DEFAULT NULL, /*HOW MANY MEMBERS ARE IN THE FAMILY? CAN BE NULL IN CASE OF HMMS*/
+  `annotation_string` varchar(256) DEFAULT NULL, /*THIS IS AN ANNOTATION STRING, LIKE "GLYCOSIDE HYDROLASE"*/
+  `annotation_type_id` varchar(256) DEFAULT NULL, /*THIS IS AN ID THAT MAPS TO ANNOTATION STRING, LIKE IPR013781*/  
+  `annotation_type` varchar(256) DEFAULT NULL, /*ANNOTATION METHOD, LIKE INTERPRO*/
+  PRIMARY KEY (`annotation_id`),
+  UNIQUE KEY `annotation_id` (`annotation_id`), /*THIS IS FOR SAFETY*/
+  KEY `famid` (`famid`),
+  KEY `annotation_type_id` (`annotation_type_id`),
+  KEY `annotation_type` (`annotation_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
 
 
 /*!40101 SET character_set_client = @saved_cs_client */;

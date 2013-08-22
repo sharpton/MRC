@@ -91,26 +91,9 @@ __PACKAGE__->add_columns(
 
 __PACKAGE__->set_primary_key("classification_id");
 
-=head1 RELATIONS
 
-=head2 searchresults
-
-Type: has_many
-
-Related object: L<MRC::Schema::Result::Searchresult>
-
-=cut
-
-__PACKAGE__->has_many(
-  "searchresults",
-  "MRC::Schema::Result::Searchresult",
-  { "foreign.classification_id" => "self.classification_id" },
-  { cascade_copy => 0, cascade_delete => 0 },
-);
-
-
-# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-06-24 14:58:12
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:HZkGFbILbO3SSydSqWpGiA
+# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-08-21 17:06:17
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:0GRE/XksU3zY7LQai2V0eQ
 
 
 # You can replace this text with custom code or comments, and it will be preserved on regeneration

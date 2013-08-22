@@ -111,14 +111,18 @@ while(<RES>){
 	}
     }
     #calculate coverage from query perspective
-    my $coverage;
-    if ($stop > $start) {
-	$coverage = ($stop - $start + 1) / $qlen; # <-- coverage calc must include ****first base!*****, so add one
-    } elsif ($stop < $start) {
-	$coverage = ($start - $stop) / $qlen;
-    } elsif ($stop == $start) {
-	$coverage = 0;
+    if( !defined( $qlen ) ){
+	die( "Can't calculate the query sequence length for ${qid} using orf_file ${query_orfs_file}\n" );
     }
+    my ( $aln_len, $coverage );
+    if ($stop > $start) {
+	$aln_len  = $stop - $start + 1; # <-- coverage calc must include ****first base!*****, so add one
+    } elsif ($stop < $start) {
+	$aln_len  = $start - $stop + 1;
+    } elsif ($stop == $start) {
+	$aln_len  = 0;
+    }
+    $coverage = $aln_len / $qlen; # <-- coverage calc must include ****first base!*****, so add one	
     #do we pass the defined thresholds?
     if( defined( $t_score ) ){
 	next unless $score >= $t_score;
@@ -137,7 +141,7 @@ while(<RES>){
     }	    
     my $read_alt_id = parse_orf_id( $qid, $trans_method );
 #print mysql data row to file
-    my @fields = ( $qid, $read_alt_id, $sample_id, $famid, $score, $evalue, $coverage );
+    my @fields = ( $qid, $read_alt_id, $sample_id, $tid, $famid, $score, $evalue, $coverage, $aln_len );
     my $row    = join( ",", @fields, "\n" );
     $row       =~ s/\,$//;
     print OUT $row;
