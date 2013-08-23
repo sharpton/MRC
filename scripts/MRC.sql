@@ -215,7 +215,7 @@ CREATE TABLE `abundances` (
   PRIMARY KEY (`abundance_id`),
   UNIQUE KEY `fam_sample_type_id` (`sample_id`,`famid`,`abundance_type_id`), /*THIS IS FOR SAFETY*/ 
   KEY `fam_sample_id` (`famid`,`sample_id`),
-  KEY `type_sample_id` (`abunance_type_id`,`sample_id`),
+  KEY `type_sample_id` (`abundance_type_id`,`sample_id`),
   KEY `famid` (`famid`),
   KEY `sampleid` (`sample_id`),
   KEY `abundancetype` (`abundance_type_id`)

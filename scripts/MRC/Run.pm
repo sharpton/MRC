@@ -821,10 +821,10 @@ sub find_orf_fam_tophit{ #for each orf to family mapping, find the top hit
     while(<FILE>){
 	chomp $_;
 	my( $orf, $famid, $score );
-	if( $_ =~ m/(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)/ ){
+	if( $_ =~ m/(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)/ ){
 	    $orf    = $1;
-	    $famid  = $4;
-	    $score  = $5;
+	    $famid  = $5;
+	    $score  = $6;
 	} else {
 	   warn( "Can't parse orf_alt_id, famid, or score from $result_file where line is $_\n" );
 	   next;
@@ -1337,6 +1337,8 @@ sub build_search_db{
     my $redunts;
     #build a map of family lengths
     open( FAMLENS, ">${raw_db_path}/family_lengths.tab" ) || die "Can't open ${raw_db_path}/family_lengths.tab for write: $!\n";
+    #build a map of family member sequence lengths, not relevant for type = hmm
+    open( SEQLENS, ">${raw_db_path}/sequence_lengths.tab" ) || die "Can't open ${raw_db_path}/sequence_lengths.tab for write:$!\n";
     #blast requires tmp files for creation of NR database
     if( $type eq "blast" ){
 	$tmp_path = "${db_path_with_name}.tmp";
@@ -1358,6 +1360,7 @@ sub build_search_db{
 	    my $path = $family_path_hashref->{$type}->{$family};
 	    if( -e $path ) { $family_db_file = $path; } # assign the family_db_file to this path ONLY IF IT EXISTS!
 	    $family_length = _get_family_length( $family_db_file, $type ); #get the family length from the HMM file
+	    print FAMLENS join( "\t", $family, $family_length, "\n" );
 	    (defined($family_db_file)) or die("Can't find the HMM corresponding to family $family\n" );
 	    push( @split, $family_db_file );
 	    $count++;
@@ -1423,24 +1426,38 @@ sub build_search_db{
 	    }
 	    open( FILE, "zcat --force $family_db_file |") || die "Unable to open the file \"$family_db_file\" for reading: $! --"; # zcat --force can TRANSPARENTLY read both .gz and non-gzipped files!
 	    my $fam_init_len = $length; #used to calculate $family_length
-	    my $fam_nseqs    = 0; #used to calculate $family_length
+	    my $fam_nseqs    = 0; #used to calculate $family_length	    
+	    my $seq_len      = 0;
 	    while(<FILE>){
-		if ( $_ =~ m/^\>/ ){
+		if ( $_ =~ m/^\>/ ){ 
 		    $total++;
 		    $fam_nseqs++;
 		    #no longer need _append_famids_to_seqids, we just do it here now
 		    chomp $_;
 		    if( defined( $id ) ){ #then we've seen a seq before, add that one to the hash
-			$seqs->{$id} = $seq;
+			$seqs->{$id} = $seq; #build an amended id to sequence hash for batch printing (below)
+			$id =~ s/\>//; #get rid of fasta header indicator for our SEQLENS lookup map
+			chomp( $id );
+			print SEQLENS join( "\t", $family, $id, $seq_len, "\n" );
 			$id  = ();
 			$seq = '';
+			$seq_len = 0;
 		    }
-		    $id = $_ . "_" . $family . "\n";
-		}
-		else{
+		    $id = $_ . "_" . $family . "\n"; #note that this may break families that have more than seqid on the header line
+		} else{
 		    chomp $_; # remove the newline
 		    $length += length($_);
 		    $seq    .= $_ . "\n";
+		    $seq_len += length($_);
+		}
+		if( eof ){ #end of file could be the current line or the next line (empty), so separate it from the main conditional statement
+		    $seqs->{$id} = $seq; #build an amended id to sequence hash for batch printing (below)
+		    $id =~ s/\>//; #get rid of fasta header indicator for our SEQLENS lookup map
+		    chomp( $id );
+		    print SEQLENS join( "\t", $family, $id, $seq_len, "\n" );
+		    $id  = ();
+		    $seq = '';
+		    $seq_len = 0;		
 		}
 		#we've hit our desired size (or at the end). Process the split
 		if( ( scalar( keys( %$seqs ) ) >= $split_size ) || ( $family == $families[-1] && eof )) {
@@ -1468,17 +1485,18 @@ sub build_search_db{
 	    }
 	    #calculate the family's length
 	    $family_length = ( $length - $fam_init_len ) / $fam_nseqs; #average length of total sequence found in family
+	    if( defined( $family_length ) ){
+		print FAMLENS join( "\t", $family, $family_length, $fam_nseqs, "\n" );
+	    } else {
+		die "Cannot calculate a family length for $family\n";
+	    }       	    
 	}
 	else { 
 	    die "invalid type: <$type>"; 
 	}
-	if( defined( $family_length ) ){
-	    print FAMLENS join( "\t", $family, $family_length, "\n" );
-	} else {
-	    die "Cannot calculate a family lenth for $family\n";
-	}       
     }
     close FAMLENS;
+    close SEQLENS;
     if( $nr_db ){
 	close $redunts;
     }
@@ -2569,7 +2587,7 @@ sub build_classification_maps_by_sample{
 	    my $famid       = $row->{"famid"};
 	    my $read_alt_id = $row->{"read_alt_id"};
 	    my $target_id   = $row->{"target_id"};
-	    ny $aln_length  = $row->{"aln_length"};
+	    my $aln_length  = $row->{"aln_length"};
 	    print OUT join("\t", $self->get_project_id(), $sample_id, $read_alt_id, $orf_alt_id, $target_id, $famid, $aln_length, $read_count, "\n" );
 	}
     }
@@ -2578,8 +2596,9 @@ sub build_classification_maps_by_sample{
 }
 
 sub calculate_abundances{
-    my ($sample_id, $abun_type, $norm_type ) = @_;
-    my $abundance_type_id = $self->MRC::DB::get_abundance_type_id( $abun_type, $norm_type );
+    my ( $self, $sample_id, $class_id, $abund_type, $norm_type ) = @_;
+    my $abundance_type_id = $self->MRC::DB::get_abundance_type_id( $abund_type, $norm_type );
+    my $dbh  = $self->MRC::DB::build_dbh();
     my $members_rs = $self->MRC::DB::get_classified_orfs_by_sample( $sample_id, $class_id, $dbh, $self->postrarefy_samples() );
     #did mysql return any results for this query?
     my $nrows = 0;
@@ -2602,6 +2621,12 @@ sub calculate_abundances{
 	    my $read_alt_id = $row->{"read_alt_id"};
 	    my $target_id   = $row->{"target_id"};
 	    my $aln_length  = $row->{"aln_length"};
+	    my ( $target_length, $family_length );
+	    if( $norm_type eq 'target_length' ){
+		$target_length = $self->MRC::DB::get_target_length( $target_id );
+	    } elsif( $norm_type eq 'family_length' ){
+		$family_length = $self->MRC::DB::get_family_length( $famid );
+	    }
 	    if( $abund_type eq 'binary' ){
 		my $raw;
 		if( $norm_type eq 'none' ){
@@ -2628,8 +2653,8 @@ sub calculate_abundances{
 		} else{
 		    die( "You selected a normalization type that I am not familiar with (<${norm_type}>). Must be either 'none', 'target_length', or 'family_length'\n" );
 		}
-		$abundance->{$famid}->{"raw"} += $coverage;
-		$abundance->{"total"} += $coverage;
+		$abundances->{$famid}->{"raw"} += $coverage;
+		$abundances->{"total"} += $coverage;
 	    } else{
 		die( "You are trying to calculate a type of abundance that I'm not aware of. Reveived <${abund_type}>. Exiting\n" );		
 	    }	   
@@ -2641,14 +2666,11 @@ sub calculate_abundances{
 	next if( $famid eq "total" );
 	my $raw = $abundances->{$famid}->{"raw"};
 	my $ra  = $raw / $total;
-	$abundances->{$famid}->{"ra"} = $ra;
 	#now, insert the data into mysql.
+	$self->MRC::DB::insert_abundance( $sample_id, $famid, $raw, $ra, $abundance_type_id );
     }
-
-   
-
     $self->MRC::DB::disconnect_dbh( $dbh );	
-    
+    return $self;
 }
 
 sub get_post_rarefied_reads{

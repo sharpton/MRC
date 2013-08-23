@@ -365,7 +365,6 @@ sub bulk_import{
 		close OUT;
 		my $sql = "LOAD DATA LOCAL INFILE '" . $out . "' INTO TABLE " . $table . " FIELDS TERMINATED BY ',' " . 
 		    "LINES TERMINATED BY '\\n' ( " . $field_string . " )";
-		print $sql . "\n";
 		#join(",", @fields) . ")";
 		my $sth  = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
 		$inserts = $inserts + $sth;
@@ -375,7 +374,7 @@ sub bulk_import{
 	    }
 	}
 	close TAB;
-	print $inserts . " records inserted\n";
+	print $inserts . " records inserted.\n";
     }	
     #disconnect
     $dbh->disconnect;
@@ -1433,11 +1432,11 @@ sub get_classification_id{
 }
 
 sub get_abundance_type_id{
-    my ( $self, $type, $norm_method ) = @_; 
+    my ( $self, $abund_type, $norm_type ) = @_; 
     my $inserted = $self->get_schema->resultset( "AbundanceParameter" )->find_or_create(
 	{
-	    abundance_type          => $type,
-	    normalization_method    => $norm_method,
+	    abundance_type        => $abund_type,
+	    normalization_type    => $norm_type,
 	}
 	);
     return $inserted;
@@ -1899,6 +1898,90 @@ sub get_read_ids_from_ffdb{
 	close FILE;
     }
     return \@read_ids;
+}
+
+sub load_families{
+    my( $self, $type ) = @_;
+    my $raw_db_path = undef;
+    if ($type eq "hmm")   { $raw_db_path = $self->MRC::DB::get_hmmdb_path(); }
+    if ($type eq "blast") { $raw_db_path = $self->MRC::DB::get_blastdb_path(); }
+    open( FAMLENS, "${raw_db_path}/family_lengths.tab" ) || die "Can't open ${raw_db_path}/family_lengths.tab for read: $!\n";
+    while( <FAMLENS> ){
+	chomp $_;
+	my( $famid, $famlen, $fam_size );
+	if( $type eq "blast" ){
+	    ( $famid, $famlen, $fam_size ) = split( "\t", $_ );
+	} elsif( $type eq "hmm" ){
+	    ( $famid, $famlen ) = split( "\t", $_ );
+	}
+	my $inserted = $self->get_schema->resultset("Annotation")->create(
+	    {
+		famid         => $famid,
+		family_length => $famlen,
+		family_size   => $fam_size,
+	    }
+	    );
+    }
+    close FAMLENS;
+    return $self;
+}
+
+sub load_family_members{
+    my( $self ) = @_;
+    my $sequence_map = $self->MRC::DB::get_blastdb_path() . "/sequence_lengths.tab";
+    open( SEQLENS, "$sequence_map" ) || die "Can't open $sequence_map for read: $!\n";
+    while( <SEQLENS> ){
+	chomp $_;
+	my( $famid, $seqid, $seqlen ) = split( "\t", $_ );	
+	my $inserted = $self->get_schema->resultset("Familymember")->create(
+	    {
+		famid         => $famid,
+		target_id     => $seqid,
+		target_length => $seqlen,
+	    }
+	    );
+    }
+    close SEQLENS;
+
+}
+
+sub load_annotations{
+
+
+}
+
+sub get_family_length{
+    my( $self, $famid ) = @_;
+    my $family_length = $self->get_schema->resultset("Annotation")->find(
+	{
+	    famid => $famid,
+	}
+	)->family_length;
+    return $family_length;
+}
+
+sub get_target_length{
+    my( $self, $target_id ) = @_;
+    my $target_length = $self->get_schema->resultset("Familymember")->find(
+	{
+	    target_id => $target_id,
+	}
+	)->target_length;
+    return $target_length;
+}
+
+sub insert_abundance{
+    my( $self, $sample_id, $famid, $abundance, $relative_abundance, $abundance_type_id ) = @_;
+    my $inserted = $self->get_schema->resultset("Abundance")->create(
+	{
+	    sample_id => $sample_id,
+	    famid     => $famid,
+	    abundance => $abundance,
+	    relative_abundance => $relative_abundance,
+	    abundance_type_id  => $abundance_type_id,
+	}
+	);
+    return $inserted;
 }
 
 1;

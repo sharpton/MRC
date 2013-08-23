@@ -139,6 +139,11 @@ my @fcis      = (0, 1, 2); #what family construction ids are allowed to be proce
 my $check     = 0;
 my $is_strict = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
 
+my $path_to_family_annotations;
+my $abundance_type = "coverage";
+my $normalization_type = "target_length";
+
+
 if( 0 ){
 #remote compute (e.g., SGE) vars
 $is_remote        = 1; # By default, assume we ARE using a remote compute cluster
@@ -562,7 +567,7 @@ if (defined($goto) && $goto) {
     if ($goto eq "G" or $goto eq "GET")     {     warn "Skipping to get remote hmmscan results step!\n"; goto GETRESULTS; }
     if ($goto eq "L" or $goto eq "LOADRESULTS"){  warn "Skipping to get remote hmmscan results step!\n"; goto LOADRESULTS; }
     if ($goto eq "C" or $goto eq "CLASSIFY"){     warn "Skipping to classifying reads step!\n"; goto CLASSIFYREADS; }
-    if ($goto eq "O" or $goto eq "OUTPUT")  {     warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
+    if ($goto eq "D" or $goto eq "DIVERSITY")  {     warn "Skipping to producing output step!\n"; goto CALCDIVERSITY; }
     die "QUITTING DUE TO INVALID --goto OPTION: (specifically, the option was \"$goto\"). If we got to here in the code, it means there was an INVALID FLAG PASSED TO THE GOTO OPTION.";
 }
 
@@ -706,6 +711,21 @@ if ($blastdb_build) {
     $analysis->MRC::Run::build_search_db($blastdb_name, $blast_db_split_size, $force_db_build, "blast", $reps_only, $nr_db);
 }
 
+#may not need to build the search database, but let's see if we need to load the database info into mysql....
+if( $use_blast || $use_last || $use_rapsearch) {
+    $analysis->MRC::DB::load_families( "blast" );
+    $analysis->MRC::DB::load_family_members( "blast" );
+}
+if( $use_hmmsearch || $use_hmmscan ){
+    $analysis->MRC::DB::load_families( "hmm" );
+}
+if( defined( $path_to_family_annotations ) ){
+    if( ! -e $path_to_family_annotations ){
+	warn "The path to the family annotations that you specified does not seem to exist! You pointed me to <$path_to_family_annotations>\n";
+    } else {
+	$analysis->MRC::DB::load_annotations( $path_to_family_annotations );
+    }
+}
 
 ### ====================================================================
 ### might want to seperate transfering and indexing of the database
@@ -1005,7 +1025,7 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	}
 	print "Building classification map...\n";  
 	$analysis->MRC::Run::build_classification_maps_by_sample($sample_id, $class_id, $post_rare_reads);
-	$analysis->MRC::Run::calculate_abunances( $sample_id, $abundance_type, $normalization_type );
+	$analysis->MRC::Run::calculate_abundances( $sample_id, $class_id, $abundance_type, $normalization_type );
     }
 }
 
