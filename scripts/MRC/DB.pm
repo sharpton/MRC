@@ -23,7 +23,7 @@ package MRC::DB;
 use strict;
 
 #use Sfams::Schema;
-#use MRC::Schema;
+use MRC::Schema;
 use Data::Dumper;
 use File::Basename;
 use File::Copy;
@@ -302,8 +302,8 @@ sub bulk_import{
 		print OUT join( "\n", @rows );
 		close OUT;
 		my $sql = "LOAD DATA LOCAL INFILE '" . $out . "' INTO TABLE " . $table . " FIELDS TERMINATED BY ',' " . 
-		    "LINES TERMINATED BY '\\n' ( sample_id, read_id, orf_alt_id )";
-		my $sth = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
+		    "LINES TERMINATED BY '\\n' ( sample_id, read_id, orf_alt_id )"
+;		my $sth = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
 		$inserts = $inserts + $sth;
 		$count = 0;
 		@rows  = ();
@@ -376,6 +376,43 @@ sub bulk_import{
 	close TAB;
 	print $inserts . " records inserted.\n";
     }	
+    if( $table eq "families" || $table eq "familymembers" ){ #THE TABLE DATA IS ASSEMBLED ELSEWHERE, WE SIMPLY OPTIMIZE DB PINGS WITH THIS ROUTINE
+	my $count    = 0;
+	my $inserts  = 0;
+	my @rows     = ();
+	my $searchdb_id  = $fks->{"searchdb_id"};
+	open( TAB, "$file" ) || die "Can't open $file for read in MRC::Run::bulk_import\n";
+	my $run = 0;
+	print "Loading data from $file\n";
+	while( <TAB> ){
+	    chomp $_;
+	    my $row   = $_ . "," . $searchdb_id;
+	    my $col_count = ($row =~ tr/\,//);
+	    if( $col_count < scalar(@fields) - 2 ){
+		warn( "Didn't have enough elements to load data from $row when analyzing $file\n" );
+		die;
+	    }
+	    push ( @rows, $row );
+	    $count++;
+	    if( eof || $count == $nrows ){
+		$run++;
+		open( OUT,  ">$out" ) || die "Can't open $out for write in MRC::Run::bulk_import\n";
+		print OUT join( "\n", @rows );
+		close OUT;
+		my $sql = "LOAD DATA LOCAL INFILE '" . $out . "' INTO TABLE " . $table . " FIELDS TERMINATED BY '\t' " . 
+		    "LINES TERMINATED BY '\\n' ( " . $field_string . " )";
+		#join(",", @fields) . ")";
+		my $sth  = $dbh->do($sql) || die "SQL Error: $DBI::errstr\n";
+		$inserts = $inserts + $sth;
+		$count   = 0;
+		@rows    = ();
+		unlink( $out );
+	    }
+	}
+	close TAB;
+	print $inserts . " records inserted.\n";
+    }	
+
     #disconnect
     $dbh->disconnect;
     return $self;
@@ -988,6 +1025,7 @@ sub get_families_with_orfs_by_sample{
 #This is a complicated series of queries for DBIx. I'm sure someone knows how to do this efficiently in DBIx, but I don't. So, I'll use DBI.
 sub get_classified_orfs_by_sample_old{
     my ( $self, $sample_id, $class_id, $dbh, $count ) = @_; #if count is defined, subsample using the metareads table
+    
     #get the classification parameters
     my $class_params = $self->MRC::DB::get_classification_parameters( $class_id );
     my $class_method = $class_params->method;
@@ -1070,7 +1108,7 @@ sub classify_orfs_by_sample{
 	die( "Could not parse the classification method string from classification_parameters table. Got <${class_method}>\n" );
     }
     my $sql; #will differ depending on what we want to grab.
-    $sql = "INSERT INTO classifications ( score, orf_alt_id, read_alt_id, sample_id, target_id, famid, aln_length, classification_id ) ";
+    $sql = "INSERT IGNORE INTO classifications ( score, orf_alt_id, read_alt_id, sample_id, target_id, famid, aln_length, classification_id ) ";
     if( !defined( $count ) ){ #grab results for all read
 	$sql .= "SELECT MAX( score ) AS score, orf_alt_id, read_alt_id, sample_id, target_id, famid, aln_length, '${class_id}' FROM searchresults WHERE sample_id = ${sample_id} "; #note that we want the proper class_id, not the one from searchresults
 	if( defined( $class_params->evalue_threshold ) ){
@@ -1431,15 +1469,57 @@ sub get_classification_id{
     return $inserted;
 }
 
-sub get_abundance_type_id{
+sub get_searchdb_id{
+    my ( $self, $db_type, $db_name ) = @_;
+    my $inserted = $self->get_schema->resultset( "Searchdatabase" )->find_or_create(
+	{
+	    db_type => $db_type,
+	    db_name => $db_name,
+	}
+	);
+    return $inserted;
+}
+
+#MODIFIED!
+sub get_abundance_parameter_id{
     my ( $self, $abund_type, $norm_type ) = @_; 
+    my ( $rarefaction_depth, $rarefaction_type );
+    if( defined( $self->postrarefy_samples ) ){ #post rarefaction is always smallest
+	$rarefaction_depth = $self->postrarefy_samples;
+	$rarefaction_type  = "post-rarefaction";
+    } elsif( defined( $self->prerarefy_samples ) ){
+	$rarefaction_depth = $self->prerarefy_samples;
+	$rarefaction_type  = "pre-rarefaction";
+    }
     my $inserted = $self->get_schema->resultset( "AbundanceParameter" )->find_or_create(
 	{
 	    abundance_type        => $abund_type,
 	    normalization_type    => $norm_type,
+	    rarefaction_depth     => $rarefaction_depth,
+	    rarefaction_type      => $rarefaction_type,
 	}
 	);
     return $inserted;
+}
+
+sub get_families_by_searchdb_id{
+    my( $self, $searchdb_id ) = @_;
+    my $fams = $self->get_schema->resultset( "Family" )->search(
+	{
+	    searchdb_id => $searchdb_id,
+	}
+	);
+    return $fams;    
+}
+
+sub get_familymembers_by_searchdb_id{
+    my( $self, $searchdb_id ) = @_;
+    my $fams = $self->get_schema->resultset( "Familymember" )->search(
+	{
+	    searchdb_id => $searchdb_id,
+	}
+	);
+    return $fams;    
 }
 
 
@@ -1900,6 +1980,7 @@ sub get_read_ids_from_ffdb{
     return \@read_ids;
 }
 
+#too slow. obsolete
 sub load_families{
     my( $self, $type ) = @_;
     my $raw_db_path = undef;
@@ -1914,7 +1995,7 @@ sub load_families{
 	} elsif( $type eq "hmm" ){
 	    ( $famid, $famlen ) = split( "\t", $_ );
 	}
-	my $inserted = $self->get_schema->resultset("Annotation")->create(
+	my $inserted = $self->get_schema->resultset("Family")->find_or_create(
 	    {
 		famid         => $famid,
 		family_length => $famlen,
@@ -1926,6 +2007,7 @@ sub load_families{
     return $self;
 }
 
+#too slow. obsolete
 sub load_family_members{
     my( $self ) = @_;
     my $sequence_map = $self->MRC::DB::get_blastdb_path() . "/sequence_lengths.tab";
@@ -1933,7 +2015,7 @@ sub load_family_members{
     while( <SEQLENS> ){
 	chomp $_;
 	my( $famid, $seqid, $seqlen ) = split( "\t", $_ );	
-	my $inserted = $self->get_schema->resultset("Familymember")->create(
+	my $inserted = $self->get_schema->resultset("Familymember")->find_or_create(
 	    {
 		famid         => $famid,
 		target_id     => $seqid,
@@ -1970,18 +2052,70 @@ sub get_target_length{
     return $target_length;
 }
 
+#MODIFIED!
 sub insert_abundance{
-    my( $self, $sample_id, $famid, $abundance, $relative_abundance, $abundance_type_id ) = @_;
-    my $inserted = $self->get_schema->resultset("Abundance")->create(
+    my( $self, $sample_id, $famid, $abundance, $relative_abundance, $abundance_parameter_id, $class_id ) = @_;
+    my $inserted = $self->get_schema->resultset("Abundance")->find_or_create(
 	{
 	    sample_id => $sample_id,
 	    famid     => $famid,
 	    abundance => $abundance,
 	    relative_abundance => $relative_abundance,
-	    abundance_type_id  => $abundance_type_id,
+	    abundance_parameter_id  => $abundance_parameter_id,
+	    classification_id       => $class_id,
 	}
 	);
     return $inserted;
+}
+
+#MODIFIED!
+sub insert_sample_diversity{
+    my( $self, $sample_id, $class_id, $abund_param_id, $richness, $shannon, $goods_coverage ) = @_;
+    my $inserted = $self->get_schema->resultset("Abundance")->find_or_create(
+	{
+	    sample_id               => $sample_id,
+	    class_id                => $class_id,
+	    abundance_parameter_id  => $abund_param_id,
+	    richness                => $richness,
+	    shannon_entropy         => $shannon,
+	    goods_coverage          => $goods_coverage,
+	}
+	);
+    return $inserted;
+}
+
+#MODIFIED!
+sub get_sample_abundance{
+    my( $self, $sample_id, $class_id, $abund_param_id ) = @_;
+    my $inserted = $self->get_schema->resultset("Abundance")->search(
+	{
+	    sample_id               => $sample_id,
+	    abundance_parameter_id  => $abund_param_id,
+	    classification_id       => $class_id,
+	}
+	);
+    return $inserted;
+}    
+
+#MODIFIED!
+sub get_sample_abundances_for_all_classed_fams{
+    my ( $self, $dbh, $sample_id, $class_id, $abund_param_id ) = @_;
+    my $sql = "SELECT a.famid, b.sample_id, b.abundance, b.relative_abundance FROM (SELECT DISTINCT famid FROM abundances) a LEFT OUTER JOIN abundances b ON a.famid = b.famid AND b.sample_id = ${sample_id} " .
+	"AND b.classification_id = ${class_id} AND b.abundance_parameter_id = ${abund_param_id}";
+    print $sql . "\n";
+    my $sth = $dbh->prepare($sql) || die "SQL Error: $DBI::errstr\n";
+    $sth->execute();
+    return $sth;
+}
+
+sub get_abundance_parameters{
+    my( $self, $abund_param_id ) = @_;
+    my $params = $self->get_schema->resultset("AbundanceParameter")->find(
+	{
+	    abundance_parameter_id => $abund_param_id,
+	}
+	);
+    return $params
 }
 
 1;

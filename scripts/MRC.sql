@@ -39,24 +39,6 @@ CREATE TABLE `classification_parameters` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
--- Table structure for table `abundance_parameters`
---
-
-DROP TABLE IF EXISTS `abundance_parameters`;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8 */;
-CREATE TABLE `abundance_parameters` (
-  `abundance_type_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-  `abundance_type` double DEFAULT NULL, /*binary, alignment length corrected*/
-  `normalization_type` float DEFAULT NULL, /*e.g., target length, family length, none*/
-  PRIMARY KEY (`abundance_type_id`),
-  KEY `abundance_type` (`abundance_type`),
-  KEY `normalization_type` (`normalization_type`)
-) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
-/*!40101 SET character_set_client = @saved_cs_client */;
-
-
---
 -- Table structure for table `metareads`
 --
 
@@ -199,6 +181,25 @@ CREATE TABLE `classifications` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `abundance_parameters`
+--
+
+DROP TABLE IF EXISTS `abundance_parameters`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `abundance_parameters` (
+  `abundance_parameter_id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `abundance_type` varchar(256) DEFAULT NULL, /*binary, alignment length corrected*/
+  `normalization_type` varchar(256) DEFAULT NULL, /*e.g., target length, family length, none*/
+  `rarefaction_depth` int(10) unsigned DEFAULT NULL,
+  `rarefaction_type`  varchar(256) DEFAULT NULL, /*pre-rarefication or post-rarefication*/
+  PRIMARY KEY (`abundance_parameter_id`),
+  KEY `abundance_type` (`abundance_type`),
+  KEY `normalization_type` (`normalization_type`)
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=latin1;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table abundances`
 --
 
@@ -211,15 +212,34 @@ CREATE TABLE `abundances` (
   `famid` varchar(256) NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
   `abundance` float NOT NULL, /*FASTER FOR WORKFLOW IF WE STORE ALT_ID*/
   `relative_abundance` float NOT NULL, /*NOTE NO FOREIGN KEY CHECK!*/
-  `abundance_type_id` int(10) unsigned NOT NULL, 
+  `abundance_parameter_id` int(10) unsigned NOT NULL,
+  `classification_id` int(11) unsigned DEFAULT NULL,  
   PRIMARY KEY (`abundance_id`),
-  UNIQUE KEY `fam_sample_type_id` (`sample_id`,`famid`,`abundance_type_id`), /*THIS IS FOR SAFETY*/ 
+  UNIQUE KEY `fam_sample_type_id` (`sample_id`,`famid`,`abundance_parameter_id`), /*THIS IS FOR SAFETY*/ 
   KEY `fam_sample_id` (`famid`,`sample_id`),
-  KEY `type_sample_id` (`abundance_type_id`,`sample_id`),
+  KEY `type_sample_id` (`abundance_parameter_id`,`sample_id`),
   KEY `famid` (`famid`),
   KEY `sampleid` (`sample_id`),
-  KEY `abundancetype` (`abundance_type_id`)
+  KEY `classification_id` (`classification_id`),
+  KEY `abundanceparameter` (`abundance_parameter_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+--
+-- Table structure for table `searchdatabases`
+--
+
+DROP TABLE IF EXISTS `searchdatabases`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `searchdatabases` (
+  `searchdb_id` int(11) NOT NULL AUTO_INCREMENT, 
+  `db_type` varchar(256) NOT NULL,
+  `db_name` varchar(256) NOT NULL,
+  PRIMARY KEY (`searchdb_id`),
+  UNIQUE KEY `name_type` (`db_name`,`db_type`), /*THIS IS FOR SAFETY*/
+  KEY `db_type` (`db_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+/*!40101 SET character_set_client = @saved_cs_client */;
 
 --
 -- Table structure for table `familymembers`
@@ -233,14 +253,33 @@ CREATE TABLE `familymembers` (
   `famid` varchar(256) NOT NULL, /*LOADED FROM FLAT FILES*/
   `target_id` varchar(256) NOT NULL, /*LOADED FROM FLAT FILES*, IN SOME DBS, WE HAVE MULTIPLE TARGET_ID, FAMID MAPPINGS (e.g, KEGG)*/
   `target_length` int(11) DEFAULT NULL, /*HOW LONG IS THE TARGET SEQUENCE, NULL FOR HMMS*/
+  `searchdb_id` int(11) NOT NULL,
   PRIMARY KEY (`member_id`),
   UNIQUE KEY `member_id` (`member_id`), /*THIS IS FOR SAFETY*/
   KEY `famid` (`famid`),
-  KEY `target_id` (`target_id`)
+  KEY `target_id` (`target_id`),
+  KEY `searchdb_id` (`searchdb_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+--
+-- Table structure for table `families`
+--
+
+DROP TABLE IF EXISTS `families`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `families` (
+  `internal_famid` int(11) NOT NULL AUTO_INCREMENT,
+  `famid` varchar(256) NOT NULL, /*famid, searchdb_id must be unique!*/
+  `family_length` int(11) DEFAULT NULL, /*EITHER LENGTH OF HMM OR MEAN FAMILY MEMBER LENGTH*/
+  `family_size` int(11) DEFAULT NULL, /*HOW MANY MEMBERS ARE IN THE FAMILY? CAN BE NULL IN CASE OF HMMS*/
+  `searchdb_id` int(11) NOT NULL,
+  PRIMARY KEY (`internal_famid`),
+  UNIQUE KEY `famid_searchdb_id` (`famid`,`searchdb_id`), /*THIS IS FOR SAFETY*/
+  KEY `famid` (`famid`),
+  KEY `searchdb_id` (`searchdb_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
-
 
 --
 -- Table structure for table `annotations`
@@ -251,20 +290,18 @@ DROP TABLE IF EXISTS `annotations`;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `annotations` (
   `annotation_id` int(11) NOT NULL AUTO_INCREMENT,
-  `famid` varchar(256) NOT NULL, /*famid DOES NOT HAVE TO BE UNIQUE - CAN MAP TO MULTIPLE ANNOTATIONS WITHIN AN ANNOTATION TYPE*/
-  `family_length` int(11) DEFAULT NULL, /*EITHER LENGTH OF HMM OR MEAN FAMILY MEMBER LENGTH*/
-  `family_size` int(11) DEFAULT NULL, /*HOW MANY MEMBERS ARE IN THE FAMILY? CAN BE NULL IN CASE OF HMMS*/
+  `famid` varchar(256) NOT NULL, /*does not have to be unique, may map to multiple annotations*/
   `annotation_string` varchar(256) DEFAULT NULL, /*THIS IS AN ANNOTATION STRING, LIKE "GLYCOSIDE HYDROLASE"*/
   `annotation_type_id` varchar(256) DEFAULT NULL, /*THIS IS AN ID THAT MAPS TO ANNOTATION STRING, LIKE IPR013781*/  
   `annotation_type` varchar(256) DEFAULT NULL, /*ANNOTATION METHOD, LIKE INTERPRO*/
+  `searchdb_id` int(11) NOT NULL,
   PRIMARY KEY (`annotation_id`),
-  UNIQUE KEY `annotation_id` (`annotation_id`), /*THIS IS FOR SAFETY*/
+  UNIQUE KEY `famid_searchdb_annotation_type_id` (`famid`,`searchdb_id`,`annotation_type_id`), /*THIS IS FOR SAFETY*/
   KEY `famid` (`famid`),
   KEY `annotation_type_id` (`annotation_type_id`),
-  KEY `annotation_type` (`annotation_type`)
+  KEY `annotation_type` (`annotation_type`),
+  KEY `searchdb_id` (`searchdb_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
-/*!40101 SET character_set_client = @saved_cs_client */;
-
 
 
 /*!40101 SET character_set_client = @saved_cs_client */;

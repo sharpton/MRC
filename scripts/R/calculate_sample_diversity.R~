@@ -1,0 +1,59 @@
+# Invoke %  R  --slave  --args  class.id  outdir  out.file.stem  metadata.tab <  calculate_diversity.R
+
+#This script does the following:
+#1. Calculates diversity summary statistics for each sample in the analysis
+#2. Identifies intersample differences in diversity (producing plots and R data tables)
+#3. Profiles the relative abundance variation of each family across samples (producing plots and R data tables)
+#4. Conducts subsampled versions of the above analyses using sample metadata annotations
+#5. Builds a PCA of samples based on family relative abundances
+
+require(ggplot2)
+require(reshape2)
+
+#if( 0 ){ #troubleshooing switch
+Args             <- commandArgs()
+class.id         <- Args[4]
+outdir           <- Args[5] #must have trailing slash!
+out.file.stem    <- Args[6]
+fam.len.tab      <- Args[7] #contains average family sequence length, used to normalize abundances
+metadata.tab     <- Args[8] #need to figure out how to automate building of this! Maybe we change sample table on the fly....
+rare.value       <- Args[9] #need to check if it is defined or not...
+
+#} #troubleshooting loop end
+
+#add trailing slash
+outdir <- paste( outdir, "/", sep="" )
+dir.create( file.path( outdir), showWarnings = FALSE )
+#Shannon Entropy Functions
+#from SJ Riesenfeld
+sh.entropy <- function(v,base=2) {
+  p = as.numeric(v) / sum(v)
+  sh.entropy = sum(sapply(v, coord.sh.entropy, base))
+  return (sh.entropy)
+}
+
+coord.sh.entropy <- function(x, base=2) {
+  if (x==0) {
+    return (0)
+  } else {
+    return( -x*log(x, base) )
+  }
+}
+
+#Good's coverage
+#takes list of abundances per family and total number of reads across sample
+goods.coverage <- function( abunds, count ) {
+  singletons = length( subset( abunds, abunds == 1 ) )
+  coverage   = 1 - ( singletons / count )
+  return( coverage )
+}
+
+#get the metadata
+meta       <- read.table( file=metadata.tab, header = TRUE )
+meta.names <- colnames( meta )
+
+#get the classification maps associated with the class.id
+maps     <- list.files(pattern=paste('ClassificationMap_Sample_.*_ClassID_', class.id, '_Rare_', rare.value, '.tab',sep='' ))
+proj.tab <- NULL #cats samp.tabs together
+div.tab  <- NULL #maps sample id to family relative abundance shannon entropy and richness
+div.types <- c( "RICHNESS" , "RELATIVE_RICHNESS", "SHANNON_ENTROPY", "GOODS_COVERAGE" )

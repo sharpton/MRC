@@ -146,8 +146,8 @@ __PACKAGE__->add_unique_constraint("sample_id_orf_alt_id", ["sample_id", "orf_al
 __PACKAGE__->add_unique_constraint("sample_id_read_alt_id", ["sample_id", "read_alt_id"]);
 
 
-# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-08-22 16:32:06
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:t6Kv1DO6W2H4l9yyGvYzFA
+# Created by DBIx::Class::Schema::Loader v0.07035 @ 2013-08-27 00:50:58
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:NIYqubew+Rr0uWogK3LcIg
 
 
 # You can replace this text with custom code or comments, and it will be preserved on regeneration

@@ -12,6 +12,8 @@ my ( $results_tab, $query_orfs_file,
      $t_evalue,    $t_coverage,      $t_score, 
     );
 
+my $parse_type = "best_hit"; #use this to save space. Will still have to look across searchdb splits for top hit.
+
 GetOptions(
     "results-tab=s"  => \$results_tab,
     "orfs-file=s"    => \$query_orfs_file,
@@ -22,6 +24,7 @@ GetOptions(
     "evalue=s"       => \$t_evalue,     #thresholds might be float, might be "NULL" via bash. if float, perl will coerse from string
     "coverage=s"     => \$t_coverage,
     "score=s"        => \$t_score,
+    "parse-type=s"   => \$parse_type, #what results should we store? 'best_hit' (per read), 'best_per_fam' (per read), 'all' (above thresholds)
     );
 
 if( $t_evalue eq "NULL" && $t_coverage eq "NULL" && $t_score eq "NULL" ){
@@ -45,6 +48,8 @@ my %seqlens    = ();
 if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch" ){
     %seqlens   = %{ get_sequence_lengths_from_file( $query_orfs_file ) };
 }
+
+my $hitmap = {};
 
 open( RES, "$results_tab" ) || die "can't open $results_tab for read: $!\n";    
 my $output = $results_tab . ".mysqld";
@@ -110,6 +115,20 @@ while(<RES>){
 	    next;
 	}
     }
+    my $famid;
+    if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch"){
+	$famid = parse_famid_from_ffdb_seqid( $tid );
+    } else{
+	$famid = $tid;
+    }	    
+    #depending on parse_type, do we need to retain this result?
+    if( $parse_type eq 'best_hit' ){
+	next unless $hitmap->{$qid}->{"topscore"} < $score;
+    } elsif( $parse_type eq 'best_per_fam' ){
+	next unless $hitmap->{$qid}->{$famid}->{"topscore"} < $score;
+    } elsif( $parse_type eq 'all' ){
+	#do nothing
+    }
     #calculate coverage from query perspective
     if( !defined( $qlen ) ){
 	die( "Can't calculate the query sequence length for ${qid} using orf_file ${query_orfs_file}\n" );
@@ -133,19 +152,43 @@ while(<RES>){
     if( defined( $t_coverage ) ){
 	next unless $coverage >= $t_coverage;
     }
-    my $famid;
-    if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch"){
-	$famid = parse_famid_from_ffdb_seqid( $tid );
-    } else{
-	$famid = $tid;
-    }	    
     my $read_alt_id = parse_orf_id( $qid, $trans_method );
 #print mysql data row to file
     my @fields = ( $qid, $read_alt_id, $sample_id, $tid, $famid, $score, $evalue, $coverage, $aln_len );
     my $row    = join( ",", @fields, "\n" );
     $row       =~ s/\,$//;
-    print OUT $row;
+    if( $parse_type eq 'all' ){
+	print OUT $row;
+    } else {
+	if( $parse_type eq 'best_hit' ){
+	    $hitmap->{$qid}->{"topscore"} = $score;
+	    $hitmap->{$qid}->{"data"}     = $row;
+	} elsif( $parse_type eq 'best_per_family' ){
+	    $hitmap->{$qid}->{$famid}->{"topscore"} = $score;
+	    $hitmap->{$qid}->{$famid}->{"data"}     = $row;
+	}	
+    }
 }
+#need to print the data if the parse types were not 'all'
+if( $parse_type eq 'best_hit' ){
+    foreach my $qid( keys( %{ $hitmap } ) ){
+	my $row = $hitmap->{$qid}->{"data"};
+	print OUT $row;
+    }
+} 
+elsif( $parse_type eq 'best_per_family' ){
+    foreach my $qid( keys( %{ $hitmap } ) ){
+	foreach my $famid( keys( %{ $hitmap->{$qid} } ) ){
+	    	my $row = $hitmap->{$qid}->{$famid}->{"data"};
+		print OUT $row;
+	}
+    }
+}
+
+close OUT;
+
+#DONE.
+
     
 sub parse_orf_id{
     my $orfid  = shift;

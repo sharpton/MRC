@@ -80,6 +80,7 @@ sub printBanner($) {
     my $pad  = "#" x (length($stringWithDate) + 4); # add four to account for extra # and whitespce on either side of string
     print STDERR MRC::safeColor("$pad\n" . "# " . $stringWithDate . " #\n" . "$pad\n", "cyan on_blue");
 }
+
 sub get_conf_file_options($$){
     my ( $conf_file, $options ) = @_;
     my $opt_str = '';
@@ -140,74 +141,74 @@ my $check     = 0;
 my $is_strict = 1; #strict (single classification per read, e.g. top hit) v. fuzzy (all hits passing thresholds) clustering. 1 = strict. 0 = fuzzy. Fuzzy not yet implemented!
 
 my $path_to_family_annotations;
-my $abundance_type = "coverage";
+my $abundance_type     = "coverage";
 my $normalization_type = "target_length";
 
 
 if( 0 ){
 #remote compute (e.g., SGE) vars
-$is_remote        = 1; # By default, assume we ARE using a remote compute cluster
-$stage            = 0; # By default, do NOT stage the database (this takes a long time)!
-$reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
-$nr_db                = 1; #should we build a non-redundant version of the sequence database?
-
-$hmmdb_build     = 0;
-$blastdb_build   = 0;
-$force_db_build  = 0;
-$force_search    = 0;
-$small_transfer  = 0;
-
-$use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
-$use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
-$use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
-$use_last       = 0; #should we use last to compare SFam reference sequences to reads?
-$use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
-
+    $is_remote        = 1; # By default, assume we ARE using a remote compute cluster
+    $stage            = 0; # By default, do NOT stage the database (this takes a long time)!
+    $reps_only            = 0; #should we only use representative seqs for each family in the blast db? decreases db size, decreases database diversity
+    $nr_db                = 1; #should we build a non-redundant version of the sequence database?
+    
+    $hmmdb_build     = 0;
+    $blastdb_build   = 0;
+    $force_db_build  = 0;
+    $force_search    = 0;
+    $small_transfer  = 0;
+    
+    $use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
+    $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
+    $use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
+    $use_last       = 0; #should we use last to compare SFam reference sequences to reads?
+    $use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
+    
 #optionally set thresholds to use when parsing search results and loading into database. more conservative thresholds decreases DB size
-$p_evalue       = undef;
-$p_coverage     = undef;
-$p_score        = 35;
-
+    $p_evalue       = undef;
+    $p_coverage     = undef;
+    $p_score        = 35;
+    
 #optionally set thresholds to use when classifying reads into families.
-$evalue         = undef; #a float
-$coverage       = undef; #between 0-1
-$score          = 20;
-$top_hit        = 1;
-$top_hit_type   = "read"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
-
-$use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
-$use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
-$use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
-$use_last       = 0; #should we use last to compare SFam reference sequences to reads?
-$use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
-
-$waittime       = 30;
-$use_scratch    = 0; #should we use scratch space on remote machine?
-
-$trans_method         = "transeq";
-$should_split_orfs    = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
-if( $should_split_orfs ){
-    $trans_method = $trans_method . "_split";
-}
-$filter_length        = 14; #filters out orfs of this size or smaller
-
+    $evalue         = undef; #a float
+    $coverage       = undef; #between 0-1
+    $score          = 20;
+    $top_hit        = 1;
+    $top_hit_type   = "read"; # "orf" or "read" Read means each read can have one hit. Orf means each orf can have one hit.
+    
+    $use_hmmscan    = 0; #should we use hmmscan to compare profiles to reads?
+    $use_hmmsearch  = 0; #should we use hmmsearch to compare profiles to reads?
+    $use_blast      = 0; #should we use blast to compare SFam reference sequences to reads?
+    $use_last       = 0; #should we use last to compare SFam reference sequences to reads?
+    $use_rapsearch  = 0; #should we use rapsearch to compare SFam reference sequences to reads?
+    
+    $waittime       = 30;
+    $use_scratch    = 0; #should we use scratch space on remote machine?
+    
+    $trans_method         = "transeq";
+    $should_split_orfs    = 1; #should we split translated reads on stop codons? Split seqs are inserted into table as orfs
+    if( $should_split_orfs ){
+	$trans_method = $trans_method . "_split";
+    }
+    $filter_length        = 14; #filters out orfs of this size or smaller
+    
 #Don't turn on both this AND (slim + bulk).
-$multi                = 0; #should we multiload our inserts to the database?
-$bulk_insert_count    = 1000;
+    $multi                = 0; #should we multiload our inserts to the database?
+    $bulk_insert_count    = 1000;
 #for REALLY big data sets, we streamline inserts into the DB by using bulk loading scripts. Note that this isn't as "safe" as traditional inserts
-$bulk = 1;
+    $bulk = 1;
 #for REALLY, REALLY big data sets, we improve streamlining by only writing familymembers to the database in a standalone familymembers_slim table. 
 #No foreign keys on the table, so could have empty version of database except for these results. 
 #Note that no metareads or orfs will write to DB w/ this option
-$slim = 1;
-
-$verbose              = 0; # Print extra diagnostic info?
-$dryRun               = 0; # <-- (Default: disabled) If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
-$reload               = 0; # Should we drop a previous run of the project from the database?
-
-$extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
-$prerare_count  = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to thme
-$postrare_count = undef; #when calculating diversity statistics, randomly select this number of raw reads per sample
+    $slim = 1;
+    
+    $verbose              = 0; # Print extra diagnostic info?
+    $dryRun               = 0; # <-- (Default: disabled) If this is specified, then we do not ACTUALLY run any commands, we just print what we WOULD have ideally run.
+    $reload               = 0; # Should we drop a previous run of the project from the database?
+    
+    $extraBrutalClobberingOfDirectories = 0; # By default, don't clobber (meaning "overwrite") directories that already exist.
+    $prerare_count  = undef; #should we limit our analysis to a subset of the sequences in the input files? Takes the top N number of sequences/sample and constrains analysis to thme
+    $postrare_count = undef; #when calculating diversity statistics, randomly select this number of raw reads per sample
 }
 
 $conf_file       = undef;
@@ -437,13 +438,15 @@ if( !$stage && $is_remote ){
 	my $remote_db_dir = $remote_ffdb_dir . "/BLASTdbs/" . $blastdb_name;
 	my $command = "if ssh ${remote_user}\@${remote_hostname} \"[ -d ${remote_db_dir} ]\"; then echo \"1\"; else echo \"0\"; fi";
 	my $results = `$command`;
-	if( $results == 0 ){ dieWithUsageError( "You are trying to search against a remote database that hasn't been staged. Run with --stage to place the db ${blastdb_name} on the remote server $remote_hostname\n" );}
+#MODIFIED! - only for troubleshooting
+#	if( $results == 0 ){ dieWithUsageError( "You are trying to search against a remote database that hasn't been staged. Run with --stage to place the db ${blastdb_name} on the remote server $remote_hostname\n" );}
     }
     if( $use_hmmsearch || $use_hmmscan ){
 	my $remote_db_dir = $remote_ffdb_dir . "/HMMdbs/" . $hmmdb_name;
 	my $command = "if ssh ${remote_user}\@${remote_hostname} \"[ -d ${remote_db_dir} ]\"; then echo \"1\"; else echo \"0\"; fi";
 	my $results = `$command`;
-	if( $results == 0 ){ dieWithUsageError( "You are trying to search against a remote database that hasn't been staged. Run with --stage to place the db ${hmmdb_name} on the remote server $remote_hostname\n" );}
+#MODIFIED! - only for troubleshooting
+#	if( $results == 0 ){ dieWithUsageError( "You are trying to search against a remote database that hasn't been staged. Run with --stage to place the db ${hmmdb_name} on the remote server $remote_hostname\n" );}
     }
 }
 
@@ -534,15 +537,18 @@ if ($is_remote) {
 }
 
 MRC::notify("Starting a classification run using the following settings:\n");
+($is_remote)     && MRC::notify("   * Use the remote server <$remote_hostname>\n");
+if( defined( $db_hostname ) ){   MRC::notify("   * Database host: <${db_hostname}>\n") };
+if( defined( $dbname ) ){        MRC::notify("   * Database name: <${dbname}>\n") };
 ($use_last)      && MRC::notify("   * Algorithm: last\n");
 ($use_blast)     && MRC::notify("   * Algorithm: blast\n");
 ($use_hmmscan)   && MRC::notify("   * Algorithm: hmmscan\n");
 ($use_hmmsearch) && MRC::notify("   * Algorithm: hmmsearch\n");
 ($use_rapsearch) && MRC::notify("   * Algorithm: rapsearch\n");
 ($stage)         && MRC::notify("   * Staging: Stage the remote database\n");
-($is_remote)     && MRC::notify("   * Use the remote server <$remote_hostname>\n");
-MRC::notify("   * Evalue threshold: ${evalue}\n");
-MRC::notify("   * Coverage threshold: ${coverage}\n");
+if( defined( $evalue ) ){   MRC::notify("   * Evalue threshold: ${evalue}\n") };
+if( defined( $coverage ) ){ MRC::notify("   * Coverage threshold: ${coverage}\n") };
+if( defined( $score ) ){    MRC::notify("   * Score threshold: ${score}\n") };
 
 ## If the user has specified something in the --goto option, then we skip some parts of the analysis and go directly
 ## to the "skip to this part" part.
@@ -558,7 +564,8 @@ if (defined($goto) && $goto) {
 	MRC::dryNotify("Skipped loading samples.");
     }
     $goto = uc($goto); ## upper case it
-    if ($goto eq "T" or $goto eq "TRANSLATE")   { warn "Skipping to TRANSLATE READS step!\n"; goto TRANSLATE; }
+    if ($goto eq "T" or $goto eq "TRANSLATE"){    warn "Skipping to TRANSLATE READS step!\n"; goto TRANSLATE; }
+    if ($goto eq "O" or $goto eq "LOADORFS" ){    warn "Skipping to orf loading step!\n"; goto LOADORFS; }
     if ($goto eq "B" or $goto eq "BUILD")   {     warn "Skipping to searchdb building step!\n"; goto BUILDSEARCHDB; }
     if ($goto eq "R" or $goto eq "REMOTE")  {     warn "Skipping to staging remote server step!\n"; goto REMOTESTAGE; }
     if ($goto eq "S" or $goto eq "SCRIPT")  {     warn "Skipping to building hmmscan script step!\n"; goto BUILDSEARCHSCRIPT; }
@@ -649,8 +656,10 @@ if (!$dryRun) {
 
 ## ================================================================================
 ## ================================================================================
-#LOAD ORFS: reads have been translated, now load them into the DB
-unless( $slim){
+#reads have been translated, now load them into the DB
+LOADORFS: 
+    ;
+unless( $slim ){
     printBanner("LOADING TRANSLATED READS");
     foreach my $sample_id (@{ $analysis->get_sample_ids() }){
 	my $projID = $analysis->get_project_id();
@@ -712,12 +721,19 @@ if ($blastdb_build) {
 }
 
 #may not need to build the search database, but let's see if we need to load the database info into mysql....
+printBanner("LOADING FAMILY DATA"); #could run a check to see if this is necessary, the loadings could be sped up as well....
 if( $use_blast || $use_last || $use_rapsearch) {
-    $analysis->MRC::DB::load_families( "blast" );
-    $analysis->MRC::DB::load_family_members( "blast" );
+    if( ! $analysis->MRC::Run::check_family_loadings( "blast", $dbname ) ){
+	$analysis->MRC::Run::load_families( "blast", $dbname );
+    }
+    if( ! $analysis->MRC::Run::check_familymember_loadings( "blast", $dbname ) ){
+	$analysis->MRC::Run::load_family_members( "blast", $dbname );
+    }
 }
 if( $use_hmmsearch || $use_hmmscan ){
-    $analysis->MRC::DB::load_families( "hmm" );
+    if( ! $analysis->MRC::Run::check_family_loadings( "hmm", $dbname ) ){
+	$analysis->MRC::Run::load_families( "hmm", $dbname );
+    }
 }
 if( defined( $path_to_family_annotations ) ){
     if( ! -e $path_to_family_annotations ){
@@ -857,6 +873,7 @@ if ($is_remote){
 	$blast_splits = $analysis->MRC::DB::get_number_db_splits("blast");
     }
     foreach my $sample_id(@{ $analysis->get_sample_ids() }) {
+	next if( $sample_id == 114 ); #temporary!!!!
 	($use_hmmscan)   && $analysis->MRC::Run::run_search_remote($sample_id, "hmmscan",   $hmm_splits,   $waittime, $verbose, $force_search);
 	($use_hmmsearch) && $analysis->MRC::Run::run_search_remote($sample_id, "hmmsearch", $hmm_splits,   $waittime, $verbose, $force_search);
 	($use_blast)     && $analysis->MRC::Run::run_search_remote($sample_id, "blast",     $blast_splits, $waittime, $verbose, $force_search);
@@ -894,6 +911,7 @@ if( $is_remote ){
 	$blast_splits = $analysis->MRC::DB::get_number_db_splits("blast");
     }
     foreach my $sample_id(@{ $analysis->get_sample_ids() }) { #wite this method
+	next if( $sample_id == 114 ); #temporary!
 	($use_hmmscan)   && $analysis->MRC::Run::parse_results_remote($sample_id, "hmmscan",   $hmm_splits,   $waittime, $verbose, $force_search);
 	($use_hmmsearch) && $analysis->MRC::Run::parse_results_remote($sample_id, "hmmsearch", $hmm_splits,   $waittime, $verbose, $force_search);
 	($use_blast)     && $analysis->MRC::Run::parse_results_remote($sample_id, "blast",     $blast_splits, $waittime, $verbose, $force_search);
@@ -964,10 +982,10 @@ if ($is_remote){
 		$class_id = $analysis->MRC::DB::get_classification_id(
 		    $p_evalue, $p_coverage, $p_score, $db_name, $algo, $top_hit_type,
 		    )->classification_id();
-		print "Classification_id for this run using $algo is $class_id\n";    
 	 	#ONLY TAKES BULK-LOAD LIKE FILES NOW. OPTIONALLY DELETE PARSED RESULTS WHEN COMPLETED.
 		# NOTE THAT WE ONLY INSERT ALT_IDS INTO THIS TABLE! NEED TO USE SAMPLE_ID, ALT_ID FROM (metareads || orfs) TO UNIQUELY EXTRACT ORF/READ ID		
 		#$analysis->MRC::Run::classify_reads_old($sample_id, $orf_split_file_name, $class_id, $algo, $top_hit_type);
+		#MODIFIED!
 		$analysis->MRC::Run::parse_and_load_search_results_bulk( $sample_id, $orf_split_file_name, $class_id, $algo ); #top_hit_type and strict clustering gets used in diversity calcs now
 	    }
 	}
@@ -985,23 +1003,17 @@ if ($is_remote){
     }
 }
 
-die;
-
 ### ====================================================================
 #classify reads based on search results
 
 CLASSIFYREADS: 
     ; #might want to eventually store these results in a stand alone mysql table rather than flat file
+
 printBanner("CLASSIFYING READS");
 foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
-    #storing arrays of millions of objects is a memory beast. May be better to do in MySQL, so let's sidestep the block below
+    #MODIFIED!
+    next unless( $analysis->MRC::Run::check_sample_rarefaction_depth( $sample_id ) ); #NEW FUNCTIONOA 
     my $post_rare_reads = undef; #hash ref that maps samples to read_ids, not just classified reads!
-    if( 0 ){
-	if( defined( $analysis->postrarefy_samples) ){
-	    print "Randomly selecting " . $analysis->postrarefy_samples . " reads from sample ${sample_id}\n";
-	    $post_rare_reads = $analysis->MRC::Run::get_post_rarefied_reads( $sample_id, $analysis->postrarefy_samples, $slim, $post_rare_reads );
-	}
-    }
     my @algosToRun = ();
     if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
     if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
@@ -1017,7 +1029,7 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	    $db_name = $blastdb_name;
 	}
 	$class_id = $analysis->MRC::DB::get_classification_id(
-	    $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $db_name, $algo, $top_hit_type,
+	        $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $db_name, $algo, $top_hit_type,
 	    )->classification_id();
 	print "Calculating diversity using classification_id ${class_id}\n";
 	if( defined( $analysis->postrarefy_samples ) ){
@@ -1025,6 +1037,7 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 	}
 	print "Building classification map...\n";  
 	$analysis->MRC::Run::build_classification_maps_by_sample($sample_id, $class_id, $post_rare_reads);
+	#might have to move this to R given that it handles floating point math more efficiently
 	$analysis->MRC::Run::calculate_abundances( $sample_id, $class_id, $abundance_type, $normalization_type );
     }
 }
@@ -1033,12 +1046,32 @@ foreach my $sample_id( @{ $analysis->get_sample_ids() } ){
 #calculate diversity statistics
 CALCDIVERSITY:
     ;    
-##I think it's better to do these in R, where we can also create plots. Plus, subsetting a dataframe is very fast compared to looping in Perl.
-##but, are there dataframe size limits? I don't think so. This way, we don't need to store the hash class_map in memory, only a pointer to the
-##file path.
-    
-#R functions called here via wrappers in Run
-   
+printBanner("CALCULATINGDIVERSITY");
+#this is an intersample analysis, so no looping over samples
+my @algosToRun = ();
+if ($use_hmmscan)   { push(@algosToRun, "hmmscan"); }
+if ($use_hmmsearch) { push(@algosToRun, "hmmsearch"); }
+if ($use_blast)     { push(@algosToRun, "blast"); }
+if ($use_last)      { push(@algosToRun, "last"); }
+if ($use_rapsearch) { push(@algosToRun, "rapsearch"); }
+foreach my $algo (@algosToRun) {
+    my ( $class_id, $db_name, $abund_param_id );
+    my $abundance_type = "coverage";
+    if( $algo eq "hmmsearch" || $algo eq "hmmscan" ){
+	    $db_name = $hmmdb_name;
+	}
+    if( $algo eq "blast" || $algo eq "last" || $algo eq "rapsearch" ){
+	    $db_name = $blastdb_name;
+    }
+    $class_id = $analysis->MRC::DB::get_classification_id(
+	        $analysis->get_evalue_threshold(), $analysis->get_coverage_threshold(), $score, $db_name, $algo, $top_hit_type,
+	    )->classification_id();
+    $abund_param_id = $analysis->MRC::DB::get_abundance_parameter_id(
+	    $abundance_type, $normalization_type
+	)->abundance_parameter_id;
+    $analysis->MRC::Run::build_intersample_abundance_map( $class_id, $abund_param_id );
+    $analysis->MRC::Run::calculate_diversity( $class_id, $abund_param_id );
+}
 
 
 ### ====================================================================

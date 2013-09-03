@@ -334,7 +334,7 @@ sub load_samples{
 	    my @fields = ( "sample_id", "read_alt_id", "seq" );
 	    my $fks    = { "sample_id" => $sid }; #foreign keys and fields not in file 
             #unless( $self->is_slim() ){ #we require reads to be loaded so that we can scale rarefaction analysis later
-		$self->MRC::DB::bulk_import( $table, $samples{$samp}->{"path"}, $tmp, $nrows, $fks, \@fields );
+	    $self->MRC::DB::bulk_import( $table, $samples{$samp}->{"path"}, $tmp, $nrows, $fks, \@fields );
 	    #} #from the commented unless block above
 	}
 	else{
@@ -362,6 +362,76 @@ sub load_samples{
     }
     $self->set_samples(\%samples);
     MRC::notify("Successfully loaded $numSamples sample$plural associated with the project PID #" . $self->get_project_id() . " ");
+}
+
+sub load_families{
+    my( $self, $type, $db_name ) = @_;
+    my $raw_db_path = undef;
+    if ($type eq "hmm")   { $raw_db_path = $self->MRC::DB::get_hmmdb_path(); }
+    if ($type eq "blast") { $raw_db_path = $self->MRC::DB::get_blastdb_path(); }
+    my $file =  "${raw_db_path}/family_lengths.tab";
+    if( $self->bulk_load() ){
+	my $tmp    = "/tmp/famlens.sql";	    
+	my $table  = "families";
+	my $nrows  = 10000;
+	my @fields = ( "famid", "family_length", "family_size" );
+	my $fks    = { "searchdb_id" => $self->MRC::DB::get_searchdb_id( $db_name, $type ) }; #foreign keys and fields not in file 
+	$self->MRC::DB::bulk_import( $table, $file, $tmp, $nrows, $fks, \@fields );
+    }
+    return $self;
+}
+
+sub load_family_members{
+    my( $self, $type, $db_name ) = @_;
+    my $file = $self->MRC::DB::get_blastdb_path() . "/sequence_lengths.tab";
+    if( $self->bulk_load() ){
+	my $tmp    = "/tmp/seqlens.sql";	    
+	my $table  = "familymembers";
+	my $nrows  = 10000;
+	my @fields = ( "famid", "target_id", "target_length" );
+	my $fks    = { "searchdb_id" => $self->MRC::DB::get_searchdb_id( $db_name, $type ) }; #foreign keys and fields not in file 
+	$self->MRC::DB::bulk_import( $table, $file, $tmp, $nrows, $fks, \@fields );
+    }
+    return $self;
+}
+
+sub check_family_loadings{
+    my( $self, $type, $db_name ) = @_;
+    my $bit = 0;
+    my $raw_db_path = undef;
+    if ($type eq "hmm")   { $raw_db_path = $self->MRC::DB::get_hmmdb_path(); }
+    if ($type eq "blast") { $raw_db_path = $self->MRC::DB::get_blastdb_path(); }
+    my $famlen_tab  = "${raw_db_path}/family_lengths.tab";
+    my $searchdb_id = $self->MRC::DB::get_searchdb_id( $type, $db_name );
+    my $ff_rows     = _count_lines_in_file( $famlen_tab );
+    my $sql_rows    = $self->MRC::DB::get_families_by_searchdb_id( $searchdb_id)->count();
+    $bit = 1 if( $ff_rows == $sql_rows );
+    return $bit;
+}
+
+sub check_familymember_loadings{
+    my( $self, $type, $db_name ) = @_;
+    my $bit = 0;
+    my $raw_db_path = undef;
+    if ($type eq "hmm")   { $raw_db_path = $self->MRC::DB::get_hmmdb_path(); }
+    if ($type eq "blast") { $raw_db_path = $self->MRC::DB::get_blastdb_path(); }
+    my $seqlen_tab  = "${raw_db_path}/sequence_lengths.tab";
+    my $searchdb_id = $self->MRC::DB::get_searchdb_id( $type, $db_name );
+    my $ff_rows     = _count_lines_in_file( $seqlen_tab );
+    my $sql_rows    = $self->MRC::DB::get_familymembers_by_searchdb_id( $searchdb_id)->count();
+    $bit = 1 if( $ff_rows == $sql_rows );
+    return $bit;
+}
+
+sub _count_lines_in_file{
+    my $file = shift;
+    open( FILE, $file ) || die "can't open $file for read: $!\n";
+    my $count = 0;
+    while( <FILE> ){
+	$count++;
+    }
+    close FILE;
+    return $count;
 }
 
 sub build_read_import_file{
@@ -767,18 +837,22 @@ sub parse_and_load_search_results_bulk{
     my $orf_split_filename  = shift; # just the file name of the split, NOT the full path
     my $class_id            = shift; #the classification_id
     my $algo                = shift;
+    my $tophits_per_fam     = 0; #maybe we flush this out in future
+    my $tophits_only        = 1;
 
     ($orf_split_filename !~ /\//) or die "The orf split FILENAME had a slash in it (it was \"$orf_split_filename\"). But this is only allowed to be a FILENAME, not a directory! Fix this programming error.\n";
 
     #remember, each orf_split has its own search_results sub directory
     my $search_results = File::Spec->catfile($self->get_sample_path($sample_id), "search_results", $algo, $orf_split_filename);
     my $query_seqs     = File::Spec->catfile($self->get_sample_path($sample_id), "orfs", $orf_split_filename);
+    
+    print "Grabbing results for sample ${sample_id} from ${search_results}\n";
     #open search results, get all results for this split
     opendir( RES, $search_results ) || die "Can't open $search_results for read in classify_reads: $!\n";
     my @result_files = readdir( RES );
     closedir( RES );
     my $split_results_cat = $search_results . ".mysqld.splitcat";
-    my $orf_fam_tophit = {};
+    my $orf_tophits = {};
     foreach my $result_file( @result_files ){
 	next if( $result_file !~ m/\.mysqld/ ); #we only want to load the mysql data tables that we produced earlier
 	if(not( $result_file =~ m/$orf_split_filename/ )) {
@@ -786,19 +860,31 @@ sub parse_and_load_search_results_bulk{
 	    next; ## skip it!
 	}
 	#we have to look across all result files in this dir and for each orf to fam mapping, grab the top scoring hit
-	$orf_fam_tophit = find_orf_fam_tophit( "${search_results}/${result_file}", $orf_fam_tophit );
+	#only if we want expanded search result ouput. Probably rare
+	if( $tophits_per_fam ){
+	    $orf_tophits = find_orf_fam_tophit( "${search_results}/${result_file}", $orf_tophits );
+	} elsif( $tophits_only ){
+	    #we have to look across all result files in this dir and for each orf to fam mapping, grab the top scoring hit
+	    $orf_tophits = find_orf_tophit( "${search_results}/${result_file}", $orf_tophits );
+	}
 	
 #	File::Cat::cat( "${search_results}/${result_file}", $fh ); # From the docs: "Copies data from EXPR to FILEHANDLE, or returns false if an error occurred. EXPR can be either an open readable filehandle or a filename to use as input."	
     }
     my $fh;
     open( $fh, ">$split_results_cat" ) || die "Can't open $split_results_cat for write: $!\n";
-    foreach my $orf( keys( %$orf_fam_tophit ) ){      
-	foreach my $fam( keys( %{ $orf_fam_tophit->{$orf} } ) ){
-	    print $fh $orf_fam_tophit->{$orf}->{$fam}->{'row'} . "\n";
+
+    foreach my $orf( keys( %$orf_tophits ) ){      
+	if( $tophits_per_fam ){
+	    foreach my $fam( keys( %{ $orf_tophits->{$orf} } ) ){
+		print $fh $orf_tophits->{$orf}->{$fam}->{'row'} . "\n";
+	    }
+	} elsif( $tophits_only ){
+	    print $fh $orf_tophits->{$orf}->{'row'} . "\n";
 	}
     }
     close $fh;
 #    if( $self->is_slim && $self->bulk_load ){
+    print "Loading results for sample ${sample_id} into database\n";
     if( 1 ){ #we REQUIRE this type lof loading now
 	my $tmp    = "/tmp/" . $sample_id . ".sql";	    
 	my $table  = "searchresults";
@@ -813,6 +899,36 @@ sub parse_and_load_search_results_bulk{
     close $fh;
 #    unlink( $split_results_cat );
     return $self;
+}
+
+sub find_orf_tophit{ #for each orf to family mapping, find the top hit
+    my( $result_file, $orf_tophit ) = @_;
+    open( FILE, $result_file ) || die "Can't open $result_file for read: $!\n";
+    while(<FILE>){
+	chomp $_;
+	my( $orf, $famid, $score );
+	if( $_ =~ m/(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)\,(.*?)/ ){
+	    $orf    = $1;
+	    $famid  = $5;
+	    $score  = $6;
+	} else {
+	   warn( "Can't parse orf_alt_id, famid, or score from $result_file where line is $_\n" );
+	   next;
+	}
+	if( !defined($orf_tophit->{$orf} ) ){
+	    $orf_tophit->{$orf}->{'score'} = $score;
+	    $orf_tophit->{$orf}->{'row'}   = $_;
+	}
+	elsif( $score > $orf_tophit->{$orf}->{'score'} ){
+	    $orf_tophit->{$orf}->{'score'} = $score;
+	    $orf_tophit->{$orf}->{'row'}   = $_;
+	}
+	else{
+	    #do nothing. this is a poorer hit than what we already have
+	}
+    }
+    close FILE;
+    return $orf_tophit;
 }
 
 sub find_orf_fam_tophit{ #for each orf to family mapping, find the top hit
@@ -2542,6 +2658,20 @@ sub build_classification_maps{
     #return $map;
 }
 
+#MODIFIED!
+sub check_sample_rarefaction_depth{
+    my ( $self, $sample_id, $post_rare_reads ) = @_;
+    my $bit = 1;
+    return $bit if( !defined( $post_rare_reads ) );
+    my $reads = $self->MRC::DB::get_reads_by_sample( $sample_id );
+    if( $reads->count() > $post_rare_reads ){
+	warn( "There are not enough reads in sample ${sample_id} to rarefy to a depth of ${post_rare_reads}. I will have to skip all downstream analyses for this sample.\n" );
+	$bit = 0;
+    }
+    return $bit;
+}
+
+
 sub build_classification_maps_by_sample{
     my ($self, $sample_id, $class_id, $post_rare_reads) = @_; # $post_rare_reads is a hashref mapping sample to read_ids, may not be defined, meaning use all reads. Note that we no longer use post_rare_reads to rarefy (see MRC::DB::get_classified_orfs_by_sample)
     #create the outfile
@@ -2595,9 +2725,11 @@ sub build_classification_maps_by_sample{
     close OUT;
 }
 
+#CHANGED SINCE STARTED SHOTMAP
+#MODIFIED!
 sub calculate_abundances{
     my ( $self, $sample_id, $class_id, $abund_type, $norm_type ) = @_;
-    my $abundance_type_id = $self->MRC::DB::get_abundance_type_id( $abund_type, $norm_type );
+    my $abundance_parameter_id = $self->MRC::DB::get_abundance_parameter_id( $abund_type, $norm_type )->abundance_parameter_id();
     my $dbh  = $self->MRC::DB::build_dbh();
     my $members_rs = $self->MRC::DB::get_classified_orfs_by_sample( $sample_id, $class_id, $dbh, $self->postrarefy_samples() );
     #did mysql return any results for this query?
@@ -2667,7 +2799,7 @@ sub calculate_abundances{
 	my $raw = $abundances->{$famid}->{"raw"};
 	my $ra  = $raw / $total;
 	#now, insert the data into mysql.
-	$self->MRC::DB::insert_abundance( $sample_id, $famid, $raw, $ra, $abundance_type_id );
+	$self->MRC::DB::insert_abundance( $sample_id, $famid, $raw, $ra, $abundance_parameter_id, $class_id );
     }
     $self->MRC::DB::disconnect_dbh( $dbh );	
     return $self;
@@ -2768,5 +2900,179 @@ sub check_prior_analyses{
     }
     return $self;
 }
+
+
+#MODIFIED!
+sub build_intersample_abundance_map{
+    my( $self, $class_id, $abund_param_id ) = @_;
+
+    #dump family abundance data for each sample id to flat file
+    my $outdir     = File::Spec->catdir( 
+	$self->get_ffdb(), "projects", $self->db_name, $self->get_project_id(), "output" 
+	);
+    #my $abundances = $self->MRC::DB::get_sample_abundances( $sample_id, $class_id, $abund_param_id );
+    my $sample_abund_out  = $outdir . "/Abundance_Map_cid_"         . "${class_id}_aid_${abund_param_id}.tab";
+    my $sample_Rabund_out = $outdir . "/RelativeAbundance_Map_cid_" . "${class_id}_aid_${abund_param_id}.tab";
+    open( ABUND, ">$sample_abund_out"  ) || die "Can't open $sample_abund_out for write: $!\n";
+    open( RA, "   >$sample_Rabund_out" ) || die "Can't open $sample_Rabund_out for write: $!\n";
+    my $max_rows          = 10000;
+    my $dbh               = $self->MRC::DB::build_dbh();
+    my $famids            = {};
+    my $counter           = 0; #how many samples have we processed
+    foreach my $sample_id( @{ $self->get_sample_ids() } ){
+	$counter++;
+	my $values            = {};
+	my $abunds_rs         = $self->MRC::DB::get_sample_abundances_for_all_classed_fams( $dbh, $sample_id, $class_id, $abund_param_id );
+	while( my $rows = $abunds_rs->fetchall_arrayref( {}, $max_rows ) ){
+	    foreach my $row( @$rows ){
+		my $famid              = $row->{"famid"};
+		my $abundance          = $row->{"abundance"};
+		my $relative_abundance = $row->{"relative_abundance"};
+		if( !defined( $abundance) ){
+		    $values->{$famid}->{"raw"} = 0;
+		    $values->{$famid}->{"ra"}  = 0;
+		} else {
+		    $values->{$famid}->{"raw"} = $abundance;
+		    $values->{$famid}->{"ra"}  = $relative_abundance;
+		}
+		if( $counter == 1 ){
+		    $famids->{$famid}++;
+		}
+	    }
+	}
+	if( $counter == 1 ){ #printer header row
+	    my @col_names = sort( keys( %{ $famids } ) );
+	    print ABUND join( "\t", @col_names, "\n" );
+	    print RA join( "\t", @col_names, "\n" );
+	}
+	print ABUND "${sample_id}\t";
+	print RA    "${sample_id}\t";
+	foreach my $fam( sort( keys( %{ $famids } ) ) ){
+	    if( !defined( $values->{$fam} ) ){
+		die( "Couldn't find an abundance value for family ${fam} in sample ${sample_id}'s data. Exiting!\n" );
+	    }	    
+	    print ABUND $values->{$fam}->{"raw"} . "\t";
+	    print RA    $values->{$fam}->{"ra"}  . "\t";	    
+	}
+	print ABUND "\n";
+	print RA    "\n";
+    }
+    $self->MRC::DB::disconnect_dbh( $dbh );	
+    close ABUND;
+    close RA;
+    return $self;
+}
+
+#OBSOLETE
+sub calculate_sample_diversity{
+    my ( $self, $sample_id, $class_id, $abund_param_id ) = @_;
+
+    #Run R script that calculates various abundance parameters and plots for the sample
+    #script also produces a table that maps sampleid, classid, abund_param_id to
+    #richness, SE, Good's coverage 
+    my $sample_div_prefix = "Sample_Diversity_sid_${sample_id}_cid_${class_id}_aid_${abund_param_id}";
+    my $div_file          = File::Spec->catdir( $self->get_ffdb(), "projects", $self->db_name, $self->get_project_id(), "output", $sample_div_prefix );   
+    my $scripts_dir       = $self->get_local_scripts_dir();
+    my $script            = File::Spec->catdir( $scripts_dir, "calculate_sample_diversity.R" );
+    #my $cmd               = "R --slave --args ${abund_file} ${outdir} ${div_file} < ${script}";
+    #exec_and_die_on_nonzero( $cmd );
+    #load data infile from this table into diversity table
+    open( IN, $div_file ) || die "Can't open $div_file for read: $!\n";
+    while(<IN>){
+	next if ( $_ =~ m/^SAMPLE\.ID/ );
+	chomp $_;	
+	my( $sample_id, $richness, $shannon, $goods_coverage ) = split( "\t", $_ );
+	$self->MRC::DB::insert_sample_diversity( $sample_id, $class_id, $abund_param_id, $richness, $shannon, $goods_coverage );
+    }    
+   return $self;
+}
+
+#MODIFIED
+sub calculate_diversity{
+    my( $self, $class_id, $abund_param_id ) = @_; #abundance type is "abundance" or "relative_abundance"
+    #set output directory
+    my $outdir          = File::Spec->catdir( $self->get_ffdb(), "projects", $self->db_name, $self->get_project_id(), "output" );
+    my $scripts_dir     = $self->get_scripts_dir();
+    #build a sample metadata table that maps sample_id to metadata properties. dump to file
+    my $metadata_table  = $self->MRC::Run::get_project_metadata();
+    my $abund_map   = $outdir . "/Abundance_Map_cid_"         . "${class_id}_aid_${abund_param_id}.tab";
+    my $r_abund_map = $outdir . "/RelativeAbundance_Map_cid_" . "${class_id}_aid_${abund_param_id}.tab";
+
+    #CALCULATE DIVERSITY AND COMPARE SAMPLES
+    #open output directory that contains per sample diversity data
+    my $sample_diversity_prefix  = $outdir . "/Sample_Diversity_cid_${class_id}_aid_${abund_param_id}";
+    my $compare_diversity_prefix = $outdir . "/Compare_samples_cid_${class_id}_aid_${abund_param_id}";
+    #run an R script that groups samples by metadata parameters and identifies differences in diversity distributions
+    #produce pltos and output tables
+    my $script            = File::Spec->catdir( $scripts_dir, "R", "calculate_diversity.R" );
+    my $cmd               = "R --slave --args ${abund_map} ${r_abund_map} ${metadata_table} ${sample_diversity_prefix} ${compare_diversity_prefix} < ${script}";
+    print $cmd . "\n";
+    exec_and_die_on_nonzero( $cmd );
+
+    #ADD BETA-DIVERSITY ANALYSES TO THE ABOVE OR AN INDEPENDENT FUNCTION
+
+    #INTERFAMILY ANALYSIS
+    #open directory that contains sample-famid abundance maps for all samples for given class/abundparam id
+    my $family_abundance_prefix = $outdir . "/Family_Abundances";
+    my $intrafamily_prefix      = $outdir . "/Compare_families_cid_${class_id}_aid_${abund_param_id}";
+    #run an R script that groups samples by metadata parameters and calculates family-level variance w/in and between groups
+    #produce plots and output tables for this analysis
+    $script            = File::Spec->catdir( $scripts_dir, "R", "compare_families.R" );
+    $cmd               = "R --slave --args ${abund_map} ${r_abund_map} ${metadata_table} ${family_abundance_prefix} ${intrafamily_prefix} < ${script}";
+    exec_and_die_on_nonzero( $cmd );       
+
+    #COMPARE SAMPLES BY MULTIDIMENSIONAL SCALING
+    #use family abundance tables to conduct a PCA analysis of the samples, producing a loadings table and biplot as output
+    my $pca_prefix              = $outdir . "/Sample_PCA";
+    $script                  = File::Spec->catdir( $scripts_dir, "R", "sample_pca.R" );
+    $cmd                     = "R --slave --args ${abund_map} ${r_abund_map} ${metadata_table} ${family_abundance_prefix} ${pca_prefix} < ${script}";
+    $self;
+}
+
+#MODIFIED
+sub get_project_metadata{
+    my( $self )  = @_;
+    my $output   = File::Spec->catdir( $self->get_ffdb, "projects", $self->db_name, $self->get_project_id(), "output", "sample_metadata.tab" );
+    my $samples  = $self->MRC::DB::get_samples_by_project_id( $self->get_project_id() );
+    open( OUT, ">$output" ) || die "Can't open $output for write: $!\n";
+    my $data   = {}; #will push rows to data, need to know all fields before printing header
+    my $fields = {};
+    while( my $row = $samples->next ){
+	my $sample_id     = $row->sample_id;
+	my $sample_alt_id = $row->sample_alt_id;
+	$data->{$sample_id}->{"alt_id"} = $sample_alt_id;
+	my $metadata      = $row->metadata;
+	my( @fields )  = split( ",", $metadata );
+	foreach my $field( @fields ){
+	    my( $field_name, $field_value ) = split( "\=", $field );
+	    $data->{$sample_id}->{"metadata"}->{$field_name} = $field_value;
+	    $fields->{$field_name}++;
+	}
+    }
+    #print the header
+    print OUT join( "\t", "SAMPLE.ID", "SAMPLE.ALT.ID", sort(map{ uc($_) } keys(%{$fields})), "\n" );
+    foreach my $sample_id( keys( %{ $data } ) ){
+	my $sample_alt_id = $data->{$sample_id}->{"alt_id"};
+	print OUT join( "\t", $sample_id, $sample_alt_id, $sample_id );
+	my @fields        = keys( %{ $data->{$sample_id}->{"metadata"} } );
+	foreach my $field( sort( @fields ) ){
+	    if( $field eq $fields[-1] ){
+		print OUT $data->{$sample_id}->{"metadata"}->{$field} . "\n";
+	    } else{
+		print OUT $data->{$sample_id}->{"metadata"}->{$field} . "\t";
+	    }
+	}   
+    }
+    close OUT;
+    return $output;
+}
+
+sub exec_and_die_on_nonzero($) {
+    my ($cmd) = @_;
+    my $results = IPC::System::Simple::capture($cmd);
+    (0 == $EXITVAL) or die "Error:  non-zero exit value: $results";
+    return($results);
+}
+
 
 1;
