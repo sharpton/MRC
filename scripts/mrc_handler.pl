@@ -911,7 +911,6 @@ if( $is_remote ){
 	$blast_splits = $analysis->MRC::DB::get_number_db_splits("blast");
     }
     foreach my $sample_id(@{ $analysis->get_sample_ids() }) { #wite this method
-	next if( $sample_id == 114 ); #temporary!
 	($use_hmmscan)   && $analysis->MRC::Run::parse_results_remote($sample_id, "hmmscan",   $hmm_splits,   $waittime, $verbose, $force_search);
 	($use_hmmsearch) && $analysis->MRC::Run::parse_results_remote($sample_id, "hmmsearch", $hmm_splits,   $waittime, $verbose, $force_search);
 	($use_blast)     && $analysis->MRC::Run::parse_results_remote($sample_id, "blast",     $blast_splits, $waittime, $verbose, $force_search);
@@ -942,6 +941,7 @@ GETRESULTS:
 if ($is_remote){
     printBanner("GETTING REMOTE RESULTS");
     foreach my $sample_id(@{ $analysis->get_sample_ids() }){
+	next if( $sample_id == 113 || $sample_id == 114 ); #temporary!
 	($use_hmmscan)   && $analysis->MRC::Run::get_remote_search_results($sample_id, "hmmscan");
 	($use_blast)     && $analysis->MRC::Run::get_remote_search_results($sample_id, "blast");
 	($use_hmmsearch) && $analysis->MRC::Run::get_remote_search_results($sample_id, "hmmsearch");

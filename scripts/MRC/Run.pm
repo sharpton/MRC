@@ -188,33 +188,7 @@ sub get_partitioned_samples{
 	    undef $text if( $text eq '' );
 	    $self->project_desc($text);
 	} elsif( $file =~ m/sample_metadata\.tab/ ){  #if there's a sample metadata table, grab the information
-	    my $text = '';
-	    open( META, "$path/$file" ) || die "Can't open sample metadata table for read: $!. Project is $path.\n";
-	    while(<META>){
-		$text .= $_;
-	    }
-	    #check that the file is properly formatted	   
-	    if( $text !~ m/^Sample_name/ ){
-		die( "You did not specify a properly formatted sample_metadata.tab file. Please ensure that the first row contains properly " .
-		     "formatted column labels. See the manual for more information\n" );
-	    }	   
-	    my @rows  = split( "\n", $text );
-	    my $ncols = 0;
-	    foreach my $row( @rows ){
-		my @cols = split( "\t", $row );
-		my $row_n_col = scalar( @cols );
-		if( $ncols == 0 ){
-		    $ncols = $row_n_col;
-		} elsif( $ncols != $row_n_col) {
-		    die( "You do not have an equal number of tab-delimited columns in every row of your sample_metadata.tab file. Please double check " .
-			 "your format. See the manual for more information\n" );
-		} else { #looks good
-		    next;
-		}
-	    }
-	    close META;
-	    undef $text if( $text eq '' );
-	    $self->sample_metadata($text);
+	    $self->MRC::Run::parse_metadata_file( "${path}/${file}" );
 	}
 	else {
 	    #get sample name here, simple parse on the period in file name
@@ -249,6 +223,64 @@ sub load_project{
     warn("Project with PID " . $proj->project_id() . ", with files found at <$path>, was successfully loaded!\n");
 }
 
+sub parse_metadata_file{
+    my( $self, $file ) = @_;
+    my $text = '';
+    open( META, "$file" ) || die "Can't open sample metadata table for read: $!. Trying to read from $file\n";
+    while(<META>){
+	$text .= $_;
+    }
+    #check that the file is properly formatted	   
+    if( $text !~ m/^Sample_name/ ){
+	die( "You did not specify a properly formatted sample_metadata.tab file. Please ensure that the first row contains properly " .
+	     "formatted column labels. See the manual for more information\n" );
+    }	   
+    my @rows  = split( "\n", $text );
+    my $ncols = 0;
+    foreach my $row( @rows ){
+	my @cols = split( " ", $row );
+	my $row_n_col = scalar( @cols );
+	if( $ncols == 0 ){
+	    $ncols = $row_n_col;
+	} elsif( $ncols != $row_n_col) {
+	    die( "You do not have an equal number of tab-delimited columns in every row of your sample_metadata.tab file. Please double check " .
+		 "your format. See the manual for more information\n" );
+	} else { #looks good
+	    next;
+	}
+    }
+    close META;
+    undef $text if( $text eq '' );
+    $self->sample_metadata($text);
+    return $self;
+}
+
+sub grab_sample_metadata{
+    my( $self )  = @_;
+    my $metadata = {};
+    my @rows     = split( "\n", $self->sample_metadata );
+    my $header   = shift( @rows );
+    my @colnames = split( "\t", $header );
+    foreach my $row( @rows ){ #all rows except the header
+	print $row . "\n";
+	my @cols = split( " ", $row );
+	my $samp_alt_id = $cols[0];
+	my $metadata_string;
+	for( my $i=1; $i < scalar(@cols); $i++){
+	    my $key   = $colnames[$i];
+	    my $value = $cols[$i]; 
+	    if( $i == 1 ){
+		$metadata_string = $key . "=" . $value;
+	    } else {
+		$metadata_string = join( ",", $metadata_string, $key . "=" . $value );
+	    }
+	}
+	print "$metadata_string\n";
+	$metadata->{$samp_alt_id} = $metadata_string;       
+    }
+    return $metadata;
+}
+
 sub load_samples{
     my ($self) = @_;
     my %samples = %{$self->get_sample_hashref()}; # de-reference the hash reference
@@ -258,26 +290,7 @@ sub load_samples{
     my $metadata = {};
     #if it exists, grab each sample's metadata
     if( defined( $self->sample_metadata ) ){
-	my @rows = split( "\n", $self->sample_metadata );
-	my $header = shift( @rows );
-	my @colnames = split( "\t", $header );
-	foreach my $row( @rows ){ #all rows except the header
-	    print $row . "\n";
-	    my @cols = split( "\t", $row );
-	    my $samp_alt_id = $cols[0];
-	    my $metadata_string;
-	    for( my $i=1; $i < scalar(@cols); $i++){
-		my $key   = $colnames[$i];
-		my $value = $cols[$i]; 
-		if( $i == 1 ){
-		    $metadata_string = $key . "=" . $value;
-		} else {
-		    $metadata_string = join( ",", $metadata_string, $key . "=" . $value );
-		}
-	    }
-	    print "$metadata_string\n";
-	    $metadata->{$samp_alt_id} = $metadata_string;       
-	}
+	$metadata = $self->MRC::Run::grab_sample_metadata();
     }
     #load each sample
     foreach my $samp( keys( %samples ) ){
@@ -1576,7 +1589,7 @@ sub build_search_db{
 		    $seq_len = 0;		
 		}
 		#we've hit our desired size (or at the end). Process the split
-		if( ( scalar( keys( %$seqs ) ) >= $split_size ) || ( $family == $families[-1] && eof )) {
+		if( ( scalar( keys( %$seqs ) ) >= $split_size ) || ( $family eq $families[-1] && eof )) {
 		    foreach my $id( keys( %$seqs ) ){
 			print $tmp $id;
 			print $tmp $seqs->{$id};

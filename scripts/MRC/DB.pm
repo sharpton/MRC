@@ -199,7 +199,18 @@ sub create_sample{
     return $inserted;
 }
 
-    
+sub update_sample_metadata{
+    my( $self, $project_id, $sample_alt_id, $metadata_string ) = @_;
+    print $sample_alt_id . "\n";
+    print $metadata_string . "\n";
+    my $sample = $self->MRC::DB::get_sample_by_alt_id( $sample_alt_id );
+    my $updated = $sample->update(
+	{
+	    metadata      => $metadata_string,
+	}
+	);
+    return $updated;
+}
 
 sub create_metaread{
     my $self = shift;
